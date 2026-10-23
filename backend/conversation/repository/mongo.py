@@ -225,6 +225,184 @@ class RoomMongoRepository:
     async def delete(self, conversation_id: str) -> bool:
         return await self._rooms.delete_one({"room_id": conversation_id})
 
+    # Room lifecycle (``room_files.ports.RoomLifecycleStore``): write leases,
+    # deletion fencing, and deletion recovery.
+
+    async def get_active_room_owner(self, conversation_id: str) -> str | None:
+        room = await self._rooms.find_one({"room_id": conversation_id})
+        if room is None:
+            return None
+        if room.get("lifecycle_state", "active") != "active":
+            return None
+        owner = room.get("room_owner_id") or room.get("owner_id")
+        return str(owner) if owner else None
+
+    async def acquire_write_lease(
+        self,
+        conversation_id: str,
+        *,
+        lease_id: str,
+        owner: str,
+        now: datetime,
+        expires_at: datetime,
+    ) -> bool:
+        await self._prune_expired_write_leases(conversation_id, now)
+        room = await self._rooms.find_one_and_update(
+            {
+                "room_id": conversation_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            {
+                "$set": {"lifecycle_state": "active"},
+                "$push": {
+                    "write_leases": {
+                        "lease_id": lease_id,
+                        "owner": owner,
+                        "acquired_at": now,
+                        "expires_at": expires_at,
+                    }
+                },
+            },
+            return_document=True,
+            projection={"write_leases": 1},
+        )
+        return room is not None and any(
+            lease.get("lease_id") == lease_id
+            for lease in room.get("write_leases", [])
+            if isinstance(lease, dict)
+        )
+
+    async def renew_write_lease(
+        self, conversation_id: str, lease_id: str, *, expires_at: datetime
+    ) -> bool:
+        return await self._rooms.update_one(
+            {
+                "room_id": conversation_id,
+                "lifecycle_state": "active",
+                "write_leases.lease_id": lease_id,
+            },
+            {"$set": {"write_leases.$[lease].expires_at": expires_at}},
+            array_filters=[{"lease.lease_id": lease_id}],
+        )
+
+    async def release_write_lease(self, conversation_id: str, lease_id: str) -> None:
+        await self._rooms.update_one(
+            {"room_id": conversation_id},
+            {"$pull": {"write_leases": {"lease_id": lease_id}}},
+        )
+
+    async def has_valid_write_lease(
+        self, conversation_id: str, lease_id: str, *, now: datetime
+    ) -> bool:
+        room = await self._rooms.find_one(
+            {
+                "room_id": conversation_id,
+                "lifecycle_state": "active",
+                "write_leases": {
+                    "$elemMatch": {
+                        "lease_id": lease_id,
+                        "expires_at": {"$gt": now},
+                    }
+                },
+            },
+            projection={"_id": 1},
+        )
+        return room is not None
+
+    async def has_live_write_leases(
+        self, conversation_id: str, *, now: datetime
+    ) -> bool:
+        await self._prune_expired_write_leases(conversation_id, now)
+        room = await self._rooms.find_one(
+            {"room_id": conversation_id},
+            projection={"write_leases": 1},
+        )
+        return room is not None and bool(room.get("write_leases"))
+
+    async def begin_deletion(
+        self,
+        conversation_id: str,
+        owner_id: str,
+        *,
+        deletion_id: str,
+        started_at: datetime,
+    ) -> str | None:
+        fenced = await self._rooms.update_one(
+            {
+                "room_id": conversation_id,
+                "room_owner_id": owner_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            {
+                "$set": {
+                    "lifecycle_state": "deleting",
+                    "deletion_id": deletion_id,
+                    "deletion_started_at": started_at,
+                    "deletion_phase": "fencing",
+                }
+            },
+        )
+        if fenced:
+            return deletion_id
+        room = await self._rooms.find_one(
+            {
+                "room_id": conversation_id,
+                "room_owner_id": owner_id,
+                "lifecycle_state": "deleting",
+            }
+        )
+        return str(room["deletion_id"]) if room and room.get("deletion_id") else None
+
+    async def set_deletion_phase(
+        self, conversation_id: str, deletion_id: str, phase: str
+    ) -> bool:
+        return await self._rooms.update_one(
+            {
+                "room_id": conversation_id,
+                "lifecycle_state": "deleting",
+                "deletion_id": deletion_id,
+            },
+            {"$set": {"deletion_phase": phase}},
+        )
+
+    async def list_stale_deletions(
+        self, *, started_before: datetime
+    ) -> list[tuple[str, str]]:
+        rooms = await self._rooms.find(
+            {
+                "lifecycle_state": "deleting",
+                "deletion_started_at": {"$lt": started_before},
+            }
+        )
+        return [
+            (str(room["room_id"]), str(room.get("deletion_id") or "")) for room in rooms
+        ]
+
+    async def delete_room_in_deletion(
+        self, conversation_id: str, deletion_id: str
+    ) -> bool:
+        return await self._rooms.delete_one(
+            {
+                "room_id": conversation_id,
+                "lifecycle_state": "deleting",
+                "deletion_id": deletion_id,
+            }
+        )
+
+    async def _prune_expired_write_leases(
+        self, conversation_id: str, now: datetime
+    ) -> None:
+        await self._rooms.update_one(
+            {"room_id": conversation_id},
+            {"$pull": {"write_leases": {"expires_at": {"$lte": now}}}},
+        )
+
 
 class MessageMongoRepository:
     def __init__(

@@ -99,7 +99,7 @@ from orchestrator_composition import (
     create_orchestrator_runtime,
     validate_orchestrator_runtime,
 )
-from room_files import LocalFileContentStore, RoomFiles
+from room_files import LocalFileContentStore, RoomFiles, RoomLifecycleStore
 from session import MongoSessionRepository, SessionFacade, SessionWaiter
 from session.protocols import RoomManagement, RoomMessageStore, RoomRegistry
 
@@ -510,7 +510,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
                 room_files_collection=room_files_collection,
-                rooms_collection=mongo_dal.collection("rooms"),
+                room_lifecycle=RoomMongoRepository(mongo_dal),
                 room_messages_collection=mongo_dal.collection("room_user_messages"),
                 room_agent_messages_collection=mongo_dal.collection(
                     "room_agent_messages"
@@ -2189,7 +2189,7 @@ def create_agent_capability_issue_service(*, repository: Any) -> Any:
 def create_file_storage(
     *,
     room_files_collection: MongoCollection,
-    rooms_collection: MongoCollection,
+    room_lifecycle: RoomLifecycleStore,
     room_messages_collection: MongoCollection,
     room_agent_messages_collection: MongoCollection,
     file_dir: str = "",
@@ -2202,7 +2202,7 @@ def create_file_storage(
     return RoomFiles(
         metadata=room_files_collection,
         content=LocalFileContentStore(root),
-        rooms=rooms_collection,
+        room_lifecycle=room_lifecycle,
         messages=room_messages_collection,
         agent_messages=room_agent_messages_collection,
         lease_writes=True,

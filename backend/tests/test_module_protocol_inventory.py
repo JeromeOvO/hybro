@@ -274,6 +274,18 @@ CONSUMER_PORT_METHODS = {
         "generate",
         "generate_structured",
     },
+    ("room_files.ports", "RoomLifecycleStore"): {
+        "acquire_write_lease",
+        "begin_deletion",
+        "delete_room_in_deletion",
+        "get_active_room_owner",
+        "has_live_write_leases",
+        "has_valid_write_lease",
+        "list_stale_deletions",
+        "release_write_lease",
+        "renew_write_lease",
+        "set_deletion_phase",
+    },
     ("room_files.service", "RoomStateOwner"): {"delete_room_state"},
 }
 

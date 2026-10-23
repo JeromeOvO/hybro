@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 from pathlib import Path
 
@@ -167,3 +168,46 @@ async def test_room_files_refuses_room_state_deletion_without_owners():
 
     with pytest.raises(RuntimeError, match="owners have not been bound"):
         await files.delete_room_state("r1")
+
+
+def _room_files_sources() -> dict[str, str]:
+    return {
+        str(path.relative_to(BACKEND)): path.read_text()
+        for path in sorted((BACKEND / "room_files").rglob("*.py"))
+    }
+
+
+def test_room_files_has_no_rooms_collection_access():
+    """Conversation is the single writer of ``rooms``; room_files uses its port."""
+    offenders = []
+    for name, source in _room_files_sources().items():
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Constant) and node.value == "rooms":
+                offenders.append(f"{name}:{node.lineno} 'rooms' literal")
+            elif isinstance(node, ast.Attribute) and node.attr in {"rooms", "_rooms"}:
+                offenders.append(f"{name}:{node.lineno} .{node.attr}")
+            elif isinstance(node, ast.arg) and node.arg == "rooms":
+                offenders.append(f"{name}:{node.lineno} rooms parameter")
+
+    assert offenders == []
+
+
+def test_room_files_takes_the_conversation_lifecycle_port():
+    from room_files import RoomFiles, RoomLifecycleStore
+    from room_files.leases import RoomWriteLeases
+
+    parameters = inspect.signature(RoomFiles).parameters
+    assert "rooms" not in parameters
+    assert parameters["room_lifecycle"].annotation == (
+        f"{RoomLifecycleStore.__name__} | None"
+    )
+    assert list(inspect.signature(RoomWriteLeases).parameters)[0] == "store"
+
+
+def test_container_wires_room_files_with_the_conversation_repository():
+    source = (BACKEND / "container.py").read_text()
+    start = source.index("file_storage = create_file_storage(")
+    call = source[start : source.index("\n            )\n", start)]
+
+    assert "room_lifecycle=RoomMongoRepository(mongo_dal)" in call
+    assert '"rooms"' not in call

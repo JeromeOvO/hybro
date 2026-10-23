@@ -29,7 +29,7 @@ from execution.repository.orchestrator.artifacts import GuardedRoomFileArtifactW
 from room_files import MemoryFileContentStore, RoomFiles
 
 from ._orchestrator_a2a_helpers import binding, ledger_record
-from .test_room_files import AlwaysValidLeases, InMemoryCollection
+from .test_room_files import AlwaysValidLeases, InMemoryCollection, room_lifecycle
 
 
 def manifest():
@@ -270,7 +270,7 @@ async def test_guarded_plan3_adapter_persists_through_real_room_file_owner():
     owner = RoomFiles(
         metadata=metadata,
         content=content,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: file_id,
     )
     owner._leases = AlwaysValidLeases()

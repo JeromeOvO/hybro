@@ -13,6 +13,7 @@ from common.errors import (
     FileStoragePlatformError,
     RetryableFileStoragePlatformError,
 )
+from conversation.repository import RoomMongoRepository
 from room_files import MemoryFileContentStore, RoomFiles
 from room_files.errors import FileOperationError
 
@@ -65,6 +66,11 @@ class InMemoryCollection:
 
     def find(self, query):
         return AsyncCursor([deepcopy(doc) for doc in self.docs if _matches(doc, query)])
+
+
+def room_lifecycle(rooms):
+    """Conversation's room lifecycle store over an in-memory ``rooms``."""
+    return RoomMongoRepository(SimpleNamespace(collection=lambda _name: rooms))
 
 
 class AlwaysValidLeases:
@@ -237,7 +243,7 @@ async def test_agent_artifact_rejects_configured_room_without_write_leases():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         lease_writes=False,
     )
 
@@ -267,7 +273,7 @@ async def test_agent_artifact_translates_transient_content_backend_failure():
     files = RoomFiles(
         metadata=collection,
         content=FailingContentStore(),
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
@@ -293,7 +299,7 @@ async def test_agent_artifact_survives_lost_finalize_acknowledgement():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: file_id,
     )
     files._leases = AlwaysValidLeases()
@@ -319,7 +325,7 @@ async def test_room_files_normalizes_mime_types_before_persistence():
     files = RoomFiles(
         metadata=collection,
         content=MemoryFileContentStore(),
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
@@ -419,7 +425,7 @@ async def test_room_files_materializes_agent_artifact_idempotently():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
@@ -470,7 +476,11 @@ async def test_room_files_resumes_pending_agent_artifact_without_duplicate_origi
         }
     )
     await content_store.write(file_id, b"result", "text/plain")
-    files = RoomFiles(metadata=collection, content=content_store, rooms=rooms)
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        room_lifecycle=room_lifecycle(rooms),
+    )
     files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
@@ -498,7 +508,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: next(ids),
     )
     files._leases = AlwaysValidLeases()

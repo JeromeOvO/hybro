@@ -22,6 +22,7 @@ from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileOperationError, FileStorageError
 from room_files.leases import RoomWriteLeases
 from room_files.mime import normalize_mime_type
+from room_files.ports import RoomLifecycleStore
 
 
 @runtime_checkable
@@ -42,7 +43,7 @@ class RoomFiles:
         *,
         metadata: Any,
         content: FileContentStore,
-        rooms: Any | None = None,
+        room_lifecycle: RoomLifecycleStore | None = None,
         messages: Any | None = None,
         agent_messages: Any | None = None,
         lease_writes: bool = False,
@@ -53,13 +54,13 @@ class RoomFiles:
     ) -> None:
         self._metadata = metadata
         self._content = content
-        self._rooms = rooms
+        self._room_lifecycle = room_lifecycle
         self._messages = messages
         self._agent_messages = agent_messages
         self._room_state_owners: tuple[RoomStateOwner, ...] = ()
         self._leases = (
-            RoomWriteLeases(rooms, now=now)
-            if rooms is not None and lease_writes
+            RoomWriteLeases(room_lifecycle, now=now)
+            if room_lifecycle is not None and lease_writes
             else None
         )
         self._file_id_factory = file_id_factory or (lambda: uuid4().hex)
@@ -79,7 +80,7 @@ class RoomFiles:
         max_bytes: int = 50 * 1024 * 1024,
         content_sha256: str | None = None,
     ) -> dict[str, Any]:
-        if self._rooms is not None and self._leases is None:
+        if self._room_lifecycle is not None and self._leases is None:
             raise FileStoragePlatformError(
                 409, {"message": "Artifact write lease is unavailable"}
             )
@@ -119,7 +120,7 @@ class RoomFiles:
         self, conversation_id: str, lease_id: str | None
     ) -> None:
         if self._leases is None:
-            if self._rooms is not None:
+            if self._room_lifecycle is not None:
                 raise FileConflictError("artifact write lease is unavailable")
             return
         if lease_id is None:
@@ -758,17 +759,11 @@ class RoomFiles:
     async def set_deletion_phase(
         self, conversation_id: str, deletion_id: str, phase: str
     ) -> bool:
-        if self._rooms is None:
+        if self._room_lifecycle is None:
             return True
-        result = await self._rooms.update_one(
-            {
-                "room_id": conversation_id,
-                "lifecycle_state": "deleting",
-                "deletion_id": deletion_id,
-            },
-            {"$set": {"deletion_phase": phase}},
+        return await self._room_lifecycle.set_deletion_phase(
+            conversation_id, deletion_id, phase
         )
-        return _changed(result)
 
     def bind_room_state_owners(self, owners: Iterable[RoomStateOwner]) -> None:
         """Bind the modules whose room rows go with a deleted room."""
@@ -907,34 +902,22 @@ class RoomFiles:
         return recovered
 
     async def _recover_room_deletions(self) -> int:
-        if self._rooms is None:
+        if self._room_lifecycle is None:
             return 0
         cutoff = self._now() - timedelta(minutes=5)
-        cursor = self._rooms.find(
-            {
-                "lifecycle_state": "deleting",
-                "deletion_started_at": {"$lt": cutoff},
-            }
-        )
-        if inspect.isawaitable(cursor):
-            cursor = await cursor
+        stale = await self._room_lifecycle.list_stale_deletions(started_before=cutoff)
         recovered = 0
-        async for room in _aiter_documents(cursor):
-            conversation_id = str(room["room_id"])
-            deletion_id = str(room.get("deletion_id") or "")
+        for conversation_id, deletion_id in stale:
             if not await self.wait_for_room_writes(conversation_id):
                 continue
             await self.delete_for_room(conversation_id, deletion_id=deletion_id)
             if not await self.delete_room_state(conversation_id):
                 continue
-            deleted = await self._rooms.delete_one(
-                {
-                    "room_id": conversation_id,
-                    "lifecycle_state": "deleting",
-                    "deletion_id": deletion_id,
-                }
+            recovered += int(
+                await self._room_lifecycle.delete_room_in_deletion(
+                    conversation_id, deletion_id
+                )
             )
-            recovered += int(_changed(deleted, attribute="deleted_count"))
         return recovered
 
     async def _recover_reference_claims(self, cutoff: datetime) -> int:
@@ -1092,15 +1075,9 @@ class RoomFiles:
         return recovered
 
     async def _room_owner(self, conversation_id: str) -> str | None:
-        if self._rooms is None:
+        if self._room_lifecycle is None:
             return None
-        room = await self._rooms.find_one({"room_id": conversation_id})
-        if room is None:
-            return None
-        if room.get("lifecycle_state", "active") != "active":
-            return None
-        owner = room.get("room_owner_id") or room.get("owner_id")
-        return str(owner) if owner else None
+        return await self._room_lifecycle.get_active_room_owner(conversation_id)
 
     async def _assert_lease(self, conversation_id: str, lease_id: str | None) -> None:
         if self._leases is not None and lease_id is not None:

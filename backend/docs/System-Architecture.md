@@ -320,10 +320,13 @@ preflight, quotes, deletion, and candidate scope.
   `messages.ConversationMessageStore` (agent/user message writes, artifact
   accumulation, descendant cancellation), `rooms.ConversationRoomStore`, and
   `client_request_ids.ClientRequestIdStore`.
-- Writes: `rooms`, `room_user_messages`, `room_agent_messages`, `room_quotes`,
-  and the `room_timeline_sort_keys_v1` document in `migration_markers`.
+- Writes: `rooms` (sole writer, including the write-lease and deletion-fencing
+  fields that `room_files` changes through `RoomLifecycleStore`),
+  `room_user_messages`, `room_agent_messages`, `room_quotes`, and the
+  `room_timeline_sort_keys_v1` document in `migration_markers`.
 - Exposes: implements `RoomRepository`, `RoomHistoryReader`,
-  `RoomOwnershipReader`, Execution's `RoomCenterPort`, `RoomStateOwner`, and
+  `RoomOwnershipReader`, Execution's `RoomCenterPort`, `room_files`'s
+  `RoomStateOwner` and `RoomLifecycleStore` (`RoomMongoRepository`), and
   Session's `RoomRegistry`, `RoomManagement`, and `RoomMessageStore`;
   `conversation.protocols` publishes `ConversationMessageWriter` (guarded
   agent-message writes: task state, HITL request id, pending-HITL projection,
@@ -476,14 +479,16 @@ fencing, storage lifecycle, and recovery (see [Room files](#room-files)).
 Room-level deletion coordination belongs to `conversation.deletion`, which drives
 the `room_files` deletion lifecycle through a narrow port.
 
-- Writes: `room_files` (metadata; indexes from `room_files.ensure_room_file_indexes`),
-  the `write_leases` and deletion-fencing fields of `rooms`
-  (`room_files.leases.RoomWriteLeases`), and file bytes under `HYBRO_FILE_DIR`.
+- Writes: `room_files` (metadata; indexes from `room_files.ensure_room_file_indexes`)
+  and file bytes under `HYBRO_FILE_DIR`. It has no `rooms` handle: write leases
+  (`room_files.leases.RoomWriteLeases`), deletion fencing and phases, the active
+  room owner, and stale-deletion recovery go through `RoomLifecycleStore`.
 - Exposes: implements `FileStorage` and `PreparedFileStream`, and Execution's
   `RoomFileReader` and `RoomFileArtifactOwner`; declares `RoomStateOwner`,
   which `RoomFiles.delete_room_state` calls for every bound owner (Approval,
-  Context Memory, and Conversation stores).
-- Consumes: `MongoDAL`.
+  Context Memory, and Conversation stores), and `RoomLifecycleStore`
+  (`room_files.ports`), implemented by Conversation's `RoomMongoRepository`.
+- Consumes: `MongoDAL` and `RoomLifecycleStore`.
 
 ### `session`
 
@@ -603,7 +608,7 @@ recreation, so coordinate index-shape changes with a maintenance window.
 | `agents` | `agent.repository.mongo.AgentMongoRepository` |
 | `agent_groups` | `agent.repository.runtime_store.AgentRuntimeStore` |
 | `agent_capability_issues` | `agent.repository.capability_issue_mongo.AgentCapabilityIssueMongoRepository` |
-| `rooms` | `conversation.repository` (`write_leases` and deletion fields: `room_files.leases`) |
+| `rooms` | `conversation.repository` (lease and deletion fields through `room_files.ports.RoomLifecycleStore`) |
 | `room_user_messages`, `room_agent_messages` | `conversation.repository.mongo.MessageMongoRepository`, `conversation.repository.messages.ConversationMessageStore` |
 | `room_quotes` | `conversation.repository.quote_mongo.RoomQuoteMongoRepository` |
 | `migration_markers` | `conversation.repository.indexes` (timeline marker) |
@@ -809,6 +814,7 @@ port, or facade port, update the exact method inventory in
 | `LocalAgentDiscovery` | `local_agents.protocols` | `local_agents.service.LocalAgentService` | crosses to `api_gateway` |
 | `LocalAgentWriter` | `local_agents.protocols` | `agent.facade.AgentFacade` | crosses to `agent` |
 | `FileContentStore` | `room_files.content_store` | `room_files.content_store.LocalFileContentStore` | internal to `room_files` |
+| `RoomLifecycleStore` | `room_files.ports` | `conversation.repository.mongo.RoomMongoRepository` | crosses to composition root; `conversation` |
 | `RoomStateOwner` | `room_files.service` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore`, `approval.repository.hitl_store.HITLRequestStore`, `context_memory.repository.mongo.ContentStorageMongoRepository`, `context_memory.repository.mongo.MemoryMongoRepository`, `conversation.repository.mongo.MessageMongoRepository`, `conversation.repository.quote_mongo.RoomQuoteMongoRepository` | crosses to `approval`; `context_memory`; `conversation` |
 | `ConversationEventsPort` | `session.protocols` | `delivery.room_events.MongoRoomEventStore` | crosses to `delivery` |
 | `RoomManagement` | `session.protocols` | `conversation.facade.ConversationFacade` | crosses to composition root; `conversation` |
@@ -2370,7 +2376,8 @@ unavailable without changing metadata, because the bytes may exist on another
 instance.
 
 Agent artifact writes acquire an atomic room-scoped write lease before content is
-stored. Lease acquisition and release mutate only `rooms.write_leases`; general
+stored. Lease acquisition and release mutate only `rooms.write_leases`, through
+Conversation's `RoomMongoRepository` behind `RoomLifecycleStore`; general
 room snapshots exclude lease, lifecycle, and deletion-fencing fields, so stale
 room updates cannot erase active ownership. A lease conflict is a retryable
 persistence failure, and there is no lease-free artifact write path.
