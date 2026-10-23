@@ -377,12 +377,30 @@ class HITLRouteSnapshot(_HITLContract):
             raise ValueError("supervisor_run must not include an A2A target")
         return self
 
+    def _fingerprint_payload(self) -> dict[str, object]:
+        """Canonical fingerprint input with literal stored keys, None included."""
+
+        return {
+            "schema_version": self.schema_version,
+            "route": self.route.value,
+            "orchestration_run_id": self.orchestration_run_id,
+            "task_id": self.task_id,
+            "context_id": self.context_id,
+            "continuation_message_id": self.continuation_message_id,
+            "agent_id": self.agent_id,
+        }
+
     @property
     def fingerprint(self) -> str:
-        """SHA-256 of the snapshot's canonical JSON representation."""
+        """SHA-256 of the snapshot's canonical JSON representation.
 
+        The hash is persisted as ``route_fingerprint`` and recomputed during
+        validation, so its input uses literal keys independent of attribute names.
+        """
+
+        canonical = self._fingerprint_payload()
         canonical_json = json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
+            {key: value for key, value in canonical.items() if value is not None},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

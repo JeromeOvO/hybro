@@ -735,10 +735,33 @@ class HITLRouteSnapshotV2(FrozenDTO):
                 raise ValueError("V2 route aliases must be authoritative")
         return self
 
+    def _fingerprint_payload(self) -> dict[str, object]:
+        """Canonical fingerprint input with literal stored keys, None included."""
+
+        return {
+            "schema_version": self.schema_version,
+            "route": self.route,
+            "orchestration_run_id": self.orchestration_run_id,
+            "call_record_id": self.call_record_id,
+            "invocation_id": self.invocation_id,
+            "room_id": self.room_id,
+            "room_epoch": self.room_epoch,
+            "binding_id": self.binding_id,
+            "agent_id": self.agent_id,
+            "task_id": self.task_id,
+            "context_id": self.context_id,
+            "interaction_revision": self.interaction_revision,
+            "interaction_fingerprint": self.interaction_fingerprint,
+        }
+
     @property
     def fingerprint(self) -> str:
+        # Persisted as ``route_fingerprint`` and recomputed on answer replay, so
+        # the hash input uses literal keys (including the stored "room_id")
+        # independent of attribute names. None values are omitted.
+        canonical = self._fingerprint_payload()
         canonical_json = json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
+            {key: value for key, value in canonical.items() if value is not None},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

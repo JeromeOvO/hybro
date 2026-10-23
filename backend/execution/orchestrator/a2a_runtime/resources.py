@@ -315,7 +315,7 @@ def freeze_call_manifest(
                 content_digest=prepared.content_digest,
             )
         )
-    digest = _digest_json([ref.model_dump(mode="json") for ref in frozen])
+    digest = _digest_json([_frozen_ref_digest_payload(ref) for ref in frozen])
     return FrozenCallResourceManifest(
         manifest_id=f"call-resources-{digest}", refs=frozen, content_digest=digest
     )
@@ -344,6 +344,29 @@ def _encoded_part_size(part: MaterializedResourcePart) -> int:
     if isinstance(payload, str):
         return len(payload.encode())
     return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+
+
+def _frozen_ref_digest_payload(ref: FrozenCallResourceRef) -> dict[str, object]:
+    """Canonical digest input for one frozen ref.
+
+    The manifest digest is persisted on the Agent-call record and recomputed for
+    acceptance replay, so keys (including the stored "room_id") are literals
+    independent of attribute names.
+    """
+
+    return {
+        "ref_id": ref.ref_id,
+        "kind": ref.kind,
+        "room_id": ref.room_id,
+        "room_epoch": ref.room_epoch,
+        "source_message_id": ref.source_message_id,
+        "source_agent_id": ref.source_agent_id,
+        "mime_type": ref.mime_type,
+        "size_bytes": ref.size_bytes,
+        "content_digest": ref.content_digest,
+        "projection_id": ref.projection_id,
+        "materialization_digest": ref.materialization_digest,
+    }
 
 
 def _digest_json(value: object) -> str:

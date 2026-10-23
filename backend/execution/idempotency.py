@@ -73,6 +73,9 @@ def execution_request_fingerprint_payload(
             agent_scope.get("agent_ids"), empty_as_none=False
         )
 
+    # Persisted as ``idempotency_fingerprint`` and compared on retries. Keys are
+    # literals (the stored name is "room_id") so attribute renames on
+    # ExecutionRequest cannot change existing fingerprints.
     return {
         "room_id": request.room_id,
         "sender_id": request.sender_id,
