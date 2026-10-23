@@ -14,6 +14,7 @@ import pytest
 
 from common.dto import UserMessageInsertResult
 from conversation.mentions import parse_agent_mentions
+from conversation.message_sending import RoomMessageSender
 from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from conversation.target_scope import TargetScopeResolver
@@ -385,7 +386,7 @@ class TestPrePersistScopeValidation:
     """Deterministic scope failures must reject before _persist_user_message is called."""
 
     @pytest.mark.asyncio
-    async def test_invalid_mention_does_not_persist(self, room_center):
+    async def test_invalid_mention_does_not_persist(self, room_center, monkeypatch):
         room = _make_room()
         room_center.database_service.get_room_by_room_id.return_value = room
         room_center.database_service.get_agent_by_agent_id.return_value = None
@@ -398,9 +399,19 @@ class TestPrePersistScopeValidation:
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_persist_user_message", AsyncMock(return_value=True)
+        )
 
         result = await _send(
             room_center,
@@ -411,10 +422,10 @@ class TestPrePersistScopeValidation:
 
         assert result.success is False
         assert result.scope_resolution_error.code == "unauthorized_mention"
-        room_center._persist_user_message.assert_not_called()
+        RoomMessageSender._persist_user_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_room_team_does_not_persist(self, room_center):
+    async def test_empty_room_team_does_not_persist(self, room_center, monkeypatch):
         room = _make_room(agent_set={})
         room_center.database_service.get_room_by_room_id.return_value = room
 
@@ -426,9 +437,19 @@ class TestPrePersistScopeValidation:
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_persist_user_message", AsyncMock(return_value=True)
+        )
 
         result = await _send(
             room_center,
@@ -439,10 +460,10 @@ class TestPrePersistScopeValidation:
 
         assert result.success is False
         assert result.scope_resolution_error.code == "empty_scope"
-        room_center._persist_user_message.assert_not_called()
+        RoomMessageSender._persist_user_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_missing_saved_group_does_not_persist(self, room_center):
+    async def test_missing_saved_group_does_not_persist(self, room_center, monkeypatch):
         room = _make_room()
         room_center.database_service.get_room_by_room_id.return_value = room
         room_center.database_service.get_agent_group_by_id.return_value = None
@@ -455,9 +476,19 @@ class TestPrePersistScopeValidation:
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_persist_user_message", AsyncMock(return_value=True)
+        )
 
         result = await _send(
             room_center,
@@ -468,7 +499,7 @@ class TestPrePersistScopeValidation:
 
         assert result.success is False
         assert result.scope_resolution_error.code == "group_not_usable"
-        room_center._persist_user_message.assert_not_called()
+        RoomMessageSender._persist_user_message.assert_not_called()
 
 
 # =============================================================================
@@ -535,15 +566,29 @@ class TestInlineMentionBehavior:
             extend_info={},
         )
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(
-            return_value=UserMessageInsertResult(
-                message_id="msg-inline-1",
-                created=True,
-                document={},
-            )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_materialize_room_quote", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_persist_user_message",
+            AsyncMock(
+                return_value=UserMessageInsertResult(
+                    message_id="msg-inline-1",
+                    created=True,
+                    document={},
+                )
+            ),
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
@@ -597,15 +642,29 @@ class TestAllAgentsPostPersistMessageId:
         request.message.quote = None
         request.message.extend_info = {}
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(
-            return_value=UserMessageInsertResult(
-                message_id="msg-real-123",
-                created=True,
-                document={},
-            )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_materialize_room_quote", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_persist_user_message",
+            AsyncMock(
+                return_value=UserMessageInsertResult(
+                    message_id="msg-real-123",
+                    created=True,
+                    document={},
+                )
+            ),
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
 
@@ -639,7 +698,7 @@ class TestAllAgentsPostPersistMessageId:
         assert result.message_id == "msg-real-123"
         assert result.preflight_outcome == "failed"
         assert result.preflight_details == "Agent selection failed."
-        room_center._persist_user_message.assert_called_once()
+        RoomMessageSender._persist_user_message.assert_called_once()
 
 
 # =============================================================================
@@ -669,15 +728,29 @@ class TestClientRequestIdPropagation:
         request.message.quote = None
         request.message.extend_info = {}
 
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(
-            return_value=UserMessageInsertResult(
-                message_id="msg-real-456",
-                created=True,
-                document={},
-            )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_validate_send_message_request",
+            MagicMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_resolve_and_apply_attachments",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            RoomMessageSender, "_materialize_room_quote", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            RoomMessageSender,
+            "_persist_user_message",
+            AsyncMock(
+                return_value=UserMessageInsertResult(
+                    message_id="msg-real-456",
+                    created=True,
+                    document={},
+                )
+            ),
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
 

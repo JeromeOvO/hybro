@@ -1321,8 +1321,12 @@ metadata, and the orchestrator's final message), implemented by
 `ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
 the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` implements Execution's `RoomCenterPort`
-and the chat message reads: user-message persistence and idempotent replay, the
-preflight port methods, and room timeline reads. `conversation.preflight.MessagePreflight`
+and the chat message reads; it keeps the port methods and the room timeline
+reads and delegates the rest to collaborators built from its current bindings.
+`conversation.message_sending.RoomMessageSender` validates a send request,
+materializes its quote, resolves attachments and the target scope, persists the
+user message through the commit service, and answers idempotent replays and
+fingerprint conflicts. `conversation.preflight.MessagePreflight`
 builds the orchestration envelope for a persisted user message (resolving the
 mention or target-group scope and storing the candidate agents and execution mode
 on the message), and `persisted_execution_mode` keeps the stored mode to

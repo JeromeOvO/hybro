@@ -820,7 +820,7 @@ def test_pinned_execute_conflict_strings_match_the_engine():
 
     root = Path(__file__).resolve().parents[1]
     facade_source = (root / "execution/facade.py").read_text()
-    runtime_source = (root / "conversation/runtime.py").read_text()
+    runtime_source = (root / "conversation/message_sending.py").read_text()
     assert WAITING_FOR_INPUT in facade_source
     assert ALREADY_PROCESSING in facade_source
     assert '"The client_request_id was already used for a different request"' in (

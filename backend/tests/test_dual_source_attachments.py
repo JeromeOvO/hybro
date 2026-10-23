@@ -54,7 +54,9 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -67,7 +69,9 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -80,7 +84,9 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -93,7 +99,9 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 2
@@ -101,7 +109,9 @@ class TestDualSourceMerge:
     async def test_no_attachments_noop(self, room_svc):
         request = RoomCenterUserMessageRequest(room_id="room1")
         msg = _user_msg()
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
         assert err is None
         assert msg.message_content.attachments is None
 
@@ -118,7 +128,9 @@ class TestCrossRoomRejection:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 404
@@ -134,7 +146,9 @@ class TestMergedLimitEnforcement:
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 400
@@ -148,7 +162,7 @@ class TestContentSummary:
         )
         msg = _user_msg()
 
-        await room_svc._resolve_and_apply_attachments(request, msg)
+        await room_svc._message_sender._resolve_and_apply_attachments(request, msg)
 
         summary = msg.message_content.content_summary
         assert summary is not None

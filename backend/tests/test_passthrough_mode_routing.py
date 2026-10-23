@@ -20,6 +20,7 @@ from api_gateway.routes.room_routes import send_message
 from common.config.loader import Settings
 from common.dto import ExecutionAck, ExecutionRequest, UserMessageInsertResult
 from common.dto.turn_lifecycle import RunStartedPayload
+from conversation.message_sending import RoomMessageSender
 from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from execution.adapters.profiles import OrchestratorProfileResolver
@@ -161,7 +162,7 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
 # -- Persisted mode on the user message -------------------------------------
 
 
-def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
+def _runtime_for_persist(monkeypatch) -> tuple[ConversationRuntime, list[dict]]:
     svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -179,8 +180,14 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = None
     svc.bind_facade(facade)
-    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
-    svc._materialize_room_quote = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        RoomMessageSender,
+        "_resolve_and_apply_attachments",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        RoomMessageSender, "_materialize_room_quote", AsyncMock(return_value=None)
+    )
     persisted: list[dict] = []
 
     async def persist(user_message, **_kwargs):
@@ -190,7 +197,9 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
             message_id="server-message", created=True, document={}
         )
 
-    svc._persist_user_message = AsyncMock(side_effect=persist)
+    monkeypatch.setattr(
+        RoomMessageSender, "_persist_user_message", AsyncMock(side_effect=persist)
+    )
     return svc, persisted
 
 
@@ -204,8 +213,8 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
         ("autonomous", "direct"),
     ],
 )
-async def test_persist_message_stores_request_mode(requested, stored):
-    svc, persisted = _runtime_for_persist()
+async def test_persist_message_stores_request_mode(requested, stored, monkeypatch):
+    svc, persisted = _runtime_for_persist(monkeypatch)
     request = RoomCenterUserMessageRequest(
         room_id="room-1",
         user_id="owner-1",
