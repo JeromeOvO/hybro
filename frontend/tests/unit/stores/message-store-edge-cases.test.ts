@@ -191,21 +191,21 @@ describe('useMessageStore - Edge Cases', () => {
       store.upsertMessage(
         createTaskMessage(TASK_STATE.WORKING, {
           id: 'task-r1-1',
-          roomId: 'room-1',
+          conversationId: 'room-1',
         }),
         'sse'
       )
       store.upsertMessage(
         createTaskMessage(TASK_STATE.WORKING, {
           id: 'task-r2-1',
-          roomId: 'room-2',
+          conversationId: 'room-2',
         }),
         'sse'
       )
       store.upsertMessage(
         createCompletedTask({
           id: 'task-r1-2',
-          roomId: 'room-1',
+          conversationId: 'room-1',
         }),
         'sse'
       )
@@ -448,7 +448,7 @@ describe('useMessageStore - Edge Cases', () => {
 
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Plan a trip',
       senderName: 'User',
@@ -464,7 +464,7 @@ describe('useMessageStore - Edge Cases', () => {
 
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Plan a trip',
       senderName: 'User',
@@ -481,7 +481,7 @@ describe('useMessageStore - Edge Cases', () => {
 
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Plan a trip',
       senderName: 'User',
@@ -495,7 +495,7 @@ describe('useMessageStore - Edge Cases', () => {
 
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Plan a trip',
       senderName: 'User',

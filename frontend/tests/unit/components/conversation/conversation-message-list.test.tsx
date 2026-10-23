@@ -17,18 +17,18 @@ describe('ConversationMessageList optimistic Turn', () => {
 
   it('renders idle legacy room history when no canonical root exists', () => {
     useMessageStore.getState().upsertMessage({
-      id: 'user-legacy', roomId: 'room-1', messageType: 'user',
+      id: 'user-legacy', conversationId: 'room-1', messageType: 'user',
       content: 'Weather?', senderName: 'You',
       timestamp: '2030-01-01T00:00:00.000Z', clientRequestId: 'client-legacy',
     }, 'db')
     useMessageStore.getState().upsertMessage({
-      id: 'agent-legacy', roomId: 'room-1', messageType: 'agent',
+      id: 'agent-legacy', conversationId: 'room-1', messageType: 'agent',
       content: 'Sunny', senderName: 'Weather Agent',
       timestamp: '2030-01-01T00:00:01.000Z', clientRequestId: 'client-legacy',
       relatedMessageId: 'user-legacy', taskStatus: 'completed',
     }, 'db')
 
-    render(<ConversationMessageList roomId="room-1" />)
+    render(<ConversationMessageList conversationId="room-1" />)
 
     expect(screen.getByText('Weather?')).toBeInTheDocument()
     expect(screen.getByRole('status', { name: 'Weather Agent — Completed' })).toBeInTheDocument()
@@ -37,7 +37,7 @@ describe('ConversationMessageList optimistic Turn', () => {
   it('keeps orphaned HITL prompts out of the conversation body', () => {
     useMessageStore.getState().upsertMessage({
       id: 'hitl-message-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: '',
       senderName: 'Cyber Broker Agent',
@@ -52,7 +52,7 @@ describe('ConversationMessageList optimistic Turn', () => {
       hitlResolved: false,
     }, 'sse')
 
-    render(<ConversationMessageList roomId="room-1" />)
+    render(<ConversationMessageList conversationId="room-1" />)
 
     expect(screen.queryByText('Unattributed responses')).not.toBeInTheDocument()
     expect(screen.queryByText('Which cloud providers do you use?')).not.toBeInTheDocument()
@@ -60,21 +60,21 @@ describe('ConversationMessageList optimistic Turn', () => {
 
   it('shows received agent responses while the correlated user turn is still optimistic', () => {
     useMessageStore.getState().upsertMessage({
-      id: 'user-pending', roomId: 'room-1', messageType: 'user',
+      id: 'user-pending', conversationId: 'room-1', messageType: 'user',
       content: 'Weather?', senderName: 'You',
       timestamp: '2030-01-01T00:00:00.000Z', clientRequestId: 'client-pending',
     }, 'optimistic')
     useRoomUiStore.getState().setProcessing('room-1', true)
-    const { rerender } = render(<ConversationMessageList roomId="room-1" />)
+    const { rerender } = render(<ConversationMessageList conversationId="room-1" />)
     expect(screen.queryByRole('button', { name: 'Open Weather Agent response' })).not.toBeInTheDocument()
 
     useMessageStore.getState().upsertMessage({
-      id: 'agent-pending', roomId: 'room-1', messageType: 'agent',
+      id: 'agent-pending', conversationId: 'room-1', messageType: 'agent',
       content: 'Checking the forecast', senderName: 'Weather Agent',
       timestamp: '2030-01-01T00:00:01.000Z', clientRequestId: 'client-pending',
       relatedMessageId: 'user-pending', taskStatus: 'working',
     }, 'sse')
-    rerender(<ConversationMessageList roomId="room-1" />)
+    rerender(<ConversationMessageList conversationId="room-1" />)
     expect(screen.getByRole('button', { name: 'Open Weather Agent response' })).toBeVisible()
   })
 })

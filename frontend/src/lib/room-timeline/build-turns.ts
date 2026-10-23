@@ -310,7 +310,7 @@ function assembleTurn(
 
   const turn: TurnViewModel = {
     id: turnId,
-    roomId: scaffold.userEntity?.roomId ?? '',
+    conversationId: scaffold.userEntity?.conversationId ?? '',
     userMessageId: scaffold.userMessageId,
     userContent: scaffold.userEntity?.content ?? '',
     userAttachments: scaffold.userEntity?.attachments ?? [],

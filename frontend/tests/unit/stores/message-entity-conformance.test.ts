@@ -22,14 +22,14 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
     updatedAt: Date.now(),
     agentId: undefined,
     taskStatus: undefined,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     ...overrides,
   }
 }
 
 const ENTITY_REQUIRED_KEYS: (keyof MessageEntity)[] = [
   'id',
-  'roomId',
+  'conversationId',
   'messageType',
   'content',
   'senderName',

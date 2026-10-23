@@ -7,7 +7,7 @@ import type { MessageEntity } from '@/stores/message-store/types'
 function makeUser(id: string, clientRequestId: string): MessageEntity {
   return {
     id,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'user',
     content: 'hello @a @b',
     senderName: 'User',
@@ -31,7 +31,7 @@ function makeAgent(
 ): MessageEntity {
   return {
     id,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: `Answer from ${agentId}`,
     senderName: agentId,

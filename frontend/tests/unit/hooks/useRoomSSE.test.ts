@@ -36,16 +36,16 @@ describe('useRoomSSE', () => {
 
   it('should start disconnected', () => {
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: false })
+      useRoomSSE({ conversationId: 'room-1', enabled: false })
     )
     expect(result.current.connected).toBe(false)
     expect(result.current.connecting).toBe(false)
     expect(result.current.error).toBeNull()
   })
 
-  it('should auto-connect when enabled and roomId are set', async () => {
+  it('should auto-connect when enabled and conversationId are set', async () => {
     renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(mockConnectFn).toHaveBeenCalled()
@@ -54,30 +54,30 @@ describe('useRoomSSE', () => {
 
   it('should not connect when enabled is false', () => {
     renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: false })
+      useRoomSSE({ conversationId: 'room-1', enabled: false })
     )
     expect(mockConnectFn).not.toHaveBeenCalled()
   })
 
-  it('should not connect when roomId is empty', () => {
+  it('should not connect when conversationId is empty', () => {
     renderHook(() =>
-      useRoomSSE({ roomId: '', enabled: true })
+      useRoomSSE({ conversationId: '', enabled: true })
     )
     expect(mockConnectFn).not.toHaveBeenCalled()
   })
 
-  it('should pass roomId to SSEConnection options', async () => {
+  it('should pass conversationId to SSEConnection options', async () => {
     renderHook(() =>
-      useRoomSSE({ roomId: 'room-42', enabled: true })
+      useRoomSSE({ conversationId: 'room-42', enabled: true })
     )
     await vi.waitFor(() => {
-      expect(capturedOptions.roomId).toBe('room-42')
+      expect(capturedOptions.conversationId).toBe('room-42')
     })
   })
 
   it('should set connected=true when onOpen fires', async () => {
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onOpen).toBeDefined()
@@ -93,7 +93,7 @@ describe('useRoomSSE', () => {
 
   it('should set error when onError fires', async () => {
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onError).toBeDefined()
@@ -109,7 +109,7 @@ describe('useRoomSSE', () => {
 
   it('should set connected=false when onClose fires', async () => {
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onOpen).toBeDefined()
@@ -131,7 +131,7 @@ describe('useRoomSSE', () => {
     const pending = new Promise<void>((resolve) => { release = resolve })
     const onMessage = vi.fn().mockReturnValue(pending)
     renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true, onMessage })
+      useRoomSSE({ conversationId: 'room-1', enabled: true, onMessage })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onMessage).toBeDefined()
@@ -149,7 +149,7 @@ describe('useRoomSSE', () => {
   it('should call onConnectionChange when connection state changes', async () => {
     const onConnectionChange = vi.fn()
     renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true, onConnectionChange })
+      useRoomSSE({ conversationId: 'room-1', enabled: true, onConnectionChange })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onOpen).toBeDefined()
@@ -168,7 +168,7 @@ describe('useRoomSSE', () => {
 
   it('should disconnect on unmount', async () => {
     const { unmount } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(mockConnectFn).toHaveBeenCalled()
@@ -181,7 +181,7 @@ describe('useRoomSSE', () => {
   it('should disconnect when enabled becomes false', async () => {
     const { rerender } = renderHook(
       (props: { enabled: boolean }) =>
-        useRoomSSE({ roomId: 'room-1', enabled: props.enabled }),
+        useRoomSSE({ conversationId: 'room-1', enabled: props.enabled }),
       { initialProps: { enabled: true } }
     )
     await vi.waitFor(() => {
@@ -192,17 +192,17 @@ describe('useRoomSSE', () => {
     expect(mockDisconnectFn).toHaveBeenCalled()
   })
 
-  it('should reconnect when roomId changes', async () => {
+  it('should reconnect when conversationId changes', async () => {
     const { rerender } = renderHook(
-      (props: { roomId: string }) =>
-        useRoomSSE({ roomId: props.roomId, enabled: true }),
-      { initialProps: { roomId: 'room-1' } }
+      (props: { conversationId: string }) =>
+        useRoomSSE({ conversationId: props.conversationId, enabled: true }),
+      { initialProps: { conversationId: 'room-1' } }
     )
     await vi.waitFor(() => {
       expect(mockConnectFn).toHaveBeenCalledTimes(1)
     })
 
-    rerender({ roomId: 'room-2' })
+    rerender({ conversationId: 'room-2' })
     await vi.waitFor(() => {
       expect(mockConnectFn).toHaveBeenCalledTimes(2)
     })
@@ -210,7 +210,7 @@ describe('useRoomSSE', () => {
 
   it('should expose manual disconnect that clears state', async () => {
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
     await vi.waitFor(() => {
       expect(capturedOptions.onOpen).toBeDefined()
@@ -232,7 +232,7 @@ describe('useRoomSSE', () => {
     mockConnectFn.mockRejectedValueOnce(new Error('Network down'))
 
     const { result } = renderHook(() =>
-      useRoomSSE({ roomId: 'room-1', enabled: true })
+      useRoomSSE({ conversationId: 'room-1', enabled: true })
     )
 
     await vi.waitFor(() => {

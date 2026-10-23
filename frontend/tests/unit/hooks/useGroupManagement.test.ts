@@ -156,7 +156,7 @@ describe('useGroupManagement', () => {
 
     const { result } = renderHook(() => useGroupManagement({
       ...defaultOptions(),
-      roomId: 'room-42',
+      conversationId: 'room-42',
     }))
 
     await waitFor(() => {
@@ -173,7 +173,7 @@ describe('useGroupManagement', () => {
 
   it('should apply group override via handleGroupChange', async () => {
     mockListAgentGroups.mockResolvedValue({ success: true, groups: [fakeGroup] })
-    const opts = { ...defaultOptions(), roomId: 'room-42' }
+    const opts = { ...defaultOptions(), conversationId: 'room-42' }
     const { result } = renderHook(() => useGroupManagement(opts))
 
     await waitFor(() => {

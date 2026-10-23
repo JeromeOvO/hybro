@@ -160,7 +160,7 @@ describe('trace-store', () => {
     apply('llm_call_completed', { model: 'gpt-4o' })
     useTraceStore.getState().setRoom('room-2')
     const state = useTraceStore.getState()
-    expect(state.roomId).toBe('room-2')
+    expect(state.conversationId).toBe('room-2')
     expect(Object.keys(state.nodes)).toHaveLength(0)
   })
 
@@ -236,7 +236,7 @@ describe('trace-store', () => {
     })
 
     const state = useTraceStore.getState()
-    expect(state.roomId).toBe('room-current')
+    expect(state.conversationId).toBe('room-current')
     expect(state.nodes).toEqual(before)
   })
 })

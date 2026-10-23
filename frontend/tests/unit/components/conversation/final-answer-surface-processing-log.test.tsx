@@ -17,7 +17,7 @@ afterEach(() => {
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'user-1',
     userContent: 'Plan the launch',
     userAttachments: [],

@@ -29,7 +29,7 @@ function frame(type: string, data: Record<string, unknown>, roomSeq?: number): A
 
 function makeReducer(onDelta?: (f: AnySSEFrame) => Promise<void>, requestSnapshot?: () => void) {
   const reducer = new RoomReducer({
-    roomId: 'room-1',
+    conversationId: 'room-1',
     onDelta: onDelta ?? (async () => {}),
     requestSnapshot: requestSnapshot ?? (() => {}),
   })
@@ -89,11 +89,11 @@ function cancellingHitlReducer() {
   lifecycle.armCancelTimeout(timeout)
   const placeholderId = lifecycle.placeholderId('room-1')
   useMessageStore.getState().upsertMessage({
-    id: placeholderId, roomId: 'room-1', messageType: 'agent', content: '',
+    id: placeholderId, conversationId: 'room-1', messageType: 'agent', content: '',
     senderName: 'Assistant', timestamp: '2030-01-01T00:00:00.000Z',
   }, 'sse')
   const reducer = new RoomReducer({
-    roomId: 'room-1', onDelta: async () => {}, requestSnapshot: vi.fn(),
+    conversationId: 'room-1', onDelta: async () => {}, requestSnapshot: vi.fn(),
     processingLifecycle: lifecycle,
   })
   return { reducer, lifecycle, timeout, placeholderId }
@@ -271,7 +271,7 @@ describe('RoomReducer', () => {
       const data = delta.data as { message_id?: string }
       if (data.message_id === 'm6') {
         useMessageStore.getState().upsertMessage({
-          id: 'm6', roomId: 'room-1', messageType: 'agent', content: 'newer live value',
+          id: 'm6', conversationId: 'room-1', messageType: 'agent', content: 'newer live value',
           senderName: 'Weather Agent', timestamp: '2030-01-01T00:00:06.000Z',
         }, 'sse')
       }
@@ -297,7 +297,7 @@ describe('RoomReducer', () => {
       if (data.message_id) applied.push(data.message_id)
       if (data.message_id === 'm6') {
         useMessageStore.getState().upsertMessage({
-          id: 'm6', roomId: 'room-1', messageType: 'agent', content: 'newer live value',
+          id: 'm6', conversationId: 'room-1', messageType: 'agent', content: 'newer live value',
           senderName: 'Weather Agent', timestamp: '2030-01-01T00:00:06.000Z',
         }, 'sse')
       }
@@ -660,7 +660,7 @@ describe('applySnapshotToStores', () => {
   it('does not apply a canonical HITL request that contradicts an existing entity root', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().upsertMessage({
-      id: 'orchestrator:run-1:inv_request_0001', roomId: 'room-1',
+      id: 'orchestrator:run-1:inv_request_0001', conversationId: 'room-1',
       messageType: 'agent', content: '', senderName: 'Agent',
       timestamp: '2030-01-01T00:00:01.000Z', clientRequestId: 'client-1',
       relatedMessageId: 'user-1',
@@ -846,7 +846,7 @@ describe('applySnapshotToStores', () => {
 
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Actual persisted prompt',
       senderName: 'Developer Local',

@@ -140,7 +140,7 @@ describe('useGroupManagement – default team behavior', () => {
 
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        roomId: 'room-manual',
+        conversationId: 'room-manual',
         defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
         defaultGroupName: 'Weather Agent',
         defaultTargetMode: { message_target_mode: 'room_default' },
@@ -184,7 +184,7 @@ describe('useGroupManagement – default team behavior', () => {
 
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        roomId: 'room-manual',
+        conversationId: 'room-manual',
         defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
         defaultGroupName: 'Weather Agent',
         defaultTargetMode: { message_target_mode: 'room_default' },
@@ -274,7 +274,7 @@ describe('useGroupManagement – default team behavior', () => {
     mockListAgentGroups.mockResolvedValue({ success: false, error: 'Unavailable' })
 
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomId: 'room-override' }))
+      useGroupManagement(defaultOptions({ conversationId: 'room-override' }))
     )
 
     await waitFor(() => {
@@ -298,7 +298,7 @@ describe('useGroupManagement – default team behavior', () => {
     mockListAgentGroups.mockResolvedValue({ success: false, error: 'Unavailable' })
 
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomId: 'room-legacy' }))
+      useGroupManagement(defaultOptions({ conversationId: 'room-legacy' }))
     )
 
     await waitFor(() => {
@@ -423,7 +423,7 @@ describe('useGroupManagement – default team behavior', () => {
       }],
     })
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomId: 'room-empty' }))
+      useGroupManagement(defaultOptions({ conversationId: 'room-empty' }))
     )
 
     await waitFor(() => {
@@ -448,7 +448,7 @@ describe('useGroupManagement – default team behavior', () => {
 
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        roomId: 'room-snapshot',
+        conversationId: 'room-snapshot',
         defaultGroup: 'team-source',
         defaultGroupName: 'Source Team',
         defaultTargetMode: { message_target_mode: 'room_default' },
@@ -500,7 +500,7 @@ describe('useGroupManagement – default team behavior', () => {
 
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        roomId: 'room-team',
+        conversationId: 'room-team',
         defaultGroup: 'team-research',
         defaultTargetMode: { message_target_mode: 'room_default' },
       }))

@@ -1,14 +1,14 @@
 const submissionsInFlight = new Set<string>()
 
-export function hitlSubmissionFenceKey(roomId: string, interactionId: string): string {
-  return JSON.stringify([roomId, interactionId])
+export function hitlSubmissionFenceKey(conversationId: string, interactionId: string): string {
+  return JSON.stringify([conversationId, interactionId])
 }
 
 export function acquireHitlSubmissionFence(
-  roomId: string,
+  conversationId: string,
   interactionId: string,
 ): () => void {
-  const key = hitlSubmissionFenceKey(roomId, interactionId)
+  const key = hitlSubmissionFenceKey(conversationId, interactionId)
   if (submissionsInFlight.has(key)) {
     throw new Error('This questionnaire is already being submitted.')
   }

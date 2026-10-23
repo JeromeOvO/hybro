@@ -52,7 +52,7 @@ function installCompletedCanonicalTurn(): void {
 }
 
 const mockAdapter: ComposerShellAdapter = {
-  roomId: 'test-room',
+  conversationId: 'test-room',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
   onRespondToHitlBatch: vi.fn(),
@@ -93,7 +93,7 @@ describe('ComposerShell', () => {
     const hitlRequestIndex = { current: new Map<string, string>() }
     const requestSnapshot = vi.fn()
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room',
+      conversationId: 'test-room',
       lifecycle: createProcessingLifecycle(() => {}),
       getAgentName: vi.fn().mockResolvedValue('Agent'),
       getAgentSource: vi.fn(),
@@ -181,7 +181,7 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('user-1', 'client-1')
     lifecycle.setProcessing(false)
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room',
+      conversationId: 'test-room',
       lifecycle,
       getAgentName: vi.fn().mockResolvedValue('Agent'),
       getAgentSource: vi.fn(),
@@ -256,7 +256,7 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('user-1', 'client-1')
     lifecycle.setProcessing(false)
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
@@ -312,7 +312,7 @@ describe('ComposerShell', () => {
     const lifecycle = createProcessingLifecycle(() => {})
     lifecycle.startProcessing('legacy-user', 'legacy-client')
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
@@ -362,7 +362,7 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('legacy-user', 'legacy-client')
     const ts = '2030-01-01T00:00:00.000Z'
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
@@ -412,7 +412,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-upload',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'Review my application',
       senderName: 'User',
@@ -421,7 +421,7 @@ describe('ComposerShell', () => {
     }, 'db')
     store.upsertMessage({
       id: 'agent-upload',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: 'Please upload the PDF in a new message.',
       senderName: 'Agent A',
@@ -442,7 +442,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'hi',
       senderName: 'User',
@@ -450,7 +450,7 @@ describe('ComposerShell', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -475,7 +475,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'hitl-versioned',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -500,7 +500,7 @@ describe('ComposerShell', () => {
     act(() => {
       store.upsertMessage({
         id: 'hitl-versioned',
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: '',
         senderName: 'Agent A',
@@ -524,7 +524,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'hitl-status',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: 'Which market?',
       senderName: 'Agent A',
@@ -544,7 +544,7 @@ describe('ComposerShell', () => {
     act(() => {
       store.upsertMessage({
         id: 'hitl-status',
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: 'Which market?',
         senderName: 'Agent A',
@@ -577,7 +577,7 @@ describe('ComposerShell HITL queuing', () => {
     ] as const) {
       store.upsertMessage({
         id,
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: '',
         senderName: 'Broker',
@@ -598,7 +598,7 @@ describe('ComposerShell HITL queuing', () => {
     }
     store.upsertMessage({
       id: 'new-open',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Broker',
@@ -622,7 +622,7 @@ describe('ComposerShell HITL queuing', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'hi',
       senderName: 'User',
@@ -630,7 +630,7 @@ describe('ComposerShell HITL queuing', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -646,7 +646,7 @@ describe('ComposerShell HITL queuing', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-2',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent B',

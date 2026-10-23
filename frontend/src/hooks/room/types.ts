@@ -1,5 +1,5 @@
 export interface UseRoomWebhookProps {
-  roomId: string
+  conversationId: string
   userId?: string
   userName?: string
   getToken?: () => Promise<string | null>

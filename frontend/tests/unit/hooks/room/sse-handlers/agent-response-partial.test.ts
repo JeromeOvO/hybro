@@ -22,7 +22,7 @@ describe('handleAgentResponsePartial', () => {
   })
 
   it('appends partial deltas to a message-scoped buffer keyed by message_id', () => {
-    const ctx = { roomId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
+    const ctx = { conversationId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleAgentResponsePartial(
       ctx,
@@ -60,7 +60,7 @@ describe('handleAgentResponsePartial', () => {
     expect(useStreamingStore.getState().buffers['req-1']).toBeUndefined()
     expect(useMessageStore.getState().entities['agent-1']).toMatchObject({
       id: 'agent-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       agentId: 'agent-a',
       clientRequestId: 'req-1',
       taskStatus: 'working',
@@ -68,7 +68,7 @@ describe('handleAgentResponsePartial', () => {
   })
 
   it('keeps parallel agent buffers isolated under the same client_request_id', () => {
-    const ctx = { roomId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
+    const ctx = { conversationId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleAgentResponsePartial(
       ctx,
@@ -108,8 +108,8 @@ describe('handleAgentResponsePartial', () => {
 
   it('matches terminal artifact_update concat semantics for multi-chunk text', () => {
     const lifecycle = makeLifecycle()
-    const artifactCtx = { roomId: 'room-1', lifecycle }
-    const partialCtx = { roomId: 'room-1', lifecycle } as Parameters<typeof handleAgentResponsePartial>[0]
+    const artifactCtx = { conversationId: 'room-1', lifecycle }
+    const partialCtx = { conversationId: 'room-1', lifecycle } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleArtifactUpdate(
       artifactCtx,

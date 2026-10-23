@@ -11,7 +11,7 @@ const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) 
 })
 
 async function connectAndOpen(options: Partial<SSEConnectionOptions> = {}) {
-  const connection = new SSEConnection({ roomId: 'test-room', ...options })
+  const connection = new SSEConnection({ conversationId: 'test-room', ...options })
   const connectPromise = connection.connect()
   // Allow microtasks to process (fetch call + stream reader setup)
   await vi.advanceTimersByTimeAsync(0)
@@ -326,7 +326,7 @@ describe('SSEConnection', () => {
 
   describe('connection state', () => {
     it('should report correct connection state lifecycle', async () => {
-      const connection = new SSEConnection({ roomId: 'test-room' })
+      const connection = new SSEConnection({ conversationId: 'test-room' })
       expect(connection.isConnected()).toBe(false)
 
       const connectPromise = connection.connect()
@@ -339,7 +339,7 @@ describe('SSEConnection', () => {
     })
 
     it('should return correct readyState values', async () => {
-      const connection = new SSEConnection({ roomId: 'test-room' })
+      const connection = new SSEConnection({ conversationId: 'test-room' })
       // CLOSED = 2
       expect(connection.getConnectionState()).toBe(2)
 
@@ -358,7 +358,7 @@ describe('SSEConnection', () => {
         () => new Promise<string | null>((resolve) => { resolveToken = resolve })
       )
 
-      const connection = new SSEConnection({ roomId: 'test-room', getToken })
+      const connection = new SSEConnection({ conversationId: 'test-room', getToken })
       const connectPromise = connection.connect()
 
       connection.disconnect()
@@ -378,7 +378,7 @@ describe('SSEConnection', () => {
 
       const countBefore = MockSSEStream.getFetchCallCount()
 
-      const connection = new SSEConnection({ roomId: 'test-room', getToken })
+      const connection = new SSEConnection({ conversationId: 'test-room', getToken })
       connection.connect()
 
       connection.disconnect()

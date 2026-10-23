@@ -4,7 +4,7 @@ import type { SSECloseReason } from '@/lib/api/sse'
 import type { AnySSEFrame } from '@/lib/types/sse'
 
 interface UseRoomSSEOptions {
-  roomId: string
+  conversationId: string
   enabled?: boolean
   getToken?: () => Promise<string | null>
   onMessage?: (message: AnySSEFrame) => void | Promise<void>
@@ -13,7 +13,7 @@ interface UseRoomSSEOptions {
 
 const RESURRECT_DELAY_MS = 45_000
 
-export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConnectionChange }: UseRoomSSEOptions) {
+export function useRoomSSE({ conversationId, enabled = true, getToken, onMessage, onConnectionChange }: UseRoomSSEOptions) {
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,7 +55,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   }, [])
 
   const connect = useCallback(async () => {
-    if (!enabled || !roomId || connectionRef.current?.isConnected()) {
+    if (!enabled || !conversationId || connectionRef.current?.isConnected()) {
       return
     }
 
@@ -70,7 +70,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       }
 
       connectionRef.current = new SSEConnection({
-        roomId,
+        conversationId,
         getToken: () => getTokenRef.current?.() ?? Promise.resolve(null),
         onMessage: handleMessage,
         snapshot: snapshotRef.current,
@@ -92,7 +92,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
             connectionRef.current = null
             clearResurrectTimer()
             resurrectTimerRef.current = setTimeout(() => {
-              // Re-read enabled/roomId from the closure at timer-fire time.
+              // Re-read enabled/conversationId from the closure at timer-fire time.
               // connect() has its own guards, so stale calls are harmless.
               connectRef.current()
             }, RESURRECT_DELAY_MS)
@@ -107,7 +107,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       setConnecting(false)
       handleConnectionChange(false)
     }
-  }, [roomId, enabled, handleMessage, handleConnectionChange, clearResurrectTimer])
+  }, [conversationId, enabled, handleMessage, handleConnectionChange, clearResurrectTimer])
 
   // Stable ref to `connect` so the resurrect timer can call the latest version
   const connectRef = useRef(connect)
@@ -135,7 +135,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   }, [disconnect])
 
   useEffect(() => {
-    if (enabled && roomId) {
+    if (enabled && conversationId) {
       if (connectionRef.current) {
         connectionRef.current.disconnect()
         connectionRef.current = null
@@ -153,7 +153,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, enabled])
+  }, [conversationId, enabled])
 
   return {
     connected,

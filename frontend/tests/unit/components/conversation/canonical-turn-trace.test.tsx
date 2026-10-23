@@ -8,7 +8,7 @@ function turn(activity: TurnActivityItem[]): TurnProjection {
   return {
     id: 'run-1',
     runId: 'run-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'user-1',
     clientRequestId: 'client-1',
     state: 'active',

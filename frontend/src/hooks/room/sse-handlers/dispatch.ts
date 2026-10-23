@@ -78,8 +78,8 @@ function foldCanonicalDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): 'c
       requestProtocolRecovery(deps, validation.reason)
       return 'stop'
     }
-    const existingTurn = store.rooms[deps.roomId]?.turns[validation.data.run_id]
-    result = store.applyEvent(deps.roomId, { kind: 'run_event', data: validation.data })
+    const existingTurn = store.rooms[deps.conversationId]?.turns[validation.data.run_id]
+    result = store.applyEvent(deps.conversationId, { kind: 'run_event', data: validation.data })
     if (
       result.ok
       && validation.data.type === 'run_started'
@@ -111,7 +111,7 @@ function foldCanonicalDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): 'c
       deps.lifecycle.disarmCancelTimeout()
       deps.setCancelling(false)
       const messageStore = useMessageStore.getState()
-      messageStore.removeMessage(deps.lifecycle.placeholderId(deps.roomId))
+      messageStore.removeMessage(deps.lifecycle.placeholderId(deps.conversationId))
       deps.lifecycle.dismissPlaceholder()
     }
   } else if (roomMessage.type === 'hitl_request' && roomMessage.data.run_id) {
@@ -119,15 +119,15 @@ function foldCanonicalDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): 'c
       requestProtocolRecovery(deps, 'Malformed canonical hitl_request')
       return 'stop'
     }
-    result = store.applyEvent(deps.roomId, { kind: 'hitl_request', data: roomMessage.data })
+    result = store.applyEvent(deps.conversationId, { kind: 'hitl_request', data: roomMessage.data })
   } else if (roomMessage.type === 'hitl_response' && roomMessage.data.run_id) {
     if (!isCanonicalHITLResponseData(roomMessage.data)) {
       requestProtocolRecovery(deps, 'Malformed canonical hitl_response')
       return 'stop'
     }
-    result = store.applyEvent(deps.roomId, { kind: 'hitl_response', data: roomMessage.data })
+    result = store.applyEvent(deps.conversationId, { kind: 'hitl_response', data: roomMessage.data })
   } else if (roomMessage.type === 'agent_response') {
-    result = store.applyEvent(deps.roomId, { kind: 'agent_response', data: roomMessage.data })
+    result = store.applyEvent(deps.conversationId, { kind: 'agent_response', data: roomMessage.data })
   } else if (roomMessage.type === 'task_submitted' || roomMessage.type === 'task_update') {
     // Canonical Runs never emit task_* cards. Legacy-shaped frames may still
     // hydrate MessageStore, but the product renderer never consumes them as
@@ -137,14 +137,14 @@ function foldCanonicalDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): 'c
       return 'stop'
     }
     if (isCanonicalRoot(
-      deps.roomId,
+      deps.conversationId,
       roomMessage.data.client_request_id,
       roomMessage.data.related_message_id,
     )) {
       return 'stop'
     }
   } else if (roomMessage.type === 'processing_status'
-    && isCanonicalRoot(deps.roomId, roomMessage.data.client_request_id, roomMessage.data.message_id)) {
+    && isCanonicalRoot(deps.conversationId, roomMessage.data.client_request_id, roomMessage.data.message_id)) {
     return 'stop'
   }
 
@@ -173,7 +173,7 @@ async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promi
         deps,
         roomMessage,
         isCanonicalRoot(
-          deps.roomId,
+          deps.conversationId,
           roomMessage.data.client_request_id,
           roomMessage.data.related_message_id,
         ),
@@ -205,7 +205,7 @@ async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promi
       )
       break
     case 'artifact_update':
-      handleArtifactUpdate({ roomId: deps.roomId, lifecycle: deps.lifecycle }, roomMessage, clientReqId)
+      handleArtifactUpdate({ conversationId: deps.conversationId, lifecycle: deps.lifecycle }, roomMessage, clientReqId)
       break
     case 'hitl_request':
       await handleHitlRequest(deps, roomMessage, clientReqId)
@@ -228,7 +228,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   // The reducer owns ordering: snapshot replace + ordered delta patch with
   // gap self-heal. The handlers above remain the fold functions.
   const reducer = new RoomReducer({
-    roomId: deps.roomId,
+    conversationId: deps.conversationId,
     onDelta: (frame: AnySSEFrame) => {
       return foldDelta(deps, frame as DeltaMessage)
     },

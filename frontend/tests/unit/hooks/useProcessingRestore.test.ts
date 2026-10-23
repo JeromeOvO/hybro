@@ -37,7 +37,7 @@ function createLifecycle({
     markProcessingResolved: vi.fn(),
     resetProcessingResolved: vi.fn(),
     isProcessingResolved: vi.fn(() => processingResolved),
-    placeholderId: vi.fn((roomId: string) => `processing-placeholder-${roomId}`),
+    placeholderId: vi.fn((conversationId: string) => `processing-placeholder-${conversationId}`),
     armCancelTimeout: vi.fn(),
     disarmCancelTimeout: vi.fn(),
     hasCancelTimedOut: vi.fn(() => false),
@@ -59,7 +59,7 @@ describe('useProcessingRestore', () => {
     useRoomUiStore.getState().resetAll()
     useMessageStore.getState().upsertMessage({
       id: 'msg-active',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Continue work',
       senderName: 'User',
@@ -128,7 +128,7 @@ describe('useProcessingRestore', () => {
   it('does not stop a live SSE lifecycle when the room active run snapshot is stale', async () => {
     useMessageStore.getState().upsertMessage({
       id: 'msg-live-sse',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Live SSE turn',
       senderName: 'User',
@@ -162,7 +162,7 @@ describe('useProcessingRestore', () => {
   it('reconciles and stops a failed live lifecycle when backend has no active run', async () => {
     useMessageStore.getState().upsertMessage({
       id: 'msg-live-failed',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'What content in this pdf?',
       senderName: 'User',
@@ -184,7 +184,7 @@ describe('useProcessingRestore', () => {
       const entity = useMessageStore.getState().entities['msg-live-failed']
       useMessageStore.getState().upsertMessage({
         id: entity.id,
-        roomId: entity.roomId,
+        conversationId: entity.conversationId,
         messageType: 'user',
         content: entity.content,
         senderName: entity.senderName,
@@ -219,7 +219,7 @@ describe('useProcessingRestore', () => {
   it('does not let a stale reconciliation stop a newer lifecycle', async () => {
     useMessageStore.getState().upsertMessage({
       id: 'msg-live-failed',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'What content is in this PDF?',
       senderName: 'User',
@@ -246,7 +246,7 @@ describe('useProcessingRestore', () => {
       const entity = useMessageStore.getState().entities['msg-live-failed']
       useMessageStore.getState().upsertMessage({
         id: entity.id,
-        roomId: entity.roomId,
+        conversationId: entity.conversationId,
         messageType: 'user',
         content: entity.content,
         senderName: entity.senderName,

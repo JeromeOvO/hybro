@@ -11,7 +11,7 @@ export type { AnySSEFrame as SSEMessage }
 export type SSECloseReason = 'manual' | 'permanent-failure'
 
 export interface SSEConnectionOptions {
-  roomId: string
+  conversationId: string
   getToken?: () => Promise<string | null>
   onMessage?: (message: AnySSEFrame) => void | Promise<void>
   onError?: (error: Event) => void
@@ -37,7 +37,7 @@ export class SSEConnection {
   private abortController: AbortController | null = null
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null
   private connectionState: number = CLOSED
-  private roomId: string
+  private conversationId: string
   private options: SSEConnectionOptions
   private reconnectAttempts = 0
   private maxReconnectAttempts = 15
@@ -52,7 +52,7 @@ export class SSEConnection {
   private connectCancelled = false
 
   constructor(options: SSEConnectionOptions) {
-    this.roomId = options.roomId
+    this.conversationId = options.conversationId
     this.options = options
     this.reconnectJitterMs = Math.max(0, options.reconnectJitterMs ?? 0)
     this.randomFn = options.randomFn ?? Math.random
@@ -78,7 +78,7 @@ export class SSEConnection {
         // Build URL without token in query string (security fix for issue 2.1)
         // ?snapshot=1 forces a fresh snapshot fold from the authoritative log
         // (Room Stream Snapshot plan §4 rule 3 gap recovery).
-        const url = `${API_BASE_URL}/room/${this.roomId}/stream${this.options.snapshot ? '?snapshot=1' : ''}`
+        const url = `${API_BASE_URL}/room/${this.conversationId}/stream${this.options.snapshot ? '?snapshot=1' : ''}`
 
         // Send JWT via Authorization header instead of URL query parameter
         const headers: Record<string, string> = {
@@ -288,10 +288,10 @@ export class SSEConnection {
 
 // Get SSE connection status
 export async function getSSEStatus(
-  roomId: string,
+  conversationId: string,
   getToken?: () => Promise<string | null>
 ): Promise<SSEConnectionStatus> {
-  const url = `${API_BASE_URL}/room/${roomId}/status`
+  const url = `${API_BASE_URL}/room/${conversationId}/status`
   
   const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(url, { headers })

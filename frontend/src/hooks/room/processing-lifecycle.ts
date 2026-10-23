@@ -16,7 +16,7 @@ export interface ProcessingLifecycle {
   markProcessingResolved(): void
   resetProcessingResolved(): void
   isProcessingResolved(): boolean
-  placeholderId(roomId: string): string
+  placeholderId(conversationId: string): string
   armCancelTimeout(onTimeout: () => void, ms?: number): void
   disarmCancelTimeout(): void
   hasCancelTimedOut(): boolean
@@ -148,8 +148,8 @@ export function createProcessingLifecycle(
       return processingResolved
     },
 
-    placeholderId(roomId: string) {
-      return `processing-placeholder-${roomId}`
+    placeholderId(conversationId: string) {
+      return `processing-placeholder-${conversationId}`
     },
 
     armCancelTimeout(onTimeout: () => void, ms = 15000) {

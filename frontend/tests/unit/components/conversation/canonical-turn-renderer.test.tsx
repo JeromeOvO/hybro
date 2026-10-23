@@ -27,7 +27,7 @@ function turn(overrides: Partial<TurnProjection> = {}): TurnProjection {
   return {
     id: 'run-1',
     runId: 'run-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'user-1',
     clientRequestId: 'client-1',
     state: 'active',
@@ -72,7 +72,7 @@ beforeEach(() => {
   useMessageStore.getState().clearRoom()
   useMessageStore.getState().setRoom('room-1')
   useMessageStore.getState().upsertMessage({
-    id: 'user-1', roomId: 'room-1', messageType: 'user', content: 'Weather?',
+    id: 'user-1', conversationId: 'room-1', messageType: 'user', content: 'Weather?',
     senderName: 'You', timestamp: '2030-01-01T00:00:00.000Z', clientRequestId: 'client-1',
   }, 'db')
   useTurnPresentationStore.getState().clear()
@@ -86,7 +86,7 @@ describe('canonical Turn renderer', () => {
   it('uses explicit User → Trace → Final → Agent Cards DOM order and safe Markdown final rendering', () => {
     // Stale legacy card entities must never leak into the canonical render.
     useMessageStore.getState().upsertMessage({
-      id: 'orchestrator:run-1:inv_weather_0001', roomId: 'room-1', messageType: 'agent',
+      id: 'orchestrator:run-1:inv_weather_0001', conversationId: 'room-1', messageType: 'agent',
       content: 'PRIVATE_SECRET', senderName: 'Weather Agent', agentId: 'private-agent-id',
       timestamp: '2030-01-01T00:00:01.000Z', clientRequestId: 'client-1',
       relatedMessageId: 'user-1', taskStatus: 'completed',

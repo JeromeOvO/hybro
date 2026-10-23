@@ -8,7 +8,7 @@ import {
 describe('buildPendingHitlIncomingMessage', () => {
   it('maps durable HITL payload fields to one agent message projection', () => {
     const incoming = buildPendingHitlIncomingMessage({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageId: 'agent-msg-1',
       requestId: 'hitl-1',
       source: 'agent',
@@ -31,7 +31,7 @@ describe('buildPendingHitlIncomingMessage', () => {
 
     expect(incoming).toMatchObject({
       id: 'hitl-question:agent-msg-1:group-1:hitl-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: 'Need revenue',
       senderName: 'Broker',
@@ -70,7 +70,7 @@ describe('buildPendingHitlIncomingMessage', () => {
 
   it('does not expose opaque internal agent ids as display names', () => {
     const incoming = buildPendingHitlIncomingMessage({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageId: 'agent-msg-1',
       requestId: 'hitl-1',
       source: 'agent',
@@ -96,7 +96,7 @@ describe('buildPendingHitlIncomingMessage', () => {
 
   it('uses stable defaults for missing optional fields', () => {
     const incoming = buildPendingHitlIncomingMessage({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageId: 'agent-msg-1',
       requestId: 'hitl-1',
       prompt: '',

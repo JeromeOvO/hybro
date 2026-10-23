@@ -38,7 +38,7 @@ describe('convertApiMessageToIncoming', () => {
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.id).toBe('msg-1')
-      expect(result.roomId).toBe('room-1')
+      expect(result.conversationId).toBe('room-1')
       expect(result.messageType).toBe('user')
       expect(result.content).toBe('Hello!')
       expect(result.senderName).toBe('Alice')
@@ -709,7 +709,7 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result).toEqual(expect.objectContaining({
         id: 'msg-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'Here are the results',
         agentId: 'agent-1',

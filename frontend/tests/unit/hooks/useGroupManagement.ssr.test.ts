@@ -19,7 +19,7 @@ function Harness() {
     userId: 'user-1',
     getToken: async () => null,
     isLoaded: true,
-    roomId: 'room-1',
+    conversationId: 'room-1',
   })
   return React.createElement('div')
 }

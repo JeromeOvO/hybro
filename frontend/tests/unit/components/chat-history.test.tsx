@@ -102,15 +102,15 @@ beforeEach(() => {
   mocks.pathname = '/room/active-room'
   currentHistory = structuredClone(history)
   mocks.list.mockImplementation(async () => currentHistory)
-  mocks.update.mockImplementation(async (roomId: string, update: { title?: string; is_pinned?: boolean }) => {
-    const current = currentHistory.items.find((item) => item.conversation_id === roomId)!
+  mocks.update.mockImplementation(async (conversationId: string, update: { title?: string; is_pinned?: boolean }) => {
+    const current = currentHistory.items.find((item) => item.conversation_id === conversationId)!
     const next = {
       ...current,
       ...update,
       pin_order: update.is_pinned === true ? 3 : update.is_pinned === false ? null : current.pin_order,
     }
     currentHistory = {
-      items: currentHistory.items.map((item) => item.conversation_id === roomId ? next : item),
+      items: currentHistory.items.map((item) => item.conversation_id === conversationId ? next : item),
     }
     return next
   })

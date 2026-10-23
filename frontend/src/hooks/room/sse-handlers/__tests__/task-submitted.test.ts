@@ -13,7 +13,7 @@ vi.mock('@/lib/room-timeline/event-log', () => ({
 function makeDeps(): SSEHandlerDeps {
   const lifecycle = createProcessingLifecycle(() => {})
   return {
-    roomId: 'room-1',
+    conversationId: 'room-1',
     lifecycle,
     getAgentName: vi.fn().mockResolvedValue('Agent One'),
     getAgentSource: vi.fn(() => 'cloud' as const),

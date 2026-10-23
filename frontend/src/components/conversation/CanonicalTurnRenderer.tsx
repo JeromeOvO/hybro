@@ -63,7 +63,7 @@ function canonicalAgentResults(turn: TurnProjection): AgentResultViewModel[] {
 function agentIndexAdapter(turn: TurnProjection, results: AgentResultViewModel[]): TurnViewModel {
   return {
     id: turn.id,
-    roomId: turn.roomId,
+    conversationId: turn.conversationId,
     userMessageId: turn.userMessageId,
     userContent: '',
     userAttachments: [],
@@ -100,7 +100,7 @@ function useCanonicalTurnArtifacts(turn: TurnProjection): {
   const queries = useQueries({
     queries: detailMessageIds.map((messageId) => (
       canonicalAgentCallDetailQueryOptions(
-        turn.roomId,
+        turn.conversationId,
         messageId,
         getToken,
         enabled,

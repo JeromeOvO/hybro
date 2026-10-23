@@ -144,24 +144,24 @@ describe('useChatRoomCreation', () => {
         useChatRoomCreation({ ...defaultProps, userId: undefined })
       )
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('User information not available')
     })
 
     it('should fail when message is empty', async () => {
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('   ')
+        conversationId = await result.current.createRoomWithMessage('   ')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Message cannot be empty')
     })
 
@@ -173,15 +173,15 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello world', {
+        conversationId = await result.current.createRoomWithMessage('Hello world', {
           selectedAgents: [mockAgent],
           roomName: 'My Room',
         })
       })
 
-      expect(roomId!).toBe('room-123')
+      expect(conversationId!).toBe('room-123')
       expect(mockCreateNewRoom).toHaveBeenCalledWith(
         'My Room',
         'Test User',
@@ -255,12 +255,12 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Server down')
     })
 
@@ -435,12 +435,12 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Rate limited')
     })
 
@@ -452,12 +452,12 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Room created but no conversation_id returned')
     })
 
@@ -469,12 +469,12 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Failed to create room')
     })
 

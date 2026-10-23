@@ -77,7 +77,7 @@ describe('useRoomActions cancellation', () => {
     useRoomUiStore.getState().resetAll()
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'Run this',
       senderName: 'User',
@@ -86,7 +86,7 @@ describe('useRoomActions cancellation', () => {
     }, 'db')
     useMessageStore.getState().upsertMessage({
       id: 'agent-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: '',
       senderName: 'Agent',

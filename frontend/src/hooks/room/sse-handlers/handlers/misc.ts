@@ -99,12 +99,12 @@ export function handleRunEvent(
         sub === 'run_completed' ? 'completed' : sub === 'run_canceled' ? 'canceled' : 'failed',
       )
       void ensureTurnTerminalStampedFromBackendTruth(
-        ctx.roomId,
+        ctx.conversationId,
         lifecycle,
         { relatedMessageId: runId, clientRequestId: correlationId },
         ctx.getToken,
       )
     }
-    void ctx.reconcileWithDb(ctx.roomId)
+    void ctx.reconcileWithDb(ctx.conversationId)
   }
 }

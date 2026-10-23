@@ -35,11 +35,11 @@ function maybeScheduleTurnTerminalRecovery(
   },
   taskStatus: TaskState,
 ): void {
-  const turn = buildTurnForRecoveryHint(ctx.roomId, hint)
+  const turn = buildTurnForRecoveryHint(ctx.conversationId, hint)
   if (!shouldScheduleTurnTerminalRecovery(turn, taskStatus)) return
 
   scheduleTurnTerminalBackendTruthCheck(
-    ctx.roomId,
+    ctx.conversationId,
     ctx.lifecycle,
     hint,
     ctx.getToken,
@@ -86,7 +86,7 @@ export async function handleTaskUpdate(
 
   const baseMsg = {
     id: messageId,
-    roomId: ctx.roomId,
+    conversationId: ctx.conversationId,
     messageType: 'agent' as const,
     senderName,
     agentId: sseMessage.data.agent_id ?? undefined,
@@ -110,13 +110,13 @@ export async function handleTaskUpdate(
   if (isTerminalState(status)) {
     const rootCancellationPending = useRoomUiStore
       .getState()
-      .getRoomFlags(ctx.roomId)
+      .getRoomFlags(ctx.conversationId)
       .cancelling
     applyRoomCommands([
       ...(!rootCancellationPending
         ? [{
           type: 'remove_message' as const,
-          id: ctx.lifecycle.placeholderId(ctx.roomId),
+          id: ctx.lifecycle.placeholderId(ctx.conversationId),
         }]
         : []),
       {
@@ -138,7 +138,7 @@ export async function handleTaskUpdate(
 
     if (!canonical) {
       if (status === TASK_STATE.COMPLETED) {
-        appendEvent(ctx.roomId, {
+        appendEvent(ctx.conversationId, {
           kind: 'agent_completed',
           timestamp: sseMessage.timestamp,
           agentId: sseMessage.data.agent_id ?? undefined,
@@ -150,7 +150,7 @@ export async function handleTaskUpdate(
         status === TASK_STATE.REJECTED ||
         status === TASK_STATE.CANCELED
       ) {
-        appendEvent(ctx.roomId, {
+        appendEvent(ctx.conversationId, {
           kind: 'agent_failed',
           timestamp: sseMessage.timestamp,
           agentId: sseMessage.data.agent_id ?? undefined,
@@ -160,7 +160,7 @@ export async function handleTaskUpdate(
         })
       }
 
-      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+      const stamped = stampLiveTurnTerminalIfInferable(ctx.conversationId, ctx.lifecycle, {
         clientRequestId: sseMessage.data.client_request_id,
         relatedMessageId: sseMessage.data.related_message_id,
       })

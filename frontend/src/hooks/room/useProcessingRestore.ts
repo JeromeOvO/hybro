@@ -18,12 +18,12 @@ interface ProcessingSnapshotRoom {
 }
 
 export function useProcessingRestore(
-  roomId: string,
+  conversationId: string,
   room: ProcessingSnapshotRoom | null,
   queryLoading: boolean,
   lifecycle: ProcessingLifecycle,
   getToken?: (() => Promise<string | null>) | undefined,
-  reconcileWithDb?: ((roomId: string) => Promise<unknown>) | undefined,
+  reconcileWithDb?: ((conversationId: string) => Promise<unknown>) | undefined,
 ) {
   // Reactive subscription ensures the effect re-fires when hydration completes,
   // even if room/queryLoading settled first.
@@ -36,7 +36,7 @@ export function useProcessingRestore(
     // Wait for DB hydration to complete before checking for task messages
     if (!hydratedFromDb) return
     const store = useMessageStore.getState()
-    if (store.roomId !== roomId) return
+    if (store.conversationId !== conversationId) return
 
     // Once SSE has resolved the live processing lifecycle, never re-add it —
     // the restore effect is only for page-load recovery.
@@ -53,18 +53,18 @@ export function useProcessingRestore(
     const cancellationPending = activeRun?.state === 'canceling'
 
     useRoomUiStore.getState().setActiveRunTriggerMessageIds(
-      roomId,
+      conversationId,
       activeRunTriggerMessageIds,
     )
 
     const finishStaleActiveRunIfTerminal = async () => {
       if (!lifecycleMessageId) return
-      if (!allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)) return
+      if (!allAgentsTerminalForUserMessage(store.entities, conversationId, lifecycleMessageId)) return
 
       let backendRunActive = true
       if (getToken) {
         try {
-          const result = await inquiryActiveRuns(roomId, getToken)
+          const result = await inquiryActiveRuns(conversationId, getToken)
           if (result.success) {
             backendRunActive = (result.active_runs ?? []).some(
               run => run.trigger_message_id === lifecycleMessageId,
@@ -78,15 +78,15 @@ export function useProcessingRestore(
       if (backendRunActive) return
 
       await ensureTurnTerminalStampedFromBackendTruth(
-        roomId,
+        conversationId,
         lifecycle,
         { relatedMessageId: lifecycleMessageId },
         getToken,
       )
 
-      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+      const { sending } = useRoomUiStore.getState().rooms[conversationId] ?? {}
       if (!sending) {
-        store.removeMessage(lifecycle.placeholderId(roomId))
+        store.removeMessage(lifecycle.placeholderId(conversationId))
         lifecycle.stopProcessing()
       }
     }
@@ -103,10 +103,10 @@ export function useProcessingRestore(
         lifecycleMessageId,
         triggerMsg?.clientRequestId ?? null,
       )
-      useRoomUiStore.getState().setCancelling(roomId, cancellationPending)
+      useRoomUiStore.getState().setCancelling(conversationId, cancellationPending)
       if (cancellationPending) {
-        ensureInitialProcessingStatusLog(roomId, triggerMsg)
-        appendProcessingStatusLog(roomId, triggerMsg, 'Stopping...')
+        ensureInitialProcessingStatusLog(conversationId, triggerMsg)
+        appendProcessingStatusLog(conversationId, triggerMsg, 'Stopping...')
       }
 
       // Cached active_runs may be stale — verify with backend before stopping processing.
@@ -116,7 +116,7 @@ export function useProcessingRestore(
 
       if (
         lifecycleMessageId
-        && allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)
+        && allAgentsTerminalForUserMessage(store.entities, conversationId, lifecycleMessageId)
       ) {
         return
       }
@@ -133,22 +133,22 @@ export function useProcessingRestore(
 
       // Check if any active (non-terminal) task entities already exist in the store
       const hasTaskEntities = Object.values(store.entities).some(
-        e => e.roomId === roomId && e.taskStatus && !isTerminalState(e.taskStatus)
+        e => e.conversationId === conversationId && e.taskStatus && !isTerminalState(e.taskStatus)
       )
 
       if (hasTaskEntities) {
         return
       }
 
-      store.removeMessage(lifecycle.placeholderId(roomId))
-      ensureInitialProcessingStatusLog(roomId, triggerMsg)
+      store.removeMessage(lifecycle.placeholderId(conversationId))
+      ensureInitialProcessingStatusLog(conversationId, triggerMsg)
     } else {
-      useRoomUiStore.getState().setCancelling(roomId, false)
+      useRoomUiStore.getState().setCancelling(conversationId, false)
       // Backend truth says no active processing — clean up lifecycle state left
       // behind by missed terminal SSE without deleting per-turn update history.
       // But don't wipe it if a message send is still in flight (the SSE events
       // haven't arrived yet).
-      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+      const { sending } = useRoomUiStore.getState().rooms[conversationId] ?? {}
       if (sending) return
       if (lifecycle.getPendingRunEventAck()) return
 
@@ -157,16 +157,16 @@ export function useProcessingRestore(
         ? store.entities[liveLifecycleMessageId]
         : undefined
       if (
-        liveLifecycleMessage?.roomId === roomId &&
+        liveLifecycleMessage?.conversationId === conversationId &&
         liveLifecycleMessage.messageType === 'user' &&
         !liveLifecycleMessage.turnTerminalStatus &&
-        !allAgentsTerminalForUserMessage(store.entities, roomId, liveLifecycleMessage.id)
+        !allAgentsTerminalForUserMessage(store.entities, conversationId, liveLifecycleMessage.id)
       ) {
         if (getToken && reconcileWithDb) {
           void (async () => {
             try {
               const result = await inquiryActiveRuns(
-                roomId,
+                conversationId,
                 getToken,
               )
               const backendRunActive = (result.active_runs ?? []).some(
@@ -174,13 +174,13 @@ export function useProcessingRestore(
               )
               if (!result.success || backendRunActive) return
 
-              await reconcileWithDb(roomId)
+              await reconcileWithDb(conversationId)
               const refreshedStore = useMessageStore.getState()
               const refreshedMessage = refreshedStore.entities[liveLifecycleMessage.id]
               if (!refreshedMessage?.turnTerminalStatus) return
 
               const { sending: liveSending } =
-                useRoomUiStore.getState().rooms[roomId] ?? {}
+                useRoomUiStore.getState().rooms[conversationId] ?? {}
               if (
                 lifecycle.getMessageId() !== liveLifecycleMessage.id ||
                 liveSending ||
@@ -190,7 +190,7 @@ export function useProcessingRestore(
               }
 
               lifecycle.markProcessingResolved()
-              refreshedStore.removeMessage(lifecycle.placeholderId(roomId))
+              refreshedStore.removeMessage(lifecycle.placeholderId(conversationId))
               lifecycle.stopProcessing()
             } catch {
               // Preserve the live lifecycle when backend truth cannot be confirmed.
@@ -201,13 +201,13 @@ export function useProcessingRestore(
       }
 
       if (lifecycle.isPlaceholderDismissed()) return
-      store.removeMessage(lifecycle.placeholderId(roomId))
+      store.removeMessage(lifecycle.placeholderId(conversationId))
       lifecycle.stopProcessing()
     }
   }, [
     room,
     queryLoading,
-    roomId,
+    conversationId,
     lifecycle,
     hydratedFromDb,
     getToken,

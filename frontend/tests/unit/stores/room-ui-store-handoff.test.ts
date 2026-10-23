@@ -32,7 +32,7 @@ describe("PendingRoomData handoffMode", () => {
     expect(data!.handoffMode).toBeUndefined()
   })
 
-  it("scopes handoffMode per roomId", () => {
+  it("scopes handoffMode per conversationId", () => {
     const store = useRoomUiStore.getState()
     store.setPendingRoomData("room-a", {
       initialMessage: "Prefill msg",

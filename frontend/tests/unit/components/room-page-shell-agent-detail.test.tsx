@@ -37,9 +37,9 @@ class MockResizeObserver {
   disconnect() {}
 }
 
-function makeAdapter(roomId = 'room-1'): TimelineAdapter {
+function makeAdapter(conversationId = 'room-1'): TimelineAdapter {
   return {
-    roomId,
+    conversationId,
     onSendMessage: vi.fn(),
     onCancelProcessing: vi.fn(),
       onRespondToHitlBatch: vi.fn(),
@@ -87,13 +87,13 @@ describe('RoomPageShell agent detail pane', () => {
     store.setRoom('room-1')
     store.upsertMessage(createUserMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       content: 'Research a2a agents',
     }), 'db')
     const messageId = 'orchestrator:run-research:inv_research_0001'
     store.upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Researcher Alex',
@@ -182,7 +182,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_weather_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Weather Agent',
@@ -230,7 +230,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_private_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Private Agent',
@@ -250,7 +250,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_working_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Working Agent',
@@ -273,7 +273,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_pending_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Pending Agent',
@@ -303,7 +303,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_artifact_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Artifact Agent',

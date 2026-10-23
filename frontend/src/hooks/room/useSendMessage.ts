@@ -25,7 +25,7 @@ export type SendUserMessageInput = {
 }
 
 export function useSendMessage(
-  roomId: string,
+  conversationId: string,
   userId: string | undefined,
   userName: string | undefined,
   room: unknown,
@@ -35,7 +35,7 @@ export function useSendMessage(
   lifecycle: ProcessingLifecycle,
   setSending: (v: boolean) => void,
   setCancelling: (v: boolean) => void,
-  reconcileWithDb: (roomId: string) => Promise<void>,
+  reconcileWithDb: (conversationId: string) => Promise<void>,
 ) {
   const sendUserMessage = useCallback(async ({
     userInput,
@@ -60,7 +60,7 @@ export function useSendMessage(
     const clientRequestId = existingClientRequestId ?? crypto.randomUUID()
     const optimisticUserMessageId = `cr:${clientRequestId}`
     const currentTime = new Date().toISOString()
-    useRoomUiStore.getState().setPendingTurnSkeleton(roomId, {
+    useRoomUiStore.getState().setPendingTurnSkeleton(conversationId, {
       text: userInput,
       attachments: pendingAttachments,
     })
@@ -82,10 +82,10 @@ export function useSendMessage(
     }))
 
     const msgStoreSend = useMessageStore.getState()
-    msgStoreSend.removeMessage(lifecycle.placeholderId(roomId))
+    msgStoreSend.removeMessage(lifecycle.placeholderId(conversationId))
     msgStoreSend.upsertMessage({
       id: optimisticUserMessageId,
-      roomId,
+      conversationId,
       messageType: 'user',
       content: userInput,
       senderName: userName,
@@ -100,12 +100,12 @@ export function useSendMessage(
       ],
     }, 'optimistic')
     lifecycle.startProcessing(optimisticUserMessageId)
-    useRoomUiStore.getState().setActiveRunTriggerMessageIds(roomId, [optimisticUserMessageId])
+    useRoomUiStore.getState().setActiveRunTriggerMessageIds(conversationId, [optimisticUserMessageId])
 
-    useRoomUiStore.getState().markLocalSend(roomId)
+    useRoomUiStore.getState().markLocalSend(conversationId)
     const queryClient = getActiveQueryClient()
     const rollbackRoomHistory = queryClient
-      ? await optimisticallyMarkRoomProcessing(queryClient, userId, roomId, currentTime)
+      ? await optimisticallyMarkRoomProcessing(queryClient, userId, conversationId, currentTime)
       : () => undefined
 
     try {
@@ -120,7 +120,7 @@ export function useSendMessage(
         uploadResponses = new Map()
         const results = await Promise.all(
           pendingAttachments.map(async (att) => {
-            const res = await uploadFile(att.file, roomId, getToken)
+            const res = await uploadFile(att.file, conversationId, getToken)
             uploadResponses!.set(att.id, {
               fileId: res.file_id,
               fileUrl: res.file_url,
@@ -137,10 +137,10 @@ export function useSendMessage(
       if (quoteData?.content && quoteData.content.length > MAX_QUOTE_TEXT_LENGTH) {
         toast.error(`Quote is too long (max ${MAX_QUOTE_TEXT_LENGTH} characters).`)
         lifecycle.stopProcessing()
-        useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+        useRoomUiStore.getState().setPendingTurnSkeleton(conversationId)
         const msgStoreTooLong = useMessageStore.getState()
         msgStoreTooLong.removeMessage(optimisticUserMessageId)
-        msgStoreTooLong.removeMessage(lifecycle.placeholderId(roomId))
+        msgStoreTooLong.removeMessage(lifecycle.placeholderId(conversationId))
         rollbackRoomHistory()
         setSending(false)
         lifecycle.setSendGuard(false)
@@ -159,7 +159,7 @@ export function useSendMessage(
 
       // Step 1: Send user message to backend using unified SendMessage API
       const createResponse = await SendMessage({
-        roomId,
+        conversationId,
         userInput,
         getToken,
         userId,
@@ -187,7 +187,7 @@ export function useSendMessage(
         // Rollback optimistic entities.
         const msgStoreNoId = useMessageStore.getState()
         msgStoreNoId.removeMessage(optimisticUserMessageId)
-        msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
+        msgStoreNoId.removeMessage(lifecycle.placeholderId(conversationId))
         rollbackRoomHistory()
 
         toast.error('Message sent but server returned no ID. Please try again.')
@@ -203,7 +203,7 @@ export function useSendMessage(
         }
 
         lifecycle.stopProcessing()
-        useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+        useRoomUiStore.getState().setPendingTurnSkeleton(conversationId)
 
         return false
       }
@@ -237,7 +237,7 @@ export function useSendMessage(
         }),
       })
 
-      useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+      useRoomUiStore.getState().setPendingTurnSkeleton(conversationId)
 
       // Set correlation state before any post-send SSE flows in. A fast
       // terminal event can clear this state; do not rewrite it afterward.
@@ -284,7 +284,7 @@ export function useSendMessage(
       // Targeted rollback: remove only the specific optimistic messages (Gap 5)
       const msgStoreErr = useMessageStore.getState()
       msgStoreErr.removeMessage(optimisticUserMessageId)
-      msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
+      msgStoreErr.removeMessage(lifecycle.placeholderId(conversationId))
       rollbackRoomHistory()
 
       toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -301,13 +301,13 @@ export function useSendMessage(
 
       // Reconcile to recover any messages that might have been lost
       try {
-        await reconcileWithDb(roomId)
+        await reconcileWithDb(conversationId)
       } catch (reloadError) {
         console.error('Failed to reconcile messages after error:', reloadError)
       }
 
       lifecycle.stopProcessing()
-      useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+      useRoomUiStore.getState().setPendingTurnSkeleton(conversationId)
 
       return false
     } finally {
@@ -317,7 +317,7 @@ export function useSendMessage(
       // to prevent a race window where the user could double-send between
       // lifecycle.startProcessing(...) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb])
+  }, [userId, userName, room, conversationId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb])
 
   return { sendUserMessage }
 }

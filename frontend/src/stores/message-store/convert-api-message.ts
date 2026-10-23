@@ -284,7 +284,7 @@ export async function convertApiMessageToIncoming(
   return {
     id: apiMessage.message_id,
     clientRequestId: apiMessage.client_request_id ?? undefined,
-    roomId: apiMessage.conversation_id,
+    conversationId: apiMessage.conversation_id,
     messageType: apiMessage.message_type as 'user' | 'agent',
     content,
     senderName,

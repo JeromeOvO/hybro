@@ -8,7 +8,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   const timestamp = overrides.timestamp ?? '2026-02-17T10:00:00Z'
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: 'Hello',
     senderName: 'Agent',
@@ -26,7 +26,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: 'Hello',
     senderName: 'Agent',

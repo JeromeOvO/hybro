@@ -76,7 +76,7 @@ export function parseCanonicalCardIdentity(messageId: string): {
 }
 
 export async function fetchCanonicalAgentCallDetail(
-  roomId: string,
+  conversationId: string,
   messageId: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
@@ -84,6 +84,6 @@ export async function fetchCanonicalAgentCallDetail(
   const identity = parseCanonicalCardIdentity(messageId)
   if (!identity) return null
   return apiClient<CanonicalAgentCallDetailResponse>(getApiUrl(
-    `rooms/${encodeURIComponent(roomId)}/agent-calls/${encodeURIComponent(identity.runId)}/${encodeURIComponent(identity.publicCallId)}/detail`,
+    `rooms/${encodeURIComponent(conversationId)}/agent-calls/${encodeURIComponent(identity.runId)}/${encodeURIComponent(identity.publicCallId)}/detail`,
   ), { getToken, signal })
 }

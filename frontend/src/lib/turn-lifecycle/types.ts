@@ -311,7 +311,7 @@ export interface HITLInteractionProjection {
 export interface TurnProjection {
   id: string
   runId: string
-  roomId: string
+  conversationId: string
   userMessageId: string
   clientRequestId: string
   state: TurnLifecycleState

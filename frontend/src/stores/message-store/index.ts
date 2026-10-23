@@ -18,7 +18,7 @@ interface MessageStoreState {
   // ── Per-room entity storage ───────────────────────────────
   entities: Record<string, MessageEntity>
   orderedIds: string[]
-  roomId: string | null
+  conversationId: string | null
 
   // ── Sync metadata ────────────────────────────────────────
   hydratedFromDb: boolean
@@ -35,9 +35,9 @@ interface MessageStoreState {
     patch: Partial<Pick<MessageEntity, 'content' | 'attachments' | 'clientRequestId' | 'userId' | 'timestamp' | 'quoteId'>>
   ) => void
   removeMessage: (id: string) => void
-  cancelAllNonTerminal: (roomId: string) => void
+  cancelAllNonTerminal: (conversationId: string) => void
   nudgeSyncBridge: () => void
-  setRoom: (roomId: string) => void
+  setRoom: (conversationId: string) => void
   clearRoom: () => void
   markDbSynced: () => void
 }
@@ -45,7 +45,7 @@ interface MessageStoreState {
 const INITIAL_STATE = {
   entities: {} as Record<string, MessageEntity>,
   orderedIds: [] as string[],
-  roomId: null as string | null,
+  conversationId: null as string | null,
   hydratedFromDb: false,
   lastDbSyncAt: null as number | null,
   version: 0,
@@ -249,13 +249,13 @@ export const useMessageStore = create<MessageStoreState>()(
      * Batch-cancel all non-terminal tasks in a room.
      * Uses resolveDisplayType instead of hardcoding displayType (Gap 19).
      */
-    cancelAllNonTerminal: (roomId) => set((state) => {
+    cancelAllNonTerminal: (conversationId) => set((state) => {
       let changed = false
       const newEntities = { ...state.entities }
 
       for (const [id, entity] of Object.entries(newEntities)) {
         if (
-          entity.roomId === roomId &&
+          entity.conversationId === conversationId &&
           entity.taskStatus &&
           !isTerminalState(entity.taskStatus) &&
           !entity.isEphemeral
@@ -282,9 +282,9 @@ export const useMessageStore = create<MessageStoreState>()(
       version: state.version + 1,
     })),
 
-    setRoom: (roomId) => set({
+    setRoom: (conversationId) => set({
       ...INITIAL_STATE,
-      roomId,
+      conversationId,
     }),
 
     clearRoom: () => set({

@@ -26,7 +26,7 @@ interface UseGroupManagementOptions {
   /** Dispatch scope used when no explicit override is active. */
   defaultTargetMode?: TargetModeDispatchInput
   /** Room ID for localStorage persistence (room page only) */
-  roomId?: string
+  conversationId?: string
   /** Called when an action requires authentication but user is not signed in */
   onRequireAuth?: () => void
 }
@@ -80,7 +80,7 @@ export function useGroupManagement(
     defaultGroup,
     defaultGroupName,
     defaultTargetMode,
-    roomId,
+    conversationId,
     onRequireAuth,
   } = options
 
@@ -92,15 +92,15 @@ export function useGroupManagement(
   const [overrideGroupName, setOverrideGroupName] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!roomId) {
+    if (!conversationId) {
       setOverrideGroup(null)
       setOverrideGroupName(null)
       return
     }
 
-    setOverrideGroup(localStorage.getItem(`room-${roomId}-override-group`))
-    setOverrideGroupName(localStorage.getItem(`room-${roomId}-override-group-name`))
-  }, [roomId])
+    setOverrideGroup(localStorage.getItem(`room-${conversationId}-override-group`))
+    setOverrideGroupName(localStorage.getItem(`room-${conversationId}-override-group-name`))
+  }, [conversationId])
 
   const groupExists = useCallback(
     (groupId: string) => groups.some(group => group.type === 'user' && group.group_id === groupId),
@@ -155,11 +155,11 @@ export function useGroupManagement(
   const clearOverrideState = useCallback(() => {
     setOverrideGroup(null)
     setOverrideGroupName(null)
-    if (roomId) {
-      localStorage.removeItem(`room-${roomId}-override-group`)
-      localStorage.removeItem(`room-${roomId}-override-group-name`)
+    if (conversationId) {
+      localStorage.removeItem(`room-${conversationId}-override-group`)
+      localStorage.removeItem(`room-${conversationId}-override-group-name`)
     }
-  }, [roomId])
+  }, [conversationId])
 
   // Modal state
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
@@ -288,15 +288,15 @@ export function useGroupManagement(
   const persistOverride = useCallback((groupId: string, groupName: string | null) => {
     setOverrideGroup(groupId)
     setOverrideGroupName(groupName)
-    if (roomId) {
-      localStorage.setItem(`room-${roomId}-override-group`, groupId)
+    if (conversationId) {
+      localStorage.setItem(`room-${conversationId}-override-group`, groupId)
       if (groupName) {
-        localStorage.setItem(`room-${roomId}-override-group-name`, groupName)
+        localStorage.setItem(`room-${conversationId}-override-group-name`, groupName)
       } else {
-        localStorage.removeItem(`room-${roomId}-override-group-name`)
+        localStorage.removeItem(`room-${conversationId}-override-group-name`)
       }
     }
-  }, [roomId])
+  }, [conversationId])
 
   const handleGroupCreated = useCallback((group: AgentGroup) => {
     setGroups(prev => {

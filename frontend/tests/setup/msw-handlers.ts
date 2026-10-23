@@ -64,12 +64,12 @@ export const handlers = [
     })
   }),
 
-  http.get(`${rooms}/:roomId`, ({ params }) => {
+  http.get(`${rooms}/:conversationId`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      conversation_id: params.roomId,
+      conversation_id: params.conversationId,
       room: {
-        conversation_id: params.roomId,
+        conversation_id: params.conversationId,
         room_name: 'Test Room',
         room_owner_id: 'test-user',
         room_owner_name: 'Test User',
@@ -79,24 +79,24 @@ export const handlers = [
     })
   }),
 
-  http.get(`${rooms}/:roomId/active-runs`, ({ params }) => {
+  http.get(`${rooms}/:conversationId/active-runs`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      conversation_id: params.roomId,
+      conversation_id: params.conversationId,
       active_runs: [],
     })
   }),
 
-  http.post(`${rooms}/:roomId/messages`, async ({ request, params }) => {
+  http.post(`${rooms}/:conversationId/messages`, async ({ request, params }) => {
     const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       success: true,
-      conversation_id: params.roomId,
+      conversation_id: params.conversationId,
       message_id: `msg-${Date.now()}`,
       user_id: body.user_id,
       user_name: body.user_name,
       message: {
-        conversation_id: params.roomId,
+        conversation_id: params.conversationId,
         message_id: `msg-${Date.now()}`,
         message_type: 'user',
         message_content: {
@@ -107,10 +107,10 @@ export const handlers = [
     })
   }),
 
-  http.get(`${rooms}/:roomId/messages`, ({ params }) => {
+  http.get(`${rooms}/:conversationId/messages`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      conversation_id: params.roomId,
+      conversation_id: params.conversationId,
       message_list: [],
     })
   }),
@@ -131,7 +131,7 @@ export const handlers = [
   }),
 
   // SSE API handlers
-  http.get(`${sseBase}/room/:roomId/status`, async () => {
+  http.get(`${sseBase}/room/:conversationId/status`, async () => {
     return HttpResponse.json({
       conversation_id: 'test-room',
       active_connections: 1,
@@ -246,25 +246,25 @@ export const handlers = [
 
 // Error response handlers for testing error scenarios
 export const errorHandlers = {
-  networkError: http.post(`${rooms}/:roomId/messages`, () => {
+  networkError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.error()
   }),
 
-  serverError: http.post(`${rooms}/:roomId/messages`, () => {
+  serverError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       { success: false, error: 'Internal server error', status_code: 500 },
       { status: 500 }
     )
   }),
 
-  authError: http.post(`${rooms}/:roomId/messages`, () => {
+  authError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       { success: false, error: 'Unauthorized', status_code: 401 },
       { status: 401 }
     )
   }),
 
-  rateLimitError: http.post(`${rooms}/:roomId/messages`, () => {
+  rateLimitError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       {
         success: false,

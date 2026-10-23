@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 
 test.describe('Room Timeline', () => {
   test.beforeEach(async ({ page }, testInfo) => {
-    const roomId = `room-timeline-${testInfo.workerIndex}-${testInfo.retry}`
+    const conversationId = `room-timeline-${testInfo.workerIndex}-${testInfo.retry}`
     const now = new Date().toISOString()
 
     await page.route('**/api/v1/rooms', async (route) => {
@@ -13,7 +13,7 @@ test.describe('Room Timeline', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room: { conversation_id: roomId },
+          room: { conversation_id: conversationId },
         }),
       })
     })
@@ -41,7 +41,7 @@ test.describe('Room Timeline', () => {
           resolved_agents: [],
           active_runs: [],
           room: {
-            conversation_id: roomId,
+            conversation_id: conversationId,
             room_name: 'Timeline E2E Room',
             room_owner_id: 'user_local_developer',
             room_owner_name: 'Developer Local',
@@ -69,10 +69,10 @@ test.describe('Room Timeline', () => {
           contentType: 'application/json',
           body: JSON.stringify({
             success: true,
-            conversation_id: roomId,
+            conversation_id: conversationId,
             message_id: messageId,
             message: {
-              conversation_id: roomId,
+              conversation_id: conversationId,
               message_id: messageId,
               message_type: 'user',
               user_id: 'user_local_developer',
@@ -90,10 +90,10 @@ test.describe('Room Timeline', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          conversation_id: roomId,
+          conversation_id: conversationId,
           message_list: [
             {
-              conversation_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-user',
               message_type: 'user',
               user_id: 'user_local_developer',
@@ -105,7 +105,7 @@ test.describe('Room Timeline', () => {
               },
             },
             {
-              conversation_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-agent-one',
               message_type: 'agent',
               agent_id: 'agent-one',
@@ -122,7 +122,7 @@ test.describe('Room Timeline', () => {
               },
             },
             {
-              conversation_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-agent-two',
               message_type: 'agent',
               agent_id: 'agent-two',
@@ -146,7 +146,7 @@ test.describe('Room Timeline', () => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ success: true, conversation_id: roomId, active_runs: [] }),
+        body: JSON.stringify({ success: true, conversation_id: conversationId, active_runs: [] }),
       })
     )
     await page.route('**/api/v1/rooms/*/hitl/pending', (route) =>

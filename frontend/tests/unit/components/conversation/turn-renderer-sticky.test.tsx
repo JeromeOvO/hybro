@@ -15,7 +15,7 @@ vi.mock('@/components/conversation/UserMessageBlock', () => ({
 function baseTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'user-1',
     userContent: 'Hello',
     userAttachments: [],
@@ -41,7 +41,7 @@ describe('TurnRenderer sticky user message', () => {
       entities: {
         'user-1': {
           id: 'user-1',
-          roomId: 'room-1',
+          conversationId: 'room-1',
           messageType: 'user',
           content: 'Hello',
           senderName: 'User',

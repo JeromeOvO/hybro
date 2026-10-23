@@ -5,7 +5,7 @@ import type { IncomingMessage, MessageSource } from '@/stores/message-store/type
 export type RoomCommand =
   | { type: 'upsert_message'; message: IncomingMessage; source: MessageSource }
   | { type: 'remove_message'; id: string }
-  | { type: 'cancel_all_non_terminal'; roomId: string }
+  | { type: 'cancel_all_non_terminal'; conversationId: string }
   | { type: 'stream_clear'; messageId: string }
   | { type: 'stream_clear_client_request'; clientRequestId: string }
 
@@ -28,7 +28,7 @@ export function applyRoomCommands(commands: readonly RoomCommand[]): void {
         store.removeMessage(cmd.id)
         break
       case 'cancel_all_non_terminal':
-        store.cancelAllNonTerminal(cmd.roomId)
+        store.cancelAllNonTerminal(cmd.conversationId)
         break
       case 'stream_clear':
         streaming.clear(cmd.messageId)

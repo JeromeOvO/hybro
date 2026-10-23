@@ -13,11 +13,11 @@ export interface ApplyDbMessagesResult {
  * were actually written (SSE may reject DB overwrites for active streams).
  */
 export function applyDbMessages(
-  targetRoomId: string,
+  targetConversationId: string,
   filtered: IncomingMessage[],
 ): ApplyDbMessagesResult | null {
   const store = useMessageStore.getState()
-  if (store.roomId !== targetRoomId) return null
+  if (store.conversationId !== targetConversationId) return null
 
   const appliedIds = store.upsertMany(filtered, 'db')
   useStreamingStore.getState().clearByMessageIds(appliedIds)

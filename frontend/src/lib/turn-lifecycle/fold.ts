@@ -80,7 +80,7 @@ function eventOrder(data: { room_seq?: number }): number | null {
 
 function foldRunEvent(
   turns: TurnProjectionMap,
-  roomId: string,
+  conversationId: string,
   data: CanonicalRunEventData,
 ): FoldResult {
   const order = eventOrder(data)
@@ -97,7 +97,7 @@ function foldRunEvent(
     const turn: TurnProjection = {
       id: data.payload.hybro_turn_id,
       runId: data.run_id,
-      roomId,
+      conversationId,
       userMessageId: data.payload.user_message_id,
       clientRequestId: data.correlation_id,
       state: 'active',
@@ -584,12 +584,12 @@ function foldTask(
 
 export function foldCanonicalEvent(
   turns: TurnProjectionMap,
-  roomId: string,
+  conversationId: string,
   event: CanonicalFoldEvent,
 ): FoldResult {
   switch (event.kind) {
     case 'run_event':
-      return foldRunEvent(turns, roomId, event.data)
+      return foldRunEvent(turns, conversationId, event.data)
     case 'hitl_request':
       return foldHITLRequest(turns, event.data)
     case 'hitl_response':
@@ -602,7 +602,7 @@ export function foldCanonicalEvent(
   }
 }
 
-export function snapshotTurnToProjection(roomId: string, value: RoomSnapshotTurn): TurnProjection {
+export function snapshotTurnToProjection(conversationId: string, value: RoomSnapshotTurn): TurnProjection {
   const assistant = (item: RoomSnapshotTurn['current_assistant']): TurnProjection['currentAssistant'] => item ? ({
     messageId: item.message_id,
     internalTurnId: item.internal_turn_id,
@@ -616,7 +616,7 @@ export function snapshotTurnToProjection(roomId: string, value: RoomSnapshotTurn
   return {
     id: value.hybro_turn_id,
     runId: value.run_id,
-    roomId,
+    conversationId,
     userMessageId: value.user_message_id,
     clientRequestId: value.client_request_id,
     state: value.state,

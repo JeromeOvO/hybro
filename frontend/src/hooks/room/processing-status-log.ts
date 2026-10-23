@@ -18,17 +18,17 @@ export function createInitialProcessingStatusLog(timestamp: string): ProcessingS
 }
 
 export function ensureInitialProcessingStatusLog(
-  roomId: string,
+  conversationId: string,
   userEntity: MessageEntity | undefined,
   timestamp = new Date().toISOString(),
 ): void {
   if (!userEntity) return
 
-  appendProcessingStatusLog(roomId, userEntity, INITIAL_PROCESSING_STATUS_MESSAGE, timestamp)
+  appendProcessingStatusLog(conversationId, userEntity, INITIAL_PROCESSING_STATUS_MESSAGE, timestamp)
 }
 
 export function findProcessingStatusUserEntity(
-  roomId: string,
+  conversationId: string,
   options: {
     messageId?: string | null
     clientRequestId?: string | null
@@ -44,7 +44,7 @@ export function findProcessingStatusUserEntity(
     return store.orderedIds
       .map((id) => store.entities[id])
       .find((entity) =>
-        entity?.roomId === roomId &&
+        entity?.conversationId === conversationId &&
         entity.messageType === 'user' &&
         entity.clientRequestId === options.clientRequestId
       )
@@ -57,12 +57,12 @@ export function findProcessingStatusUserEntity(
 
   if (options.messageId) {
     const direct = store.entities[options.messageId]
-    if (direct?.roomId === roomId && direct.messageType === 'user') return direct
+    if (direct?.conversationId === conversationId && direct.messageType === 'user') return direct
   }
 
   if (options.relatedMessageId) {
     const related = store.entities[options.relatedMessageId]
-    if (related?.roomId === roomId && related.messageType === 'user') return related
+    if (related?.conversationId === conversationId && related.messageType === 'user') return related
   }
 
   if (!options.preferClientRequestId) {
@@ -76,7 +76,7 @@ export function findProcessingStatusUserEntity(
       .map((id) => store.entities[id])
       .filter((entity): entity is MessageEntity =>
         !!entity &&
-        entity.roomId === roomId &&
+        entity.conversationId === conversationId &&
         entity.messageType === 'user' &&
         new Date(entity.timestamp).getTime() <= beforeTime
       )
@@ -89,7 +89,7 @@ export function findProcessingStatusUserEntity(
       .map((id) => store.entities[id])
       .filter((entity): entity is MessageEntity =>
         !!entity &&
-        entity.roomId === roomId &&
+        entity.conversationId === conversationId &&
         entity.messageType === 'user' &&
         (entity.processingStatusLogs?.length ?? 0) > 0
       )
@@ -129,7 +129,7 @@ export function parseTurnPhaseFromDetails(
 }
 
 export function appendProcessingStatusLog(
-  roomId: string,
+  conversationId: string,
   userEntity: MessageEntity | undefined,
   message: unknown,
   timestamp = new Date().toISOString(),
@@ -153,7 +153,7 @@ export function appendProcessingStatusLog(
 
   useMessageStore.getState().upsertMessage({
     id: latestUserEntity.id,
-    roomId,
+    conversationId,
     messageType: 'user',
     content: latestUserEntity.content,
     senderName: latestUserEntity.senderName,
@@ -171,14 +171,14 @@ export function appendProcessingStatusLog(
 }
 
 export function clearProcessingStatusLogs(
-  roomId: string,
+  conversationId: string,
   userEntity: MessageEntity | undefined,
 ): void {
   if (!userEntity || (userEntity.processingStatusLogs?.length ?? 0) === 0) return
 
   useMessageStore.getState().upsertMessage({
     id: userEntity.id,
-    roomId,
+    conversationId,
     messageType: 'user',
     content: userEntity.content,
     senderName: userEntity.senderName,
@@ -188,13 +188,13 @@ export function clearProcessingStatusLogs(
 }
 
 export function clearCurrentProcessingStatusLogs(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
 ): void {
-  const userEntity = findProcessingStatusUserEntity(roomId, {
+  const userEntity = findProcessingStatusUserEntity(conversationId, {
     messageId: lifecycle.getMessageId(),
     clientRequestId: lifecycle.getPendingRunEventAck(),
     latestWithLogs: true,
   })
-  clearProcessingStatusLogs(roomId, userEntity)
+  clearProcessingStatusLogs(conversationId, userEntity)
 }

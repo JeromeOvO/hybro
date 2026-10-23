@@ -19,8 +19,8 @@ import { apiClient, apiGet, apiPost } from '../api-client'
 
 const ROOMS_URL = getApiUrl('rooms')
 
-function roomUrl(roomId: string, suffix = ''): string {
-  return `${ROOMS_URL}/${encodeURIComponent(roomId)}${suffix}`
+function roomUrl(conversationId: string, suffix = ''): string {
+  return `${ROOMS_URL}/${encodeURIComponent(conversationId)}${suffix}`
 }
 
 export type RoomHistoryStatus = 'idle' | 'queued' | 'processing' | 'awaiting_input'
@@ -49,11 +49,11 @@ export function listRoomHistory(
 }
 
 export function updateRoomHistoryItem(
-  roomId: string,
+  conversationId: string,
   update: { title?: string; is_pinned?: boolean },
   getToken?: () => Promise<string | null>,
 ): Promise<RoomHistoryItem> {
-  return apiClient<RoomHistoryItem>(roomUrl(roomId), {
+  return apiClient<RoomHistoryItem>(roomUrl(conversationId), {
     method: 'PATCH',
     body: update,
     getToken,
@@ -61,21 +61,21 @@ export function updateRoomHistoryItem(
 }
 
 export function reorderPinnedRooms(
-  roomIds: string[],
+  conversationIds: string[],
   getToken?: () => Promise<string | null>,
 ): Promise<{ success: boolean }> {
   return apiClient<{ success: boolean }>(`${ROOMS_URL}/pinned-order`, {
     method: 'PUT',
-    body: { conversation_ids: roomIds },
+    body: { conversation_ids: conversationIds },
     getToken,
   })
 }
 
 export function deleteRoomHistoryItem(
-  roomId: string,
+  conversationId: string,
   getToken?: () => Promise<string | null>,
 ): Promise<{ success: boolean }> {
-  return apiClient<{ success: boolean }>(roomUrl(roomId), {
+  return apiClient<{ success: boolean }>(roomUrl(conversationId), {
     method: 'DELETE',
     getToken,
   })
@@ -125,7 +125,7 @@ export interface RoomTimelinePagination {
   cursor?: string | null
 }
 
-export async function inquiryRoomMessagesByRoomId(
+export async function inquiryRoomMessagesByConversationId(
   conversation_id: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
@@ -145,7 +145,7 @@ export async function inquiryRoomMessagesByRoomId(
 
 
 export interface SendMessageParams {
-  roomId: string
+  conversationId: string
   userInput: string
   getToken?: () => Promise<string | null>
   userId?: string
@@ -169,7 +169,7 @@ type SendMessageRequestBody = SendMessagePayload & {
 
 export async function SendMessage(params: SendMessageParams): Promise<RoomCenterUserMessageResponse> {
   const {
-    roomId,
+    conversationId,
     userInput,
     getToken,
     userId,
@@ -185,7 +185,7 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
   } = params
 
   const message: Record<string, unknown> = {
-    conversation_id: roomId,
+    conversation_id: conversationId,
     message_id: "",
     message_type: "user",
     related_message_id: relatedMessageId || null,
@@ -222,7 +222,7 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
 
   try {
     const result = await apiPost<RoomCenterUserMessageResponse>(
-      roomUrl(roomId, '/messages'),
+      roomUrl(conversationId, '/messages'),
       requestData,
       getToken
     )

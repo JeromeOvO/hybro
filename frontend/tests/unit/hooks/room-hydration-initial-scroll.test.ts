@@ -1,13 +1,13 @@
 import { renderHook, waitFor, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
+import { inquiryRoomMessagesByConversationId } from '@/lib/api/room'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useRoomHydration } from '@/hooks/room/useRoomHydration'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
 vi.mock('@/lib/api/room', () => ({
-  inquiryRoomMessagesByRoomId: vi.fn(),
+  inquiryRoomMessagesByConversationId: vi.fn(),
 }))
 
 vi.mock('@/lib/api/hitl', () => ({
@@ -18,7 +18,7 @@ describe('useRoomHydration initial scroll signal', () => {
   beforeEach(() => {
     useMessageStore.getState().setRoom('room-1')
     useRoomUiStore.getState().resetAll()
-    vi.mocked(inquiryRoomMessagesByRoomId).mockReset()
+    vi.mocked(inquiryRoomMessagesByConversationId).mockReset()
     vi.mocked(fetchPendingHitlRequests).mockReset()
   })
 
@@ -27,7 +27,7 @@ describe('useRoomHydration initial scroll signal', () => {
   })
 
   it('marks initial hydration after DB sync without waiting for pending HITL fetch', async () => {
-    vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValue({
+    vi.mocked(inquiryRoomMessagesByConversationId).mockResolvedValue({
       success: true,
       message_list: [],
     })

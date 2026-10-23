@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
-const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+const flags = (conversationId = 'room-1') => useRoomUiStore.getState().getRoomFlags(conversationId)
 
 describe('RoomUiStore', () => {
   beforeEach(() => {

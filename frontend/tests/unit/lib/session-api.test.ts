@@ -35,7 +35,7 @@ describe('session api', () => {
     // 2500 events: the route returns at most 1000 per request.
     const total = 2500
     const afters: number[] = []
-    server.use(http.get(getApiUrl('sse/room/:roomId/events'), ({ request }) => {
+    server.use(http.get(getApiUrl('sse/room/:conversationId/events'), ({ request }) => {
       const url = new URL(request.url)
       const after = Number(url.searchParams.get('after'))
       const limit = Number(url.searchParams.get('limit'))

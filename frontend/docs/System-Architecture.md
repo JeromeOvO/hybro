@@ -338,7 +338,7 @@ src/hooks/room/
 
 `src/app/(portal)/room/[id]/page.tsx` is the room page. It is a client component that:
 
-- Reads `roomId` from the route.
+- Reads the `[id]` route param as `conversationId`.
 - Reads user/auth state from the local identity adapter.
 - Calls `useRoomWebhook`.
 - Manages local chat mode, quote state, and prefilled input handoff.

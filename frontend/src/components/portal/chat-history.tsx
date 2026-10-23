@@ -270,19 +270,19 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
   })
 
   const renameMutation = useOptimisticMutation(
-    ({ roomId, title }: { roomId: string; title: string }) => updateRoomHistoryItem(roomId, { title }),
+    ({ conversationId, title }: { conversationId: string; title: string }) => updateRoomHistoryItem(conversationId, { title }),
     (data, variables) => ({
-      items: data.items.map((item) => item.conversation_id === variables.roomId ? { ...item, title: variables.title } : item),
+      items: data.items.map((item) => item.conversation_id === variables.conversationId ? { ...item, title: variables.title } : item),
     }),
     'Could not rename the conversation',
   )
 
   const pinMutation = useOptimisticMutation(
-    ({ roomId, pinned }: { roomId: string; pinned: boolean }) => updateRoomHistoryItem(roomId, { is_pinned: pinned }),
+    ({ conversationId, pinned }: { conversationId: string; pinned: boolean }) => updateRoomHistoryItem(conversationId, { is_pinned: pinned }),
     (data, variables) => {
       const maxOrder = Math.max(0, ...data.items.filter((item) => item.is_pinned).map((item) => item.pin_order ?? 0))
       return {
-        items: data.items.map((item) => item.conversation_id === variables.roomId
+        items: data.items.map((item) => item.conversation_id === variables.conversationId
           ? { ...item, is_pinned: variables.pinned, pin_order: variables.pinned ? maxOrder + 1 : null }
           : item),
       }
@@ -291,15 +291,15 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
   )
 
   const deleteMutation = useOptimisticMutation(
-    (roomId: string) => deleteRoomHistoryItem(roomId),
-    (data, roomId) => ({ items: data.items.filter((item) => item.conversation_id !== roomId) }),
+    (conversationId: string) => deleteRoomHistoryItem(conversationId),
+    (data, conversationId) => ({ items: data.items.filter((item) => item.conversation_id !== conversationId) }),
     'Could not delete the conversation',
   )
 
   const reorderMutation = useOptimisticMutation(
-    (roomIds: string[]) => reorderPinnedRooms(roomIds),
-    (data, roomIds) => {
-      const order = new Map(roomIds.map((id, index) => [id, index + 1]))
+    (conversationIds: string[]) => reorderPinnedRooms(conversationIds),
+    (data, conversationIds) => {
+      const order = new Map(conversationIds.map((id, index) => [id, index + 1]))
       return {
         items: data.items.map((item) => order.has(item.conversation_id) ? { ...item, pin_order: order.get(item.conversation_id)! } : item),
       }
@@ -325,9 +325,9 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
       onStartRename={() => setEditingId(room.conversation_id)}
       onRename={(title) => {
         setEditingId(null)
-        if (title !== room.title) renameMutation.mutate({ roomId: room.conversation_id, title })
+        if (title !== room.title) renameMutation.mutate({ conversationId: room.conversation_id, title })
       }}
-      onTogglePin={() => pinMutation.mutate({ roomId: room.conversation_id, pinned: !room.is_pinned })}
+      onTogglePin={() => pinMutation.mutate({ conversationId: room.conversation_id, pinned: !room.is_pinned })}
       onDelete={() => setDeleteTarget(room)}
     />
   )
@@ -421,12 +421,12 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
               disabled={deleteMutation.isPending}
               onClick={() => {
                 if (!deleteTarget) return
-                const roomId = deleteTarget.conversation_id
+                const conversationId = deleteTarget.conversation_id
                 setDeleteTarget(null)
-                deleteMutation.mutate(roomId, {
+                deleteMutation.mutate(conversationId, {
                   onSuccess: () => {
                     toast.success('Conversation deleted')
-                    if (pathname === routes.room(roomId)) router.push(routes.chat)
+                    if (pathname === routes.room(conversationId)) router.push(routes.chat)
                   },
                 })
               }}

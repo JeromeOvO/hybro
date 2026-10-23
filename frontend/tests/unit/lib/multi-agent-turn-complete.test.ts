@@ -28,7 +28,7 @@ function makeAgent(overrides: Partial<AgentResultViewModel> = {}): AgentResultVi
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'u1',
     userContent: 'hello',
     userAttachments: [],

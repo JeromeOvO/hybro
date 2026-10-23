@@ -31,13 +31,13 @@ function makeLifecycle(): ProcessingLifecycle {
 describe('handleTaskUpdate terminal recovery', () => {
   beforeEach(() => {
     vi.mocked(scheduleTurnTerminalBackendTruthCheck).mockClear()
-    useMessageStore.setState({ entities: {}, orderedIds: [], roomId: 'room-1' })
+    useMessageStore.setState({ entities: {}, orderedIds: [], conversationId: 'room-1' })
   })
 
   it('schedules backend truth check when agent task fails and stamp is not inferable', async () => {
     await handleTaskUpdate(
       {
-        roomId: 'room-1',
+        conversationId: 'room-1',
         lifecycle: makeLifecycle(),
         getAgentName: async () => 'Agent',
         getAgentSource: () => undefined,
@@ -77,7 +77,7 @@ describe('handleTaskUpdate terminal recovery', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'user-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
@@ -86,7 +86,7 @@ describe('handleTaskUpdate terminal recovery', () => {
       },
       {
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'A',
         senderName: 'Agent A',
@@ -98,7 +98,7 @@ describe('handleTaskUpdate terminal recovery', () => {
       },
       {
         id: 'agent-2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'B',
         senderName: 'Agent B',
@@ -112,7 +112,7 @@ describe('handleTaskUpdate terminal recovery', () => {
 
     await handleTaskUpdate(
       {
-        roomId: 'room-1',
+        conversationId: 'room-1',
         lifecycle: makeLifecycle(),
         getAgentName: async () => 'Agent',
         getAgentSource: () => undefined,

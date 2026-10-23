@@ -27,7 +27,7 @@ export type TurnPhase =
 
 export interface TurnViewModel {
   id: string
-  roomId: string
+  conversationId: string
   userMessageId: string | null
   userContent: string
   userAttachments: AttachmentData[]

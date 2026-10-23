@@ -7,7 +7,7 @@ function entity(id: string, messageType: 'user' | 'agent'): MessageEntity {
     id,
     messageType,
     displayType: messageType === 'user' ? 'user-bubble' : 'agent-bubble',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     createdAt: Date.now(),
   } as MessageEntity
 }

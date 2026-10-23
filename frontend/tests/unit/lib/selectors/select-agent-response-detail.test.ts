@@ -23,12 +23,12 @@ describe('selectAgentResponseDetail', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({
         id: 'user-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         content: 'Research a2a agents',
       }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         agentId: 'researcher-1',
         senderName: 'Researcher Alex',
@@ -54,10 +54,10 @@ describe('selectAgentResponseDetail', () => {
 
   it('shows the published dispatch text instead of the generic task label', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.COMPLETED,
         taskStatusMessage: 'Requesting Insurer Agent',
@@ -81,13 +81,13 @@ describe('selectAgentResponseDetail', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({
         id: 'user-client',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         clientRequestId: 'req-1',
         content: 'Write a report',
       }),
       createAgentMessage({
         id: 'agent-client',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         clientRequestId: 'req-1',
         agentId: 'agent-1',
         senderName: 'Writer',
@@ -104,10 +104,10 @@ describe('selectAgentResponseDetail', () => {
 
   it('uses stream buffer text and streaming flag when provided', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.WORKING,
         content: 'final from db',
@@ -118,7 +118,7 @@ describe('selectAgentResponseDetail', () => {
       text: 'live tokens',
       artifacts: [],
       isComplete: false,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lastUpdatedAt: Date.now(),
     })
 
@@ -130,10 +130,10 @@ describe('selectAgentResponseDetail', () => {
   it('shows non-text entity artifacts while streaming text from buffer', () => {
     const entityArtifacts = [{ artifactId: 'file-1', parts: [{ kind: 'file' as const, file: { uri: 's3://x' } }] }]
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.WORKING,
         content: '',
@@ -145,7 +145,7 @@ describe('selectAgentResponseDetail', () => {
       text: 'streaming report body',
       artifacts: [],
       isComplete: false,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lastUpdatedAt: Date.now(),
     })
 
@@ -156,10 +156,10 @@ describe('selectAgentResponseDetail', () => {
 
   it('ignores live buffer when entity taskStatus is terminal (strict terminal guard)', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.COMPLETED,
         content: 'Hermes final answer',
@@ -170,7 +170,7 @@ describe('selectAgentResponseDetail', () => {
       text: 'Synthesis text that must not appear',
       artifacts: [],
       isComplete: false,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lastUpdatedAt: Date.now(),
     })
 
@@ -184,12 +184,12 @@ describe('selectAgentResponseDetail', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({
         id: 'user-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         content: 'Get a quote',
       }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         agentId: 'agent-1',
         senderName: 'Insurer Agent',
@@ -208,10 +208,10 @@ describe('selectAgentResponseDetail', () => {
 
   it('ignores live buffer when entity is canceled mid-stream', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.CANCELED,
         content: '',
@@ -222,7 +222,7 @@ describe('selectAgentResponseDetail', () => {
       text: 'partial stream',
       artifacts: [],
       isComplete: false,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lastUpdatedAt: Date.now(),
     })
 
@@ -233,10 +233,10 @@ describe('selectAgentResponseDetail', () => {
   it('shows entity artifacts when buffer is complete but not yet cleared', () => {
     const entityArtifacts = [{ artifactId: 'file-1', parts: [{ kind: 'file' as const, file: { uri: 's3://x' } }] }]
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
       createAgentMessage({
         id: 'agent-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         relatedMessageId: 'user-1',
         taskStatus: TASK_STATE.COMPLETED,
         content: 'done',
@@ -248,7 +248,7 @@ describe('selectAgentResponseDetail', () => {
       text: 'done',
       artifacts: [],
       isComplete: true,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lastUpdatedAt: Date.now(),
     })
 
@@ -258,8 +258,8 @@ describe('selectAgentResponseDetail', () => {
 
   it('returns null for non-agent or wrong-room messages', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
-      createAgentMessage({ id: 'agent-1', roomId: 'other-room' }),
+      createUserMessage({ id: 'user-1', conversationId: 'room-1' }),
+      createAgentMessage({ id: 'agent-1', conversationId: 'other-room' }),
     ])
 
     expect(selectAgentResponseDetail('room-1', 'user-1', entities, orderedIds)).toBeNull()

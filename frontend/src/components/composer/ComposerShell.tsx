@@ -35,7 +35,7 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
 }
 
 export interface ComposerShellAdapter {
-  roomId: string
+  conversationId: string
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
@@ -99,10 +99,10 @@ function samePendingHitl(left: PendingHitl, right: PendingHitl | undefined): boo
   )
 }
 
-function useComposerState(roomId: string): ComposerState {
+function useComposerState(conversationId: string): ComposerState {
   const prev = React.useRef<ComposerState>({ mode: 'normal', isProcessing: false, pendingHitls: [] })
   return useMessageStore(s => {
-    const next = selectComposerState(roomId, s.entities, s.orderedIds)
+    const next = selectComposerState(conversationId, s.entities, s.orderedIds)
     if (
       prev.current.mode === next.mode &&
       prev.current.isProcessing === next.isProcessing &&
@@ -117,8 +117,8 @@ function useComposerState(roomId: string): ComposerState {
 }
 
 export function ComposerShell({ adapter }: ComposerShellProps) {
-  const composerState = useComposerState(adapter.roomId)
-  const canonical = useCanonicalComposerAuthority(adapter.roomId)
+  const composerState = useComposerState(adapter.conversationId)
+  const canonical = useCanonicalComposerAuthority(adapter.conversationId)
   const isHitlMode = composerState.mode === 'hitl_responding'
     || (canonical.awaitingInput && composerState.pendingHitls.length > 0)
   // Mixed rooms retain independent authorities: a completed canonical Turn

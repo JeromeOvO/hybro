@@ -16,7 +16,7 @@ export function createMessage(overrides: Partial<IncomingMessage> = {}): Incomin
   const id = overrides.id || `msg-${messageCounter}`
   return {
     id,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: `Test message ${messageCounter}`,
     senderName: 'Test Agent',

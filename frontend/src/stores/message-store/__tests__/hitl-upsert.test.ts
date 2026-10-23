@@ -5,7 +5,7 @@ import type { MessageEntity, IncomingMessage } from '@/stores/message-store/type
 function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: 'Hello',
     senderName: 'Agent',
@@ -24,7 +24,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: 'Hello',
     senderName: 'Agent',

@@ -67,7 +67,7 @@ export interface TraceNode {
 }
 
 interface TraceStoreState {
-  roomId: string | null
+  conversationId: string | null
   /** node id → node */
   nodes: Record<string, TraceNode>
   /** run id → ordered node ids (append order within the run) */
@@ -86,7 +86,7 @@ interface TraceStoreState {
   setRunStatus: (runId: string, status: string) => void
   /** Snapshot replace (plan §4): rebuild run trees + run statuses from a
    *  snapshot's trace/runs sections, then apply ordered deltas on top. */
-  hydrateFromSnapshot: (roomId: string, snapshot: {
+  hydrateFromSnapshot: (conversationId: string, snapshot: {
     trace: Record<string, {
       run_id: string
       client_request_id: string | null
@@ -96,12 +96,12 @@ interface TraceStoreState {
     }>
     runs: Array<{ run_id: string; status: string; client_request_id?: string | null }>
   }) => void
-  setRoom: (roomId: string) => void
+  setRoom: (conversationId: string) => void
   clearRoom: () => void
 }
 
 const INITIAL_STATE = {
-  roomId: null as string | null,
+  conversationId: null as string | null,
   nodes: {} as Record<string, TraceNode>,
   runOrder: {} as Record<string, string[]>,
   runStatuses: {} as Record<string, string>,
@@ -336,7 +336,7 @@ export const useTraceStore = create<TraceStoreState>()(
       }))
     },
 
-    hydrateFromSnapshot: (roomId, snapshot) => {
+    hydrateFromSnapshot: (conversationId, snapshot) => {
       const nodes: Record<string, TraceNode> = {}
       const runOrder: Record<string, string[]> = {}
       const runClientRequestIds = new Map(
@@ -363,9 +363,9 @@ export const useTraceStore = create<TraceStoreState>()(
         // A stream callback from the room being left may finish after the
         // new room reset. Never let that stale snapshot replace the current
         // room's trace projection.
-        if (state.roomId && state.roomId !== roomId) return state
+        if (state.conversationId && state.conversationId !== conversationId) return state
         return {
-          roomId,
+          conversationId,
           nodes,
           runOrder,
           runStatuses,
@@ -374,7 +374,7 @@ export const useTraceStore = create<TraceStoreState>()(
       })
     },
 
-    setRoom: (roomId) => set({ ...INITIAL_STATE, roomId }),
+    setRoom: (conversationId) => set({ ...INITIAL_STATE, conversationId }),
 
     clearRoom: () => set({ ...INITIAL_STATE }),
   }))

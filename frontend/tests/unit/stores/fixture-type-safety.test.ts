@@ -24,7 +24,7 @@ beforeEach(() => {
 
 const INCOMING_MESSAGE_REQUIRED_KEYS: (keyof IncomingMessage)[] = [
   'id',
-  'roomId',
+  'conversationId',
   'messageType',
   'content',
   'senderName',
@@ -46,9 +46,9 @@ describe('createMessage', () => {
   })
 
   it('applies overrides', () => {
-    const msg = createMessage({ content: 'custom', roomId: 'room-42' })
+    const msg = createMessage({ content: 'custom', conversationId: 'room-42' })
     expect(msg.content).toBe('custom')
-    expect(msg.roomId).toBe('room-42')
+    expect(msg.conversationId).toBe('room-42')
   })
 })
 

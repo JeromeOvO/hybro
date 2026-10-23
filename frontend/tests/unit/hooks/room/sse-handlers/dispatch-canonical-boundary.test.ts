@@ -9,7 +9,7 @@ const timestamp = '2030-01-01T00:00:00.000Z'
 
 function dispatcher() {
   return createSSEDispatcher({
-    roomId: 'room-1',
+    conversationId: 'room-1',
     lifecycle: createProcessingLifecycle(() => {}),
     getAgentName: vi.fn().mockResolvedValue('Weather Agent'),
     getAgentSource: vi.fn(),

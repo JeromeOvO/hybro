@@ -53,7 +53,7 @@ export type DisplayType = 'user-bubble' | 'agent-bubble'
 export interface MessageEntity {
   // ── Identity ──────────────────────────────────────────────
   id: string
-  roomId: string
+  conversationId: string
 
   // ── Core content ──────────────────────────────────────────
   messageType: 'user' | 'agent'
@@ -144,7 +144,7 @@ export interface MessageEntity {
  */
 export interface IncomingMessage {
   id: string
-  roomId: string
+  conversationId: string
   messageType: 'user' | 'agent'
   content: string
   senderName: string

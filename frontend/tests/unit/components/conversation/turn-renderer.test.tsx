@@ -18,7 +18,7 @@ afterEach(() => {
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'user-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'user-1',
     userContent: 'how are you?',
     userAttachments: [],
@@ -48,7 +48,7 @@ describe('TurnRenderer', () => {
   it('keeps accepted Tool activity live while the parent Turn awaits input', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'weather?',
       senderName: 'Test',
@@ -79,7 +79,7 @@ describe('TurnRenderer', () => {
   it('renders agent cards even when the detail drawer callback is absent', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'weather?',
       senderName: 'Test',
@@ -113,7 +113,7 @@ describe('TurnRenderer', () => {
   it('renders separate cards for repeated calls to the same agent', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'weather twice',
       senderName: 'Test',
@@ -145,7 +145,7 @@ describe('TurnRenderer', () => {
 
   it('uses terminal Turn authority for accepted-only history when run status is absent', () => {
     useMessageStore.getState().upsertMessage({
-      id: 'user-1', roomId: 'room-1', messageType: 'user', content: 'weather?',
+      id: 'user-1', conversationId: 'room-1', messageType: 'user', content: 'weather?',
       senderName: 'Test', timestamp: '2026-06-04T01:00:00.000Z', clientRequestId: 'cr-1',
     }, 'db')
     useTraceStore.getState().applyRunEvent({
@@ -167,7 +167,7 @@ describe('TurnRenderer', () => {
   it('shows Tool activity without Model response or Progress metadata', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'how are you?',
       senderName: 'Test',

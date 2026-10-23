@@ -38,7 +38,7 @@ function buildTurnSnapshot(
 ): TurnViewModel {
   return {
     id: '',
-    roomId: '',
+    conversationId: '',
     userMessageId: context.userMessageId ?? null,
     userContent: '',
     userAttachments: [],

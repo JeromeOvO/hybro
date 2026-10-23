@@ -43,7 +43,7 @@ function createLifecycle(): ProcessingLifecycle {
     resetPlaceholder: vi.fn(),
     resetProcessingResolved: vi.fn(),
     setPendingRunEventAck: vi.fn(),
-    placeholderId: vi.fn((roomId: string) => `placeholder:${roomId}`),
+    placeholderId: vi.fn((conversationId: string) => `placeholder:${conversationId}`),
     startProcessing: vi.fn(),
     setSendGuard: vi.fn(),
     stopProcessing: vi.fn(),

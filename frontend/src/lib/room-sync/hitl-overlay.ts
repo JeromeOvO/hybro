@@ -10,7 +10,7 @@ import {
 import type { HydrateRoomAgentResolver } from './types'
 
 export async function overlayPendingHitlRequests(
-  roomId: string,
+  conversationId: string,
   requests: HitlPendingRequest[],
   deps: HydrateRoomAgentResolver & {
     hitlRequestIndex: MutableRefObject<Map<string, string>>
@@ -31,7 +31,7 @@ export async function overlayPendingHitlRequests(
   for (const { req, name } of resolved) {
     const requestKey = hitlRequestKey(req.interaction_id, req.request_id)
     const incoming = buildPendingHitlIncomingMessage({
-      roomId,
+      conversationId,
       messageId: req.message_id,
       requestId: req.request_id,
       source: req.source,
@@ -106,7 +106,7 @@ export async function overlayPendingHitlRequests(
     ) {
       store.upsertMessage({
         id: legacyProjection.id,
-        roomId,
+        conversationId,
         messageType: 'agent',
         content: legacyProjection.content,
         senderName: legacyProjection.senderName,
@@ -126,16 +126,16 @@ export async function overlayPendingHitlRequests(
  * when they are not in the pending HITL set.
  */
 export function markResolvedHitlFromHydrationBatch(
-  targetRoomId: string,
+  targetConversationId: string,
   hydratedIds: ReadonlySet<string>,
   pendingRequestIds: ReadonlySet<string>,
 ): void {
   const store = useMessageStore.getState()
-  if (store.roomId !== targetRoomId) return
+  if (store.conversationId !== targetConversationId) return
 
   for (const entity of Object.values(store.entities)) {
     if (
-      entity.roomId === targetRoomId &&
+      entity.conversationId === targetConversationId &&
       entity.taskStatus === 'input-required' &&
       hydratedIds.has(entity.id) &&
       (!entity.hitlRequestId || !pendingRequestIds.has(hitlRequestKey(
@@ -145,7 +145,7 @@ export function markResolvedHitlFromHydrationBatch(
     ) {
       store.upsertMessage({
         id: entity.id,
-        roomId: targetRoomId,
+        conversationId: targetConversationId,
         messageType: 'agent',
         content: entity.content,
         senderName: entity.senderName,
@@ -165,14 +165,14 @@ export function markResolvedHitlFromHydrationBatch(
  * markResolvedHitlFromHydrationBatch.
  */
 export function clearStaleHitlNotInPending(
-  targetRoomId: string,
+  targetConversationId: string,
   pendingRequestIds: ReadonlySet<string>,
 ): void {
   const store = useMessageStore.getState()
-  if (store.roomId !== targetRoomId) return
+  if (store.conversationId !== targetConversationId) return
 
   for (const entity of Object.values(store.entities)) {
-    if (entity.roomId !== targetRoomId || !entity.hitlRequestId) continue
+    if (entity.conversationId !== targetConversationId || !entity.hitlRequestId) continue
     if (pendingRequestIds.has(hitlRequestKey(
       entity.hitlInteractionId,
       entity.hitlRequestId,
@@ -188,7 +188,7 @@ export function clearStaleHitlNotInPending(
 
     store.upsertMessage({
       id: entity.id,
-      roomId: targetRoomId,
+      conversationId: targetConversationId,
       messageType: 'agent',
       content: entity.content,
       senderName: entity.senderName,
@@ -201,7 +201,7 @@ export function clearStaleHitlNotInPending(
 }
 
 export interface OverlayHitlOptions extends HydrateRoomAgentResolver {
-  roomId: string
+  conversationId: string
   getToken?: () => Promise<string | null>
   hitlRequestIndex: MutableRefObject<Map<string, string>>
   /** When set, run markResolvedHitlFromHydrationBatch after overlay (initial load). */
@@ -211,16 +211,16 @@ export interface OverlayHitlOptions extends HydrateRoomAgentResolver {
 export async function overlayHitlForRoom(
   options: OverlayHitlOptions,
 ): Promise<Set<string>> {
-  const { roomId, getToken, hitlRequestIndex, hydratedIdsForResolve, getAgentName, getAgentSource } =
+  const { conversationId, getToken, hitlRequestIndex, hydratedIdsForResolve, getAgentName, getAgentSource } =
     options
 
-  const hitlRes = await fetchPendingHitlRequests(roomId, getToken)
+  const hitlRes = await fetchPendingHitlRequests(conversationId, getToken)
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return new Set()
+  if (store.conversationId !== conversationId) return new Set()
 
   let pendingRequestIds = new Set<string>()
   if (hitlRes.requests?.length) {
-    pendingRequestIds = await overlayPendingHitlRequests(roomId, hitlRes.requests, {
+    pendingRequestIds = await overlayPendingHitlRequests(conversationId, hitlRes.requests, {
       getAgentName,
       getAgentSource,
       hitlRequestIndex,
@@ -234,9 +234,9 @@ export async function overlayHitlForRoom(
   }
 
   if (hydratedIdsForResolve) {
-    markResolvedHitlFromHydrationBatch(roomId, hydratedIdsForResolve, pendingRequestIds)
+    markResolvedHitlFromHydrationBatch(conversationId, hydratedIdsForResolve, pendingRequestIds)
   } else {
-    clearStaleHitlNotInPending(roomId, pendingRequestIds)
+    clearStaleHitlNotInPending(conversationId, pendingRequestIds)
   }
 
   return pendingRequestIds
