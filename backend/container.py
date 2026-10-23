@@ -1158,7 +1158,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             conversation_runtime.bind_store(room_runtime_store)
             conversation_runtime.bind_facade(_room_facade)
-            conversation_runtime.bind_room_files(file_storage)
             conversation_runtime.bind_user_message_commit(
                 UserMessageCommitService(
                     writer=SimpleNamespace(
@@ -1270,10 +1269,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.start()
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
-            conversation_runtime.bind_context_memory(
-                context_assembly=context_memory_facade,
-                room_memory_cleanup=context_memory_facade,
-            )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
 

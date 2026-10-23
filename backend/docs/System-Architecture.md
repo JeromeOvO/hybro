@@ -823,7 +823,6 @@ consumers and implementations sit in the owner's package.
 | `AgentMatcher` | `common.protocols.agent_protocols` | `agent.facade.AgentFacade` | crosses to `agent`; `api_gateway` |
 | `AgentNetworkTargetResolver` | `common.protocols.agent_protocols` | `agent.network.AgentNetworkService` | crosses to `agent`; `execution`; `session` |
 | `AgentRegistry` | `common.protocols.agent_protocols` | `agent.facade.AgentFacade` | crosses to `agent`; `api_gateway`; composition root; `conversation`; `execution` |
-| `ContextAssemblyPort` | `common.protocols.context_memory_protocols` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory`; `conversation` |
 | `RoomMemoryCleanupPort` | `common.protocols.context_memory_protocols` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory`; `conversation` |
 | `LeaderElector` | `common.protocols.dal_protocols` | `dal.redis.lock.LeaderElectorImpl` | crosses to `agent`; composition root; `dal` |
 | `MongoChangeStream` | `common.protocols.dal_protocols` | the Motor change stream returned by `dal.mongo.client.MongoCollectionAdapter.watch` (third-party) | crosses to `dal` |
@@ -2101,11 +2100,11 @@ calling the LLM. Merge semantics are incremental:
 Mongo keyword search ranks at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight
 records using explicit keyword/relevance/temporal-decay scores, then hydrates
 content in bounded batches. Execution consumes the search DTOs without parsing
-legacy dictionaries; Room receives only context assembly and memory cleanup
-capabilities.
+legacy dictionaries; Conversation receives only the memory-cleanup capability,
+used by room deletion.
 
-The facade satisfies caller-specific leaf protocols: `ContextAssemblyPort` and
-`RoomMemoryCleanupPort` from `common.protocols`, `ProjectionPort` declared beside
+The facade satisfies caller-specific leaf protocols: `RoomMemoryCleanupPort` from
+`common.protocols`, `ProjectionPort` declared beside
 its consumer in `context_memory.events`, and `CompactionPort` declared beside its
 consumer in `jobs.compaction_sweep`. `container.py` injects only the narrow port each Room,
 Execution, event, or job consumer needs, even though one facade implements them.

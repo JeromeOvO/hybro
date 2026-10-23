@@ -13,7 +13,6 @@ from common.protocols.agent_protocols import (
     AgentRegistry,
 )
 from common.protocols.context_memory_protocols import (
-    ContextAssemblyPort,
     RoomMemoryCleanupPort,
 )
 from common.protocols.dal_protocols import (
@@ -77,7 +76,6 @@ __all__ = [
     "AgentRegistry",
     "AgentRepository",
     "AttachmentMetadataReader",
-    "ContextAssemblyPort",
     "ContentStorageRepository",
     "DeliveryEventPublisher",
     "EventPublisher",

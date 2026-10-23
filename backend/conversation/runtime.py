@@ -1,7 +1,3 @@
-from common.protocols.context_memory_protocols import (
-    ContextAssemblyPort,
-    RoomMemoryCleanupPort,
-)
 from common.utils.logger import get_logger
 from conversation.message_reads import RoomMessageReader
 from conversation.message_sending import RoomMessageSender
@@ -36,44 +32,20 @@ class ConversationRuntime:
         if room_store is None:
             room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
-        self._room_files = None
         self._facade = None
         self._bound = False
-        self._context_assembly: ContextAssemblyPort | None = None
-        self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
         self._attachment_metadata_reader = None
         self._capability_issue_reader = None
         self._timeline_projector: RoomTimelineProjector | None = None
         self._user_message_commit: UserMessageCommitService | None = None
 
-    def bind_room_files(self, room_files) -> None:
-        self._room_files = room_files
-
     def bind_store(self, store) -> None:
         """Inject the room runtime persistence store explicitly at startup."""
         self._store = store
 
-    @property
-    def room_files(self):
-        files = getattr(self, "_room_files", None)
-        if files is None:
-            raise RuntimeError(
-                "ConversationRuntime.bind_room_files() not called - startup incomplete"
-            )
-        return files
-
     def bind_facade(self, facade) -> None:
         self._facade = facade
         self._bound = True
-
-    def bind_context_memory(
-        self,
-        *,
-        context_assembly: ContextAssemblyPort | None = None,
-        room_memory_cleanup: RoomMemoryCleanupPort | None = None,
-    ) -> None:
-        self._context_assembly = context_assembly
-        self._room_memory_cleanup = room_memory_cleanup
 
     def bind_attachment_metadata_reader(self, reader) -> None:
         self._attachment_metadata_reader = reader

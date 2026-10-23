@@ -9,7 +9,10 @@ import pytest
 
 ZERO_CONSUMER_PROTOCOLS = {
     "common.protocols.a2a_protocols": ("AgentTransport",),
-    "common.protocols.context_memory_protocols": ("MemorySearchPort",),
+    "common.protocols.context_memory_protocols": (
+        "MemorySearchPort",
+        "ContextAssemblyPort",
+    ),
     "common.protocols.dal_protocols": ("DistributedLock",),
     "common.protocols.llm_protocols": (
         "EmbeddingServiceProtocol",

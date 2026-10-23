@@ -658,10 +658,6 @@ def test_protocol_methods_match_design_doc():
             "get_room_owner",
             "verify_room_agent_membership",
         },
-        protocols.ContextAssemblyPort: {
-            "assemble_supervisor_context_from_memory",
-            "assemble_agent_execution_context_from_memory",
-        },
         protocols.RoomMemoryCleanupPort: {"delete_room_memory"},
         protocols.ExecutionEngine: {
             "execute",

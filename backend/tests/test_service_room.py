@@ -10,7 +10,6 @@ Tests cover:
 
 import ast
 import asyncio
-import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -135,26 +134,13 @@ def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
     }
 
     assert dead_helpers.isdisjoint(ConversationRuntime.__dict__)
-    assert (
-        "memory_search"
-        not in inspect.signature(ConversationRuntime.bind_context_memory).parameters
-    )
-
-    container_tree = ast.parse(
-        (Path(__file__).resolve().parents[1] / "container.py").read_text()
-    )
-    context_memory_binding = next(
-        node
-        for node in ast.walk(container_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "conversation_runtime"
-        and node.func.attr == "bind_context_memory"
-    )
-    assert "memory_search" not in {
-        keyword.arg for keyword in context_memory_binding.keywords
-    }
+    for name in ("bind_room_files", "room_files", "bind_context_memory"):
+        assert not hasattr(ConversationRuntime, name), name
+    container_source = (
+        Path(__file__).resolve().parents[1] / "container.py"
+    ).read_text()
+    assert "conversation_runtime.bind_context_memory" not in container_source
+    assert "conversation_runtime.bind_room_files" not in container_source
 
 
 def test_room_services_bind_store_sets_runtime_store():
@@ -309,7 +295,6 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
     room_files.commit_references = AsyncMock()
     room_files.release_references = AsyncMock()
     svc.bind_facade(facade)
-    svc.bind_room_files(room_files)
     commit_service = _bind_user_message_commit(
         svc,
         facade=facade,
@@ -683,7 +668,6 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
         side_effect=RuntimeError("release unavailable")
     )
     room_files.commit_references = AsyncMock()
-    svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
     _bind_user_message_commit(
         svc,
@@ -772,7 +756,6 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
     room_files.commit_references = AsyncMock()
     room_files.release_references = AsyncMock()
     svc.bind_facade(facade)
-    svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
     commit_service = _bind_user_message_commit(
         svc,

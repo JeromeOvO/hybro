@@ -68,9 +68,7 @@ def test_runtime_is_a_thin_port_over_its_collaborators():
     assert public == {
         "bind_attachment_metadata_reader",
         "bind_capability_issue_reader",
-        "bind_context_memory",
         "bind_facade",
-        "bind_room_files",
         "bind_store",
         "bind_timeline_projector",
         "bind_user_message_commit",

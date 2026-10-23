@@ -5,12 +5,10 @@ import sys
 import tomllib
 from datetime import UTC
 from pathlib import Path
-from typing import get_type_hints
 
 import pytest
 
 from common.protocols import (
-    ContextAssemblyPort,
     MemoryRepository,
     RoomMemoryCleanupPort,
 )
@@ -170,42 +168,12 @@ def _facade():
     )
 
 
-def test_context_assembly_port_and_facade_parameter_types_match():
-    from context_memory import ContextMemoryFacade
-
-    protocol_hints = get_type_hints(
-        ContextAssemblyPort.assemble_supervisor_context_from_memory
-    )
-    facade_hints = get_type_hints(
-        ContextMemoryFacade.assemble_supervisor_context_from_memory
-    )
-
-    for parameter in (
-        "room_memory_doc",
-        "current_task",
-        "agent_registry",
-        "max_turns",
-        "memory_search_results",
-        "return",
-    ):
-        assert facade_hints[parameter] == protocol_hints[parameter]
-
-    protocol_hints = get_type_hints(
-        ContextAssemblyPort.assemble_agent_execution_context_from_memory
-    )
-    facade_hints = get_type_hints(
-        ContextMemoryFacade.assemble_agent_execution_context_from_memory
-    )
-    assert facade_hints == protocol_hints
-
-
 def test_context_memory_port_conformance():
     from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
 
     facade = _facade()
 
-    assert isinstance(facade, ContextAssemblyPort)
     assert isinstance(facade, ProjectionPort)
     assert isinstance(facade, CompactionPort)
     assert isinstance(facade, RoomMemoryCleanupPort)

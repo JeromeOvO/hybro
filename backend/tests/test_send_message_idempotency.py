@@ -179,7 +179,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         )
     )
     room_files = _RoomFiles()
-    room_services.bind_room_files(room_files)
     room_services.bind_attachment_metadata_reader(
         SimpleNamespace(
             get_for_room_file=AsyncMock(
