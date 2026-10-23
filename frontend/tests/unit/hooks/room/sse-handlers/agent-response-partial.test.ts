@@ -28,7 +28,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-1',
@@ -44,7 +44,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-1',
@@ -74,7 +74,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'hermes-1',
@@ -90,7 +90,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'codex-1',
@@ -115,7 +115,7 @@ describe('handleAgentResponsePartial', () => {
       artifactCtx,
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-artifact',
@@ -137,7 +137,7 @@ describe('handleAgentResponsePartial', () => {
       artifactCtx,
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-artifact',
@@ -162,7 +162,7 @@ describe('handleAgentResponsePartial', () => {
       partialCtx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-partial',
@@ -178,7 +178,7 @@ describe('handleAgentResponsePartial', () => {
       partialCtx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-partial',

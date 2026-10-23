@@ -66,7 +66,7 @@ class BoundedResourceMaterializer:
         self,
         manifest: FrozenCallResourceManifest,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         allowed_input_modes: list[str],
         deadline_at: datetime,
@@ -77,7 +77,7 @@ class BoundedResourceMaterializer:
             raise ResourceSelectionError("outbound resource bytes exceed limit")
         parts: list[MaterializedResourcePart] = []
         for ref in manifest.refs:
-            if ref.room_id != room_id or ref.room_epoch != room_epoch:
+            if ref.conversation_id != conversation_id or ref.room_epoch != room_epoch:
                 raise ResourceSelectionError("resource Room ownership changed")
             if datetime.now(UTC) >= deadline_at:
                 raise TimeoutError("resource materialization deadline exceeded")
@@ -120,7 +120,7 @@ class BoundedResourceMaterializer:
                             "owned room file refs require room ownership verification"
                         )
                     await self.verify_room_file_ownership(
-                        getattr(call, "room_id", ""), match.group(1)
+                        getattr(call, "conversation_id", ""), match.group(1)
                     )
                     durable.append(artifact_ref)
                     continue
@@ -250,7 +250,7 @@ def freeze_call_manifest(
     arguments: dict[str, object],
     run_manifest: RunResourceManifestSnapshot | None,
     binding: AgentToolBindingRecord,
-    source_room_id: str,
+    source_conversation_id: str,
     source_room_epoch: int,
     root_context_source_message_id: str | None = None,
 ) -> FrozenCallResourceManifest:
@@ -307,7 +307,7 @@ def freeze_call_manifest(
             FrozenCallResourceRef(
                 ref_id=ref_id,
                 kind=requested_kind,
-                room_id=source_room_id,
+                conversation_id=source_conversation_id,
                 room_epoch=source_room_epoch,
                 source_message_id=prepared.source_message_id,
                 mime_type=prepared.mime_type,
@@ -357,7 +357,7 @@ def _frozen_ref_digest_payload(ref: FrozenCallResourceRef) -> dict[str, object]:
     return {
         "ref_id": ref.ref_id,
         "kind": ref.kind,
-        "room_id": ref.room_id,
+        "room_id": ref.conversation_id,
         "room_epoch": ref.room_epoch,
         "source_message_id": ref.source_message_id,
         "source_agent_id": ref.source_agent_id,

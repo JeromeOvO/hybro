@@ -85,7 +85,7 @@ export function createEphemeralMessage(overrides: Partial<IncomingMessage> = {})
 }
 
 export function createRoom(overrides: Partial<{
-  room_id: string
+  conversation_id: string
   room_name: string
   room_owner_id: string
   room_owner_name: string
@@ -94,7 +94,7 @@ export function createRoom(overrides: Partial<{
 }> = {}) {
   roomCounter++
   return {
-    room_id: `room-${roomCounter}`,
+    conversation_id: `room-${roomCounter}`,
     room_name: `Test Room ${roomCounter}`,
     room_owner_id: 'test-user',
     room_owner_name: 'Test User',
@@ -139,7 +139,7 @@ export function createSSEMessage(
 ): SSEMessage {
   return {
     type,
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     timestamp: new Date().toISOString(),
     data,
   } as SSEMessage

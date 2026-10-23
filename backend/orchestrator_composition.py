@@ -671,7 +671,7 @@ def create_orchestrator_runtime(  # noqa: C901
                         sequence=current.state_version,
                         timestamp=datetime.now(UTC),
                         payload=payload,
-                        room_id=current.room_id,
+                        conversation_id=current.conversation_id,
                         user_message_id=current.request.user_message_id,
                         client_request_id=current.client_request_id,
                     )

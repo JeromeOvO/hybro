@@ -119,6 +119,6 @@ test.describe('Sessions', () => {
     // The chat history excludes the session container.
     const record = await (await request.get(`${BACKEND_URL}/sessions/${sessionId}/record`)).json()
     const history = await (await request.get(`${BACKEND_URL}/rooms`)).json()
-    expect((history.items as { room_id: string }[]).map(item => item.room_id)).not.toContain(record.conversation_id)
+    expect((history.items as { conversation_id: string }[]).map(item => item.conversation_id)).not.toContain(record.conversation_id)
   })
 })

@@ -38,7 +38,7 @@ describe('useRoomHydration initial scroll signal', () => {
       'user-1',
       'Test User',
       undefined,
-      { room_id: 'room-1' },
+      { conversation_id: 'room-1' },
       { current: new Map() },
       async () => 'Agent',
       () => undefined,

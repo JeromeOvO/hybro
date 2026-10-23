@@ -37,7 +37,7 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
         }
     )
 
-    assert info.room_id == "r1"
+    assert info.conversation_id == "r1"
     assert info.owner_id == "u1"
     assert info.owner_name == "Owner"
     assert info.created_at == created
@@ -51,7 +51,7 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
     now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = create_room_doc(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="u1",
         owner_name="Owner",
         room_name="Room",
@@ -133,10 +133,10 @@ def test_user_message_doc_from_input_preserves_metadata():
     now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = user_message_doc_from_input(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         message=UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             message_text="hello",
             sender_id="u1",
             sender_name="User",

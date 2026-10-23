@@ -199,7 +199,7 @@ async def test_cancel_request_terminalizes_exact_aggregate_inventory():
     rows = _persisted_rows()
     service, persistence, lifecycle = _cancellation_service(aggregate, rows)
 
-    await service.cancel_request("request-1", room_id="room-1")
+    await service.cancel_request("request-1", conversation_id="room-1")
 
     lifecycle.terminalize_interaction.assert_awaited_once()
     assert persistence.cas_update_hitl_request_strict.await_count == 2
@@ -217,7 +217,7 @@ async def test_cancel_request_fingerprint_corruption_fails_before_writes_or_effe
     service, persistence, lifecycle = _cancellation_service(aggregate, rows)
 
     with pytest.raises(HITLRoutingFailedError, match="fingerprint"):
-        await service.cancel_request("request-1", room_id="room-1")
+        await service.cancel_request("request-1", conversation_id="room-1")
 
     lifecycle.terminalize_interaction.assert_not_awaited()
     persistence.cas_update_hitl_request_strict.assert_not_awaited()
@@ -235,7 +235,7 @@ async def test_cancel_request_records_terminal_state_before_retryable_effect_fai
     )
 
     with pytest.raises(RuntimeError, match="side effects remain pending"):
-        await service.cancel_request("request-1", room_id="room-1")
+        await service.cancel_request("request-1", conversation_id="room-1")
 
     assert persistence.cas_update_hitl_request_strict.await_count == 2
     assert persistence.update_hitl_request.await_count == 2
@@ -254,7 +254,7 @@ async def test_request_interaction_validates_complete_inventory_before_first_wri
 
     with pytest.raises(ValueError, match="question 1"):
         await service.request_interaction(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="message-1",
             interaction_id="interaction-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -283,7 +283,7 @@ async def test_supervisor_route_run_mismatch_fails_before_first_write():
 
     with pytest.raises(ValueError, match="orchestration_run_id"):
         await service.request_interaction(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="message-1",
             interaction_id="interaction-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -365,7 +365,7 @@ async def test_materialization_retry_resumes_inventory_to_open_once(crash_on_cre
         orchestration_run_id="run-1",
     )
     kwargs = dict(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,

@@ -40,7 +40,7 @@ class PublicRunEvent:
     event_id: str
     run_id: str
     seq: int
-    room_id: str
+    conversation_id: str
     user_message_id: str | None
     client_request_id: str | None
     payload: dict[str, Any]
@@ -157,7 +157,7 @@ class PublicProjectionTranslator:
             event_id=f"public:{event.run_id}:{kind}:{semantic}",
             run_id=event.run_id,
             seq=event.sequence,
-            room_id=event.room_id or "",
+            conversation_id=event.conversation_id or "",
             user_message_id=event.user_message_id or event.causation_id,
             client_request_id=event.client_request_id,
             payload=payload,

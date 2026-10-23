@@ -11,10 +11,10 @@ from ._orchestrator_helpers import FixedClock, FixedIDs, session_config, user_me
 
 
 async def test_room_history_is_typed_and_excludes_current_and_subagent_turns():
-    async def read_memory(room_id: str):
-        assert room_id == "room-1"
+    async def read_memory(conversation_id: str):
+        assert conversation_id == "room-1"
         return {
-            "room_id": room_id,
+            "room_id": conversation_id,
             "memory_id": "memory-1",
             "conversation_history": [
                 {

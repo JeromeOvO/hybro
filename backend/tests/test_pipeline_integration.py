@@ -120,7 +120,7 @@ async def test_room_team_bypasses_matcher():
 
     # Create room with agents
     room = Room(
-        room_id="room123",
+        conversation_id="room123",
         room_name="Test Room",
         room_owner_id="user123",
         room_owner_name="Test User",
@@ -162,7 +162,7 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         _make_agent("agent2", "Agent Two", "Handles analysis"),
     ]
     room = Room(
-        room_id="room123",
+        conversation_id="room123",
         room_name="Test Room",
         room_owner_id="user123",
         room_owner_name="Test User",

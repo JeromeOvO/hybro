@@ -206,7 +206,7 @@ def _router(coordinator, *, run_store, hitl_port):
 def _runs():
     run = SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         status="awaiting_user",
         state_version=1,
         cancellation_command_id=None,
@@ -254,7 +254,7 @@ async def test_hitl_cancellation_sends_one_remote_cancel_per_aliased_call():
     coordinator, _ledger, dispatch, calls = await _coordinator()
     run, canceling = _runs()
     route = SimpleNamespace(
-        room_id="room-1",
+        conversation_id="room-1",
         orchestration_run_id="run-1",
         call_record_id=calls["parked"].call_record_id,
         interaction_revision=1,
@@ -277,7 +277,7 @@ async def test_hitl_cancellation_sends_one_remote_cancel_per_aliased_call():
     router._emit_hitl_resolved_events = AsyncMock()
 
     version = await router.cancel_hitl_interaction(
-        room_id="room-1", interaction_id="interaction-1", expected_version=1
+        conversation_id="room-1", interaction_id="interaction-1", expected_version=1
     )
     await _settle()
 

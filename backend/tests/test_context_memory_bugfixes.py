@@ -130,7 +130,7 @@ class TestCompactionSweep:
         sweep = CompactionSweep(interval_minutes=60)
 
         mock_result = CompactionResult(
-            room_id="room_1",
+            conversation_id="room_1",
             compacted_count=3,
             tokens_saved=500,
         )
@@ -161,7 +161,7 @@ class TestCompactionSweep:
         sweep = CompactionSweep(interval_minutes=60)
 
         mock_result = CompactionResult(
-            room_id="idle_room",
+            conversation_id="idle_room",
             compacted_count=1,
             tokens_saved=100,
         )
@@ -283,7 +283,7 @@ class TestCompactionSweep:
         release_workers = asyncio.Event()
         started_count = 0
 
-        async def blocking_compaction(_room_id: str):
+        async def blocking_compaction(_conversation_id: str):
             nonlocal started_count
             started_count += 1
             if started_count == MAX_CONCURRENT_COMPACTIONS:
@@ -330,11 +330,11 @@ class TestCompactionSweep:
 
         sweep = CompactionSweep(interval_minutes=60)
 
-        async def compact_room(room_id: str):
-            if room_id == "bad_room":
+        async def compact_room(conversation_id: str):
+            if conversation_id == "bad_room":
                 raise RuntimeError("compaction failed")
             return CompactionResult(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 compacted_count=1,
                 tokens_saved=100,
             )
@@ -373,7 +373,7 @@ class TestCompactionSweep:
         in_flight = 0
         max_in_flight = 0
 
-        async def track_concurrency(_room_id: str):
+        async def track_concurrency(_conversation_id: str):
             nonlocal in_flight, max_in_flight
             in_flight += 1
             max_in_flight = max(max_in_flight, in_flight)
@@ -487,7 +487,7 @@ class TestMemorySearchHydration:
             SearchRankingRecord(
                 turn_id="turn_1",
                 content="",
-                room_id="room_1",
+                conversation_id="room_1",
                 keyword_score=0.95,
                 timestamp=datetime(2026, 2, 20),
             ),
@@ -508,7 +508,7 @@ class TestMemorySearchHydration:
             SearchRankingRecord(
                 turn_id="turn_1",
                 content="Already has content",
-                room_id="room_1",
+                conversation_id="room_1",
                 keyword_score=0.95,
                 timestamp=datetime(2026, 2, 20),
                 metadata={"content_preview": "Already has content"},
@@ -582,7 +582,7 @@ class TestSearchToContextIntegration:
         search_results = [
             MemorySearchResult(
                 content="User asked about deploying the React frontend",
-                room_id="room_1",
+                conversation_id="room_1",
                 keyword_score=0.92,
                 relevance_score=0.92,
                 temporal_decay_factor=1.0,
@@ -594,7 +594,7 @@ class TestSearchToContextIntegration:
             ),
             MemorySearchResult(
                 content="",
-                room_id="room_1",
+                conversation_id="room_1",
                 keyword_score=0.85,
                 relevance_score=0.85,
                 temporal_decay_factor=1.0,

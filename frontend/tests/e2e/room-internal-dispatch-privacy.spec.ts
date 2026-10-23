@@ -117,11 +117,11 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         resolved_agents: [],
         active_runs: [],
         room: {
-          room_id: ROOM_ID,
+          conversation_id: ROOM_ID,
           room_name: 'Privacy Room',
           room_owner_id: 'user-1',
           room_owner_name: 'User',
@@ -140,7 +140,7 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         active_runs: [],
       }),
     })
@@ -161,7 +161,7 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room_id: ROOM_ID,
+          conversation_id: ROOM_ID,
           message_list: [],
         }),
       })
@@ -178,10 +178,10 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         message_id: USER_MESSAGE_ID,
         message: {
-          room_id: ROOM_ID,
+          conversation_id: ROOM_ID,
           message_id: USER_MESSAGE_ID,
           message_type: 'user',
           user_id: 'user_local_developer',
@@ -210,13 +210,13 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     const frames = [
       {
         type: 'connected',
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         timestamp: now,
         data: { status: 'connected' },
       },
       {
         type: 'task_update',
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         timestamp: now,
         data: {
           message_id: AGENT_MESSAGE_ID,

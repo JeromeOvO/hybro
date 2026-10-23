@@ -258,7 +258,7 @@ async function setupDeferredAck(canonical = true) {
   let seq = 0
   const frame = async (type: string, data: Record<string, unknown>) => {
     await dispatch({
-      type, room_id: 'room-1', timestamp,
+      type, conversation_id: 'room-1', timestamp,
       data: { room_seq: ++seq, ...data },
     } as AnySSEFrame)
     expect(requestSnapshot).not.toHaveBeenCalled()
@@ -269,11 +269,11 @@ async function setupDeferredAck(canonical = true) {
   })
   if (canonical) {
     await dispatch({
-      type: 'connected', room_id: 'room-1', timestamp,
+      type: 'connected', conversation_id: 'room-1', timestamp,
       data: { connection_id: 'connection-1', room_seq: 0 },
     })
     await dispatch({
-      type: 'snapshot', room_id: 'room-1', timestamp,
+      type: 'snapshot', conversation_id: 'room-1', timestamp,
       data: {
         room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],

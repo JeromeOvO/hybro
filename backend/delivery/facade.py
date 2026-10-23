@@ -74,17 +74,17 @@ class DeliveryFacade:
         result = await self._event_publisher.emit(event)
         return result is not False
 
-    async def open_connection(self, room_id: str) -> Any:
-        return await self._sse_transport.open_connection(room_id)
+    async def open_connection(self, conversation_id: str) -> Any:
+        return await self._sse_transport.open_connection(conversation_id)
 
-    async def add_connection(self, room_id: str) -> Any:
-        return await self.open_connection(room_id)
+    async def add_connection(self, conversation_id: str) -> Any:
+        return await self.open_connection(conversation_id)
 
-    async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        await self._sse_transport.remove_connection(room_id, connection_id)
+    async def remove_connection(self, conversation_id: str, connection_id: str) -> None:
+        await self._sse_transport.remove_connection(conversation_id, connection_id)
 
-    def get_room_status(self, room_id: str) -> dict:
-        return self._sse_transport.get_room_status(room_id)
+    def get_room_status(self, conversation_id: str) -> dict:
+        return self._sse_transport.get_room_status(conversation_id)
 
     @property
     def room_connections(self) -> dict:
@@ -127,7 +127,7 @@ class DeliveryFacade:
 
     async def send_task_submitted(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         task_id: str,
         agent_name: str,
@@ -143,12 +143,12 @@ class DeliveryFacade:
         client_request_id: str | None = None,
     ) -> None:
         self._delivery_started_at.setdefault(
-            (room_id, message_id),
+            (conversation_id, message_id),
             time.perf_counter(),
         )
         await self.emit(
             TaskSubmittedEvent(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 task_id=task_id,
                 agent_name=agent_name,
@@ -167,7 +167,7 @@ class DeliveryFacade:
 
     async def send_task_update(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         status: Any,
         content: str | None = None,
@@ -189,7 +189,7 @@ class DeliveryFacade:
         delivery_id: str | None = None,
     ) -> bool:
         event = TaskUpdateEvent(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             status=_enum_value(status),
             run_id=run_id,
@@ -224,7 +224,7 @@ class DeliveryFacade:
         normalized_status = str(_enum_value(status)).lower()
         if normalized_status in self.config.terminal_processing_statuses:
             self._record_terminal_delivery(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 outcome=normalized_status if delivered else "delivery_failed",
                 terminal_kind="task_update",
@@ -248,13 +248,13 @@ class DeliveryFacade:
     def _record_terminal_delivery(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         outcome: str,
         terminal_kind: str,
         agent_id: str | None = None,
     ) -> None:
-        delivery_key = (room_id, message_id)
+        delivery_key = (conversation_id, message_id)
         if outcome != "delivery_failed":
             if delivery_key in self._terminal_delivery_logged:
                 self._delivery_started_at.pop(delivery_key, None)
@@ -267,7 +267,7 @@ class DeliveryFacade:
         logger.info(
             "delivery_completed",
             extra={
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "message_id": message_id,
                 "agent_id": agent_id,
                 "outcome": outcome,

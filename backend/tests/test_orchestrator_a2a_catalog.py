@@ -81,14 +81,14 @@ async def prepare(values, *, resource_manifest=None):
     )
     prepared = await assembler.prepare(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             revision=2,
             source="test",
-            room_id="room-1",
+            conversation_id="room-1",
             agent_ids=[item.agent_id for item in values],
             authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
@@ -286,13 +286,13 @@ async def test_preparation_fails_closed_for_inactive_epoch():
     try:
         await assembler.prepare(
             run_id="run-1",
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             requesting_subject_id="user-1",
             candidate_scope=CandidateScopeSnapshot(
                 snapshot_id="scope",
                 source="test",
-                room_id="room-1",
+                conversation_id="room-1",
                 agent_ids=["agent-1"],
                 authorization_basis=AuthorizationBasis(kind="room_member"),
             ),

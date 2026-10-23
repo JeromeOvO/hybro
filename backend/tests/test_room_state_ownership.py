@@ -114,8 +114,8 @@ class _Owner:
         self.result = result
         self.calls: list[str] = []
 
-    async def delete_room_state(self, room_id: str) -> bool:
-        self.calls.append(room_id)
+    async def delete_room_state(self, conversation_id: str) -> bool:
+        self.calls.append(conversation_id)
         return self.result
 
 

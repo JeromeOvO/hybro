@@ -83,7 +83,7 @@ async def _public_history(kernel, run):
             records.setdefault(
                 event_id,
                 {
-                    "room_id": current.room_id,
+                    "room_id": current.conversation_id,
                     "room_seq": len(records) + 1,
                     "kind": "run_event",
                     "ts": NOW.isoformat(),
@@ -107,7 +107,7 @@ async def _public_history(kernel, run):
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
             ),
@@ -116,7 +116,7 @@ async def _public_history(kernel, run):
         if projected is None or projected.event_id in records:
             return
         records[projected.event_id] = {
-            "room_id": current.room_id,
+            "room_id": current.conversation_id,
             "room_seq": len(records) + 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -130,7 +130,7 @@ async def _public_history(kernel, run):
             },
         }
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = read_events
@@ -149,7 +149,7 @@ def _fold_settled(records, run):
         room_seq += 1
         assert fold.apply(
             {
-                "room_id": run.room_id,
+                "room_id": run.conversation_id,
                 "room_seq": room_seq,
                 "kind": "agent_response",
                 "ts": NOW.isoformat(),
@@ -164,7 +164,7 @@ def _fold_settled(records, run):
     room_seq += 1
     assert fold.apply(
         {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_seq,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -494,8 +494,8 @@ async def test_partial_real_child_closeout_recovers_every_owner_once(
         assert winner.terminal_result is not None
         assert a2a.hitl.is_abandoned_for_test(child.pending_interaction_id)
     assert await ledger.load_by_record_id(children[0].call_record_id) == first_winner
-    assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
-    assert await a2a.hitl.get_published_interactions(run.room_id) == []
+    assert await a2a.hitl.get_eligible_interactions(run.conversation_id) == []
+    assert await a2a.hitl.get_published_interactions(run.conversation_id) == []
     assert dispatch.commands == runtime.published == []
     entries = [entry for batch in result.run.tool_batches for entry in batch.entries]
     assert all(
@@ -619,7 +619,7 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
     async def select_from_private_schema(request, *, signal):
         nonlocal selected
         if len(model.requests) == 1:
-            assert await a2a.hitl.get_published_interactions(run.room_id) == []
+            assert await a2a.hitl.get_published_interactions(run.conversation_id) == []
             tool = next(t for t in request.tools if t.name == "surface_agent_questions")
             targets = tool.input_schema["properties"]["presentation_id"]["enum"]
             assert len(targets) == 2
@@ -707,7 +707,7 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
         records.setdefault(
             event_id,
             {
-                "room_id": run.room_id,
+                "room_id": run.conversation_id,
                 "room_seq": len(records) + 1,
                 "kind": frame["type"],
                 "ts": frame["timestamp"],
@@ -769,7 +769,9 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
     assert surface.surface_for_call_record_id == parents[1].call_record_id
     assert [
         interaction.interaction_id
-        for interaction, _, _ in await a2a.hitl.get_published_interactions(run.room_id)
+        for interaction, _, _ in await a2a.hitl.get_published_interactions(
+            run.conversation_id
+        )
     ] == ["interaction-2"]
     assert await a2a.hitl.read_interaction("interaction-1") is not None
     assert not a2a.hitl.is_abandoned_for_test("interaction-1")
@@ -859,7 +861,9 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
             )
             assert [
                 spec.interaction_id
-                for spec, _, _ in await a2a.hitl.get_published_interactions(run.room_id)
+                for spec, _, _ in await a2a.hitl.get_published_interactions(
+                    run.conversation_id
+                )
             ] == ["interaction-1"]
     assert result.outcome == "final_answer"
     assert len(model.requests) == 4
@@ -870,7 +874,7 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
         for batch in result.run.tool_batches
         for entry in batch.entries
     )
-    assert await a2a.hitl.get_published_interactions(run.room_id) == []
+    assert await a2a.hitl.get_published_interactions(run.conversation_id) == []
     _fold_settled(records, result.run)
 
 
@@ -1183,7 +1187,7 @@ async def test_kernel_rejects_unpublished_runtime_surface_without_phantom_hitl(
     assert surface.opaque_public_call_id is None
     assert "forwarded_to_user" not in decisions
     emit.assert_not_awaited()
-    assert await owner.get_published_interactions(run.room_id) == []
+    assert await owner.get_published_interactions(run.conversation_id) == []
     events = [record["payload_public"] for record in records.values()]
     assert not any(
         event["type"] in {"hitl_request", "run_waiting_input"} for event in events
@@ -1740,7 +1744,7 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
         records.setdefault(
             key,
             {
-                "room_id": seed.room_id,
+                "room_id": seed.conversation_id,
                 "room_seq": len(records) + 1,
                 "kind": frame["type"],
                 "ts": NOW.isoformat(),
@@ -1829,7 +1833,7 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     )
     host = runtime.session_host
     await host.create_session(
-        room_id=seed.room_id,
+        conversation_id=seed.conversation_id,
         profile=seed.profile,
         candidate_scope=seed.candidate_scope,
         requesting_subject_id="user-1",
@@ -1838,17 +1842,21 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     if entrypoint == "prompt":
         with pytest.raises(RecoverableCheckpointError):
             await host.prompt(
-                seed.room_id, user_message(), client_request_id=seed.client_request_id
+                seed.conversation_id,
+                user_message(),
+                client_request_id=seed.client_request_id,
             )
     else:
         waiting = await host.prompt(
-            seed.room_id, user_message(), client_request_id=seed.client_request_id
+            seed.conversation_id,
+            user_message(),
+            client_request_id=seed.client_request_id,
         )
         assert waiting.outcome == waiting.run.status == "waiting_external"
         assert len(model.requests) == 1
         assert await owner.read_interaction(spec.interaction_id) is None
         # Run-addressed ingress must recover even after the hosted session is gone.
-        host.drop_session(seed.room_id)
+        host.drop_session(seed.conversation_id)
         outcome, inbox = await runtime.observation_ingress.record(
             NormalizedA2AObservation(
                 observation_id="remote-questions",
@@ -1883,7 +1891,7 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
         for row in records.values()
     )
     assert interrupted.tool_batches[1].entries[0].state == "pending"
-    assert (await owner.get_published_interactions(seed.room_id))[0][
+    assert (await owner.get_published_interactions(seed.conversation_id))[0][
         0
     ].interaction_id == "interaction-1"
     _, route, _ = await owner.read_interaction("interaction-1")
@@ -1897,14 +1905,14 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
                 {"request_id": q.question_id, "user_input": "a"} for q in spec.questions
             ],
             responder_id="user-1",
-            room_id=seed.room_id,
+            conversation_id=seed.conversation_id,
         )
 
     if answer_before_recovery:
         with pytest.raises(HITLDeliveryUncertainError):
             await answer()
         assert await owner.read_answer_record("interaction-1", 1) is not None
-        assert await owner.get_published_interactions(seed.room_id) == []
+        assert await owner.get_published_interactions(seed.conversation_id) == []
         assert (
             await ledger.load_by_record_id(call.call_record_id)
         ).state == "input_required"

@@ -141,7 +141,7 @@ class RoomSummaryData:
 
 @dataclass(slots=True)
 class RoomMemoryState:
-    room_id: str
+    conversation_id: str
     memory_id: str
     conversation_history: list[ConversationTurnData] = field(default_factory=list)
     summary: str | None = None
@@ -170,7 +170,7 @@ class AssemblyResult:
 @dataclass(slots=True)
 class SearchRankingRecord:
     turn_id: str
-    room_id: str
+    conversation_id: str
     content: str = ""
     keyword_score: float = 0.0
     raw_keyword_score: float | None = None
@@ -182,7 +182,7 @@ class SearchRankingRecord:
 
 class ContextBlock(FrozenDTO):
     block_id: str
-    room_id: str
+    conversation_id: str
     content: str
     token_count: int
     block_type: str = "context"
@@ -190,14 +190,14 @@ class ContextBlock(FrozenDTO):
 
 
 class AssembledContext(FrozenDTO):
-    room_id: str
+    conversation_id: str
     blocks: list[ContextBlock] = []
     total_tokens: int = 0
     metadata: dict[str, Any] = {}
 
 
 class MemorySearchResult(FrozenDTO):
-    room_id: str
+    conversation_id: str
     content: str
     keyword_score: float
     relevance_score: float

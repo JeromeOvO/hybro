@@ -107,7 +107,7 @@ class TestChatRoomsService:
 
         assert await service.read_messages("room-1", limit=5, cursor="c1") == "messages"
         forwarded = reader.await_args.args[0]
-        assert (forwarded.room_id, forwarded.limit, forwarded.cursor) == (
+        assert (forwarded.conversation_id, forwarded.limit, forwarded.cursor) == (
             "room-1",
             5,
             "c1",
@@ -119,12 +119,12 @@ class TestVerifyRoomOwnership:
 
     @pytest.mark.asyncio
     async def test_raises_400_when_room_id_empty(self, mock_user):
-        """Should raise 400 when room_id is empty."""
+        """Should raise 400 when conversation_id is empty."""
         with pytest.raises(HTTPException) as exc_info:
             await verify_room_ownership("", mock_user, MagicMock())
 
         assert exc_info.value.status_code == 400
-        assert "room_id is required" in exc_info.value.detail
+        assert "conversation_id is required" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_raises_404_when_room_not_found(self, mock_user, mock_db_service):
@@ -147,7 +147,7 @@ class TestVerifyRoomOwnership:
 
         with pytest.raises(HTTPException) as exc_info:
             await verify_room_ownership(
-                sample_room.room_id, mock_user_2, mock_db_service
+                sample_room.conversation_id, mock_user_2, mock_db_service
             )
 
         assert exc_info.value.status_code == 403
@@ -161,7 +161,9 @@ class TestVerifyRoomOwnership:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         # Should not raise
-        await verify_room_ownership(sample_room.room_id, mock_user, mock_db_service)
+        await verify_room_ownership(
+            sample_room.conversation_id, mock_user, mock_db_service
+        )
 
 
 # =============================================================================
@@ -184,7 +186,7 @@ class TestCreateNewRoom:
 
         expected_response = RoomCenterRoomSettingResponse(
             success=True,
-            room_id="new-room-id",
+            conversation_id="new-room-id",
             status_code=200,
         )
         mock_chat_rooms.create_room.return_value = expected_response
@@ -192,7 +194,7 @@ class TestCreateNewRoom:
         response = await create_new_room(payload, mock_user, rooms=mock_chat_rooms)
 
         assert response.success is True
-        assert response.room_id == "new-room-id"
+        assert response.conversation_id == "new-room-id"
 
         # Verify the request was made with user's ID as owner
         mock_chat_rooms.create_room.assert_awaited_once_with(
@@ -216,7 +218,7 @@ class TestCreateNewRoom:
         )
 
         expected_response = RoomCenterRoomSettingResponse(
-            success=True, room_id="new-room-id"
+            success=True, conversation_id="new-room-id"
         )
         mock_chat_rooms.create_room.return_value = expected_response
 
@@ -246,14 +248,14 @@ class TestInquiryRoomSetting:
         ].get_room_by_room_id.return_value = sample_room
         expected_response = RoomCenterRoomSettingResponse(
             success=True,
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             room=sample_room,
         )
         patch_chat_rooms_deps["chat_rooms"].get_room.return_value = expected_response
         patch_chat_rooms_deps["execution_engine"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="run-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 state="processing",
                 trigger_message_id="m1",
                 agent_id="a1",
@@ -262,7 +264,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -270,7 +272,7 @@ class TestInquiryRoomSetting:
         )
 
         assert response.success is True
-        assert response.room_id == sample_room.room_id
+        assert response.conversation_id == sample_room.conversation_id
         assert response.active_runs == [
             ActiveRunRef(
                 state="processing",
@@ -280,7 +282,7 @@ class TestInquiryRoomSetting:
         ]
         patch_chat_rooms_deps[
             "execution_engine"
-        ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
+        ].get_runs_for_room.assert_awaited_once_with(sample_room.conversation_id)
 
     @pytest.mark.asyncio
     async def test_inquiry_room_setting_degrades_when_active_run_lookup_fails(
@@ -294,7 +296,7 @@ class TestInquiryRoomSetting:
             "chat_rooms"
         ].get_room.return_value = RoomCenterRoomSettingResponse(
             success=True,
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             room=sample_room,
         )
         patch_chat_rooms_deps[
@@ -302,7 +304,7 @@ class TestInquiryRoomSetting:
         ].get_runs_for_room.side_effect = RuntimeError("runs unavailable")
 
         response = await inquiry_room_setting(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -310,7 +312,7 @@ class TestInquiryRoomSetting:
         )
 
         assert response.success is True
-        assert response.room_id == sample_room.room_id
+        assert response.conversation_id == sample_room.conversation_id
         assert response.active_runs == []
 
     @pytest.mark.asyncio
@@ -331,7 +333,7 @@ class TestInquiryRoomSetting:
         patch_chat_rooms_deps["execution_engine"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="run-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 state="processing",
                 trigger_message_id="m1",
                 agent_id="a1",
@@ -340,7 +342,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -352,7 +354,7 @@ class TestInquiryRoomSetting:
         assert response.active_runs[0].trigger_message_id == "m1"
         patch_chat_rooms_deps[
             "execution_engine"
-        ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
+        ].get_runs_for_room.assert_awaited_once_with(sample_room.conversation_id)
 
     @pytest.mark.asyncio
     async def test_inquiry_room_setting_ignores_mismatched_response_room_id_for_active_run_lookup(
@@ -367,13 +369,13 @@ class TestInquiryRoomSetting:
             "chat_rooms"
         ].get_room.return_value = RoomCenterRoomSettingResponse(
             success=True,
-            room_id="other-room",
+            conversation_id="other-room",
             room=sample_room,
         )
         patch_chat_rooms_deps["execution_engine"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="run-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 state="processing",
                 trigger_message_id="m1",
                 agent_id="a1",
@@ -382,7 +384,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -394,7 +396,7 @@ class TestInquiryRoomSetting:
         assert response.active_runs[0].trigger_message_id == "m1"
         patch_chat_rooms_deps[
             "execution_engine"
-        ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
+        ].get_runs_for_room.assert_awaited_once_with(sample_room.conversation_id)
 
     @pytest.mark.asyncio
     async def test_raises_403_for_non_owner(
@@ -406,7 +408,7 @@ class TestInquiryRoomSetting:
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_room_setting(
-                sample_room.room_id,
+                sample_room.conversation_id,
                 mock_user_2,
                 store=mock_db_service,
                 engine=MagicMock(),
@@ -436,7 +438,7 @@ class TestInquiryActiveRuns:
         patch_chat_rooms_deps["execution_engine"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="private-run-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 state="processing",
                 trigger_message_id="msg-active",
                 agent_id="a1",
@@ -446,7 +448,7 @@ class TestInquiryActiveRuns:
         ]
 
         response = await inquiry_active_runs(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -475,7 +477,7 @@ class TestInquiryActiveRuns:
         patch_chat_rooms_deps["execution_engine"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="run-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 state="processing",
                 trigger_message_id="msg-active",
                 agent_id="a1",
@@ -483,20 +485,20 @@ class TestInquiryActiveRuns:
             )
         ]
         response = await inquiry_active_runs(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
         )
 
         assert response.success is True
-        assert response.room_id == sample_room.room_id
+        assert response.conversation_id == sample_room.conversation_id
         assert response.active_runs is not None
         assert len(response.active_runs) == 1
         assert response.active_runs[0].trigger_message_id == "msg-active"
         patch_chat_rooms_deps[
             "execution_engine"
-        ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
+        ].get_runs_for_room.assert_awaited_once_with(sample_room.conversation_id)
 
     @pytest.mark.asyncio
     async def test_inquiry_active_runs_degrades_when_execution_lookup_fails(
@@ -510,7 +512,7 @@ class TestInquiryActiveRuns:
             "execution_engine"
         ].get_runs_for_room.side_effect = RuntimeError("runs unavailable")
         response = await inquiry_active_runs(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
             engine=patch_chat_rooms_deps["execution_engine"],
@@ -528,7 +530,7 @@ class TestInquiryActiveRuns:
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_active_runs(
-                sample_room.room_id,
+                sample_room.conversation_id,
                 mock_user_2,
                 store=mock_db_service,
                 engine=MagicMock(),
@@ -554,7 +556,7 @@ class TestInquiryRoomMessages:
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_room_messages(
-                sample_room.room_id,
+                sample_room.conversation_id,
                 cursor="not-valid",
                 user=mock_user_2,
                 store=mock_db_service,
@@ -582,7 +584,7 @@ class TestInquiryRoomMessages:
         ].read_messages.return_value = expected_response
 
         response = await inquiry_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             limit=37,
             cursor="opaque-cursor",
             user=mock_user,
@@ -592,7 +594,7 @@ class TestInquiryRoomMessages:
 
         assert response.success is True
         patch_chat_rooms_deps["chat_rooms"].read_messages.assert_awaited_once_with(
-            sample_room.room_id, limit=37, cursor="opaque-cursor"
+            sample_room.conversation_id, limit=37, cursor="opaque-cursor"
         )
 
     @pytest.mark.asyncio
@@ -607,7 +609,7 @@ class TestInquiryRoomMessages:
             "orchestration_status": "failed",
         }
         user_message = RoomUserMessage(
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             message_id="user-msg-privacy-001",
             user_id=mock_user.user_id,
             client_request_id="client-request-top-level-001",
@@ -647,7 +649,7 @@ class TestInquiryRoomMessages:
         rooms = _chat_rooms_reading(runtime)
 
         response = await inquiry_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             user=mock_user,
             store=patch_chat_rooms_deps["db_service"],
             rooms=rooms,
@@ -728,7 +730,7 @@ class TestInquiryRoomMessages:
             metadata={"hitl_request_id": "local-supervisor-hitl-request"},
         )
         remote_message = RoomAgentMessage(
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             message_id="agent-msg-remote-spoof",
             agent_id="insurer-agent",
             related_message_id=sample_user_message.message_id,
@@ -739,7 +741,7 @@ class TestInquiryRoomMessages:
             task_content=private_sentinel,
         )
         local_message = RoomAgentMessage(
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             message_id="agent-msg-insurer-001",
             agent_id="insurer-agent",
             related_message_id=sample_user_message.message_id,
@@ -748,7 +750,7 @@ class TestInquiryRoomMessages:
             extend_info={"public_task_label": public_label},
         )
         supervisor_message = RoomAgentMessage(
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             message_id="supervisor-msg-clarify-001",
             agent_id="supervisor",
             related_message_id=sample_user_message.message_id,
@@ -774,7 +776,7 @@ class TestInquiryRoomMessages:
             ],
         )
         status_text_message = RoomAgentMessage(
-            room_id=sample_room.room_id,
+            conversation_id=sample_room.conversation_id,
             message_id="agent-msg-status-text",
             agent_id="insurer-agent",
             related_message_id=sample_user_message.message_id,
@@ -806,7 +808,7 @@ class TestInquiryRoomMessages:
                 side_effect=lambda request_id: (
                     {
                         "request_id": "local-hitl-request",
-                        "room_id": sample_room.room_id,
+                        "room_id": sample_room.conversation_id,
                         "public_source": "agent",
                         "application_route": "a2a_resume",
                         "agent_id": "insurer-agent",
@@ -824,7 +826,7 @@ class TestInquiryRoomMessages:
                     else (
                         {
                             "request_id": "local-supervisor-hitl-request",
-                            "room_id": sample_room.room_id,
+                            "room_id": sample_room.conversation_id,
                             "public_source": "supervisor",
                             "application_route": "supervisor_run",
                             "display_message_id": supervisor_message.message_id,
@@ -846,7 +848,7 @@ class TestInquiryRoomMessages:
         rooms = _chat_rooms_reading(runtime)
 
         response = await inquiry_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             user=mock_user,
             store=patch_chat_rooms_deps["db_service"],
             rooms=rooms,

@@ -86,7 +86,7 @@ def _make_facade(**overrides):
 def _assert_processing_status_event(
     event,
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     status: str,
     related_message_id: str,
@@ -95,7 +95,7 @@ def _assert_processing_status_event(
 ):
     assert isinstance(event, ProcessingStatusEvent)
     assert event.event_type == "processing_status"
-    assert event.room_id == room_id
+    assert event.conversation_id == conversation_id
     assert event.message_id == message_id
     assert event.related_message_id == related_message_id
     assert event.status == status
@@ -148,14 +148,14 @@ async def test_execute_persists_ack_without_starting_orchestration():
     deps[
         "room_center"
     ].persist_user_message.return_value = RoomCenterUserMessageResponse(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         user_id="user-1",
         user_name="User",
         success=True,
     )
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         sender_name="User",
         message={
@@ -189,11 +189,13 @@ async def test_execute_rejects_pending_hitl_before_room_persist():
     )
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is False
-    assert ack.room_id == "room-1"
+    assert ack.conversation_id == "room-1"
     assert ack.status_code == 409
     assert ack.should_start_orchestration is False
     assert "waiting for your input" in ack.error
@@ -212,18 +214,20 @@ async def test_execute_rejects_active_run_before_room_persist():
     deps["run_reader"].get_runs_for_room.return_value = [
         RunInfo(
             run_id="run-1",
-            room_id="room-1",
+            conversation_id="room-1",
             state="processing",
             trigger_message_id="msg-active",
         )
     ]
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is False
-    assert ack.room_id == "room-1"
+    assert ack.conversation_id == "room-1"
     assert ack.status_code == 409
     assert ack.should_start_orchestration is False
     assert "already processing" in ack.error
@@ -241,22 +245,22 @@ async def test_execute_replay_lookup_precedes_busy_guards_and_bypasses_them():
     async def lookup(**_kwargs):
         order.append("idempotency")
         return RoomCenterUserMessageResponse(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="existing-message",
             success=True,
             status_code=200,
         )
 
-    async def pending(_room_id):
+    async def pending(_conversation_id):
         order.append("hitl")
         return [SimpleNamespace()]
 
-    async def active(_room_id):
+    async def active(_conversation_id):
         order.append("active")
         return [
             RunInfo(
                 run_id="run-1",
-                room_id="room-1",
+                conversation_id="room-1",
                 state="processing",
             )
         ]
@@ -267,7 +271,7 @@ async def test_execute_replay_lookup_precedes_busy_guards_and_bypasses_them():
 
     ack = await facade.execute(
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             client_request_id="request-1",
             message=_user_message_payload("hello"),
@@ -292,7 +296,7 @@ async def test_execute_rechecks_idempotency_when_winner_appears_during_busy_guar
 ):
     facade, deps = _make_facade()
     winner = RoomCenterUserMessageResponse(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="winner-message",
         success=True,
         status_code=200,
@@ -304,14 +308,14 @@ async def test_execute_rechecks_idempotency_when_winner_appears_during_busy_guar
         deps["run_reader"].get_runs_for_room.return_value = [
             RunInfo(
                 run_id="run-1",
-                room_id="room-1",
+                conversation_id="room-1",
                 state="processing",
             )
         ]
 
     ack = await facade.execute(
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             client_request_id="request-1",
             message=_user_message_payload("hello"),
@@ -333,7 +337,7 @@ async def test_execute_idempotency_conflict_returns_body_level_409_before_busy_g
     deps[
         "room_center"
     ].get_idempotent_user_message.return_value = RoomCenterUserMessageResponse(
-        room_id="room-1",
+        conversation_id="room-1",
         success=False,
         error="The client_request_id was already used for a different request",
         status_code=409,
@@ -341,7 +345,7 @@ async def test_execute_idempotency_conflict_returns_body_level_409_before_busy_g
 
     ack = await facade.execute(
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             client_request_id="request-1",
             message=_user_message_payload("changed"),
@@ -366,7 +370,7 @@ async def test_execute_does_not_fail_open_when_idempotency_lookup_fails():
     with pytest.raises(RuntimeError, match="mongo unavailable"):
         await facade.execute(
             ExecutionRequest(
-                room_id="room-1",
+                conversation_id="room-1",
                 sender_id="user-1",
                 client_request_id="request-1",
                 message=_user_message_payload("hello"),
@@ -385,7 +389,7 @@ async def test_execute_concurrent_insert_loser_skips_preflight_and_all_sse():
         persist_message_to_room=AsyncMock(
             return_value=(
                 RoomCenterUserMessageResponse(
-                    room_id="room-1",
+                    conversation_id="room-1",
                     message_id="winner-message",
                     dispatch_root_message_id=None,
                     success=True,
@@ -400,7 +404,7 @@ async def test_execute_concurrent_insert_loser_skips_preflight_and_all_sse():
 
     ack = await facade.execute(
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             client_request_id="request-1",
             message=_user_message_payload("hello"),
@@ -419,18 +423,18 @@ async def test_execute_continues_when_hitl_pending_lookup_fails():
     facade, deps = _make_facade()
     order: list[str] = []
 
-    async def get_pending_requests(_room_id):
+    async def get_pending_requests(_conversation_id):
         order.append("hitl")
         raise RuntimeError("hitl down")
 
-    async def get_runs_for_room(_room_id):
+    async def get_runs_for_room(_conversation_id):
         order.append("active_runs")
         return []
 
     async def persist_user_message(*_args, **_kwargs):
         order.append("persist")
         return _room_response_with_preflight(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -442,7 +446,9 @@ async def test_execute_continues_when_hitl_pending_lookup_fails():
     deps["room_center"].persist_user_message.side_effect = persist_user_message
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -459,18 +465,18 @@ async def test_execute_continues_when_active_run_lookup_fails():
     facade, deps = _make_facade()
     order: list[str] = []
 
-    async def get_pending_requests(_room_id):
+    async def get_pending_requests(_conversation_id):
         order.append("hitl")
         return []
 
-    async def get_runs_for_room(_room_id):
+    async def get_runs_for_room(_conversation_id):
         order.append("active_runs")
         raise RuntimeError("runs down")
 
     async def persist_user_message(*_args, **_kwargs):
         order.append("persist")
         return _room_response_with_preflight(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -482,7 +488,9 @@ async def test_execute_continues_when_active_run_lookup_fails():
     deps["room_center"].persist_user_message.side_effect = persist_user_message
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -499,14 +507,14 @@ async def test_schedule_orchestration_carries_live_mode_and_scope():
     facade, _deps = _make_facade()
     facade._route_orchestration = AsyncMock()
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         client_request_id="cr-1",
         mode="supervisor",
         agent_scope={"source": "all_agents"},
     )
     ack = ExecutionAck(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         should_start_orchestration=True,
@@ -530,7 +538,9 @@ async def test_bound_canonical_active_run_reader_rejects_before_message_persiste
     facade.bind_active_run_reader(canonical_reader)
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is False
@@ -564,7 +574,7 @@ async def test_execute_emits_processing_for_ready_room_preflight():
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="frontend-msg-1",
         dispatch_root_message_id="root-msg-1",
         success=True,
@@ -578,7 +588,9 @@ async def test_execute_emits_processing_for_ready_room_preflight():
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.should_start_orchestration is True
@@ -587,7 +599,7 @@ async def test_execute_emits_processing_for_ready_room_preflight():
     event = deps["event_publisher"].emit.await_args.args[0]
     _assert_processing_status_event(
         event,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="frontend-msg-1",
         status="processing",
         related_message_id="root-msg-1",
@@ -609,7 +621,7 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
         persist_message_to_room=AsyncMock(
             return_value=(
                 RoomCenterUserMessageResponse(
-                    room_id="room-1",
+                    conversation_id="room-1",
                     message_id="msg-1",
                     dispatch_root_message_id="msg-1",
                     success=True,
@@ -629,7 +641,7 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
         assert context is preflight_context
         order.append("room_preflight")
         return _room_response_with_preflight(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -640,7 +652,9 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
     room_center.run_message_preflight_to_room.side_effect = continue_preflight
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -660,7 +674,7 @@ async def test_execute_cancellation_during_preflight_processing_status_discards_
     deps["room_center"].persist_message_to_room.side_effect = None
     deps["room_center"].persist_message_to_room.return_value = (
         RoomCenterUserMessageResponse(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -672,7 +686,9 @@ async def test_execute_cancellation_during_preflight_processing_status_discards_
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+        await facade.execute(
+            ExecutionRequest(conversation_id="room-1", sender_id="user-1")
+        )
 
     deps["room_center"].discard_message_preflight.assert_called_once_with(
         preflight_context
@@ -689,7 +705,7 @@ async def test_real_room_adapter_preserves_processing_cancellation_and_discards_
         persist_message_to_room=AsyncMock(
             return_value=(
                 RoomCenterUserMessageResponse(
-                    room_id="room-1",
+                    conversation_id="room-1",
                     message_id="msg-1",
                     dispatch_root_message_id="msg-1",
                     success=True,
@@ -706,7 +722,9 @@ async def test_real_room_adapter_preserves_processing_cancellation_and_discards_
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+        await facade.execute(
+            ExecutionRequest(conversation_id="room-1", sender_id="user-1")
+        )
 
     assert not inspect.iscoroutinefunction(
         ConversationRuntime.discard_message_preflight
@@ -724,7 +742,7 @@ async def test_cleanup_failure_does_not_mask_original_processing_cancellation(ca
         persist_message_to_room=AsyncMock(
             return_value=(
                 RoomCenterUserMessageResponse(
-                    room_id="room-1",
+                    conversation_id="room-1",
                     message_id="msg-1",
                     dispatch_root_message_id="msg-1",
                     success=True,
@@ -741,7 +759,9 @@ async def test_cleanup_failure_does_not_mask_original_processing_cancellation(ca
     )
 
     with pytest.raises(asyncio.CancelledError, match="original cancellation"):
-        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+        await facade.execute(
+            ExecutionRequest(conversation_id="room-1", sender_id="user-1")
+        )
 
     runtime.discard_message_preflight.assert_called_once_with(preflight_context)
     assert "room preflight cleanup failed" in caplog.text
@@ -754,7 +774,7 @@ async def test_execute_cancellation_after_ready_preflight_discards_token():
     deps["room_center"].persist_message_to_room.side_effect = None
     deps["room_center"].persist_message_to_room.return_value = (
         RoomCenterUserMessageResponse(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -765,7 +785,7 @@ async def test_execute_cancellation_after_ready_preflight_discards_token():
     deps[
         "room_center"
     ].run_message_preflight_to_room.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         dispatch_root_message_id="msg-1",
         success=True,
@@ -776,7 +796,9 @@ async def test_execute_cancellation_after_ready_preflight_discards_token():
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+        await facade.execute(
+            ExecutionRequest(conversation_id="room-1", sender_id="user-1")
+        )
 
     deps["room_center"].discard_message_preflight.assert_called_once_with(
         preflight_context
@@ -790,7 +812,7 @@ async def test_execute_normal_ready_preflight_does_not_discard_twice():
     deps["room_center"].persist_message_to_room.side_effect = None
     deps["room_center"].persist_message_to_room.return_value = (
         RoomCenterUserMessageResponse(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             dispatch_root_message_id="msg-1",
             success=True,
@@ -801,14 +823,16 @@ async def test_execute_normal_ready_preflight_does_not_discard_twice():
     deps[
         "room_center"
     ].run_message_preflight_to_room.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         dispatch_root_message_id="msg-1",
         success=True,
         preflight_outcome="ready",
     )
 
-    ack = await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+    ack = await facade.execute(
+        ExecutionRequest(conversation_id="room-1", sender_id="user-1")
+    )
 
     assert ack.should_start_orchestration is True
     deps["room_center"].discard_message_preflight.assert_not_called()
@@ -820,14 +844,16 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
     deps[
         "room_center"
     ].persist_user_message.return_value = RoomCenterUserMessageResponse(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         status_code=200,
     )
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -842,7 +868,7 @@ async def test_execute_emits_completed_for_completed_room_preflight():
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         status_code=200,
@@ -850,7 +876,9 @@ async def test_execute_emits_completed_for_completed_room_preflight():
     )
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -870,7 +898,7 @@ async def test_execute_returns_ack_when_post_persist_status_emit_fails():
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         dispatch_root_message_id="msg-1",
         success=True,
@@ -879,7 +907,9 @@ async def test_execute_returns_ack_when_post_persist_status_emit_fails():
     deps["event_publisher"].emit.side_effect = RuntimeError("sse down")
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.message_id == "msg-1"
@@ -894,7 +924,7 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=False,
         error="Failed to parse user message",
@@ -910,7 +940,9 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is False
@@ -928,7 +960,7 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     assert len(events) == 2
     _assert_processing_status_event(
         events[0],
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="processing",
         related_message_id="msg-1",
@@ -943,7 +975,7 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         status_code=200,
@@ -957,7 +989,9 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
-        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+        ExecutionRequest(
+            conversation_id="room-1", sender_id="user-1", client_request_id="cr-1"
+        )
     )
 
     assert ack.success is True
@@ -973,7 +1007,7 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
     assert len(events) == 2
     _assert_processing_status_event(
         events[0],
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="processing",
         related_message_id="msg-1",
@@ -990,7 +1024,7 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
         task_factory=task_factory, orchestrator_router=orchestrator_router
     )
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         client_request_id="cr-1",
         parent_message_id="parent-1",
@@ -1009,7 +1043,7 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 @pytest.mark.asyncio
 async def test_start_orchestration_skips_when_ack_disables_dispatch():
     facade, _ = _make_facade()
-    request = ExecutionRequest(room_id="room-1", sender_id="user-1")
+    request = ExecutionRequest(conversation_id="room-1", sender_id="user-1")
     ack = ExecutionAck(
         success=True,
         message_id="msg-1",
@@ -1117,7 +1151,7 @@ async def test_hitl_pending_and_cancel_delegate_and_translate():
     facade, deps = _make_facade()
     model_request = SimpleNamespace(
         request_id="req-1",
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-msg-1",
         public_source="agent",
         interaction_id="interaction-1",
@@ -1204,7 +1238,7 @@ async def test_orchestrator_hitl_pending_and_cancel_use_router_when_bound():
 
     orch_pending = HITLRequest(
         request_id="q1",
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-msg-1",
         source="agent",
         prompt="Where?",
@@ -1245,7 +1279,7 @@ async def test_get_pending_hitl_dedupes_legacy_and_orchestrator_by_interaction_r
 
     legacy = SimpleNamespace(
         request_id="q1",
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-msg-1",
         public_source="agent",
         interaction_id="shared-1",
@@ -1259,7 +1293,7 @@ async def test_get_pending_hitl_dedupes_legacy_and_orchestrator_by_interaction_r
     deps["hitl_manager"].get_pending_requests.return_value = [legacy]
     orch_pending = HITLRequest(
         request_id="q1",
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-msg-1",
         source="agent",
         prompt="Orchestrator prompt",
@@ -1333,7 +1367,7 @@ async def test_supervisor_hitl_answer_falls_back_to_unified_manager():
 
     router.route_hitl_answer.assert_awaited_once()
     deps["hitl_manager"].handle_batch_response.assert_awaited_once_with(
-        room_id="room-1",
+        conversation_id="room-1",
         interaction_id="interaction-1",
         answers=[{"request_id": "request-1", "user_input": "Shanghai"}],
         user_id="user-1",

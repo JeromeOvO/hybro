@@ -38,11 +38,11 @@ class FakeCollection:
 
     async def delete_many(self, query: dict) -> int:
         self.delete_many_calls.append(deepcopy(query))
-        room_id = query.get("room_id")
+        conversation_id = query.get("room_id")
         kept = []
         removed = 0
         for doc in self.docs:
-            if doc.get("room_id") == room_id:
+            if doc.get("room_id") == conversation_id:
                 removed += 1
             else:
                 kept.append(deepcopy(doc))
@@ -66,7 +66,7 @@ def test_room_quote_repository_roundtrips_quote_model():
     repo = RoomQuoteMongoRepository(mongo=FakeMongo(collection))
 
     snippet = QuotedSnippet(
-        room_id="room-1",
+        conversation_id="room-1",
         created_by_user_id="user-1",
         text="hello",
         source_message_id="m1",

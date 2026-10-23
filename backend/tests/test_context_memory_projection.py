@@ -23,20 +23,26 @@ class StateMemoryRepository:
         self.pushed: list[dict] = []
         self.updated_notes: list[tuple[str, str, dict]] = []
 
-    async def get_room_memory(self, room_id: str) -> dict | None:
-        return self.doc if self.doc and self.doc.get("room_id") == room_id else None
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
+        return (
+            self.doc
+            if self.doc and self.doc.get("room_id") == conversation_id
+            else None
+        )
 
     async def create_room_memory(self, memory: dict) -> str:
         self.doc = memory
         self.created.append(memory)
         return memory["memory_id"]
 
-    async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
+    async def ensure_room_memory(self, conversation_id: str, defaults: dict) -> dict:
         if self.doc is None:
             self.doc = defaults
         return self.doc
 
-    async def push_and_trim_conversation_turn(self, room_id: str, turn: dict, **kwargs):
+    async def push_and_trim_conversation_turn(
+        self, conversation_id: str, turn: dict, **kwargs
+    ):
         if not self.doc:
             return False, False
         self.pushed.append(turn)
@@ -44,7 +50,7 @@ class StateMemoryRepository:
         return True, True
 
     async def push_and_trim_conversation_turn_if_absent(
-        self, room_id: str, turn: dict, **kwargs
+        self, conversation_id: str, turn: dict, **kwargs
     ):
         if self.duplicate:
             return False, True, True
@@ -55,9 +61,9 @@ class StateMemoryRepository:
         return True, True, False
 
     async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
+        self, conversation_id: str, turn_id: str, turn_notes: dict
     ) -> bool:
-        self.updated_notes.append((room_id, turn_id, turn_notes))
+        self.updated_notes.append((conversation_id, turn_id, turn_notes))
         return True
 
 
@@ -90,7 +96,7 @@ class RaisingLLM:
 
 class FailingNotesMemoryRepository(StateMemoryRepository):
     async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
+        self, conversation_id: str, turn_id: str, turn_notes: dict
     ) -> bool:
         raise RuntimeError("notes write failed")
 
@@ -152,13 +158,13 @@ def test_agent_turn_uses_provided_turn_id():
 @pytest.mark.asyncio
 async def test_project_message_from_history_user_message():
     repo = StateMemoryRepository(
-        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     )
     reader = FakeHistoryReader(
         [
             SimpleNamespace(
                 message_id="msg-1",
-                room_id="r1",
+                conversation_id="r1",
                 message_type="user",
                 content="Ship it",
                 sender_id="u1",
@@ -168,7 +174,7 @@ async def test_project_message_from_history_user_message():
     )
 
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="msg-1",
         repository=repo,
         room_history_reader=reader,
@@ -183,7 +189,7 @@ async def test_project_message_from_history_user_message():
 @pytest.mark.asyncio
 async def test_project_message_from_history_missing_message():
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="missing",
         repository=StateMemoryRepository(),
         room_history_reader=FakeHistoryReader([]),
@@ -197,19 +203,22 @@ async def test_project_message_from_history_missing_message():
 @pytest.mark.asyncio
 async def test_project_message_from_history_duplicate():
     repo = StateMemoryRepository(
-        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW),
+        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW),
         duplicate=True,
     )
     reader = FakeHistoryReader(
         [
             SimpleNamespace(
-                message_id="msg-1", room_id="r1", message_type="user", content="hello"
+                message_id="msg-1",
+                conversation_id="r1",
+                message_type="user",
+                content="hello",
             )
         ]
     )
 
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="msg-1",
         repository=repo,
         room_history_reader=reader,
@@ -248,7 +257,7 @@ async def test_project_message_from_history_user_cleans_mentions_before_attachme
     )
 
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="user-msg-1",
         repository=repo,
         room_history_reader=reader,
@@ -269,7 +278,7 @@ async def test_project_message_from_history_user_cleans_mentions_before_attachme
 @pytest.mark.asyncio
 async def test_project_message_from_history_agent_uses_event_metadata_and_enriches_notes():
     repo = StateMemoryRepository(
-        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     )
     background_tasks = []
     response_text = "agent response " * (LLM_TURN_NOTES_THRESHOLD * 4)
@@ -289,7 +298,7 @@ async def test_project_message_from_history_agent_uses_event_metadata_and_enrich
     )
 
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="agent-msg-1",
         repository=repo,
         room_history_reader=reader,
@@ -327,7 +336,7 @@ async def test_project_message_from_history_agent_uses_event_metadata_and_enrich
 @pytest.mark.asyncio
 async def test_project_message_from_history_agent_falls_back_to_translated_metadata():
     repo = StateMemoryRepository(
-        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     )
     reader = FakeHistoryReader(
         [
@@ -347,7 +356,7 @@ async def test_project_message_from_history_agent_falls_back_to_translated_metad
     )
 
     result = await projection.project_message_from_history(
-        room_id="r1",
+        conversation_id="r1",
         message_id="agent-msg-1",
         repository=repo,
         room_history_reader=reader,
@@ -373,7 +382,7 @@ async def test_enrich_turn_notes_swallows_persistence_failures(monkeypatch):
         repository=FailingNotesMemoryRepository(),
         llm_provider=FakeLLM(),
         llm_config=ContextMemoryLLMConfig(),
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         heuristic_notes={"one_liner": "old notes"},
         content="long enough content for enrichment",
@@ -397,12 +406,12 @@ async def test_extract_turn_notes_llm_logs_fallback_failure(caplog):
 @pytest.mark.asyncio
 async def test_add_synthesis_to_history():
     repo = StateMemoryRepository(
-        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     )
 
     turn_id = await projection.add_synthesis_to_history(
         repository=repo,
-        room_id="r1",
+        conversation_id="r1",
         synthesis_text="Summary",
         trajectory=None,
         id_factory=id_factory(),

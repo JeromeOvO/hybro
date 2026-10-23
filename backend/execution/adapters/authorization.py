@@ -42,12 +42,15 @@ class MembershipAuthorizationRefresh:
         *,
         binding: AgentToolBindingRecord,
         requesting_subject_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         resource_refs: list[str],
     ) -> AuthorizationOutcome:
         del resource_refs
-        if binding.room_id != room_id or binding.room_epoch != room_epoch:
+        if (
+            binding.conversation_id != conversation_id
+            or binding.room_epoch != room_epoch
+        ):
             return "denied"
         if _digest(requesting_subject_id) != binding.requesting_subject_digest:
             return "denied"
@@ -62,7 +65,7 @@ class MembershipAuthorizationRefresh:
         }:
             try:
                 member = await self._room_ownership.verify_room_agent_membership(
-                    room_id, binding.agent_id
+                    conversation_id, binding.agent_id
                 )
             except (ConnectionError, TimeoutError):
                 return "transient_failure"

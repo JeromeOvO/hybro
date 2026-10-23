@@ -117,7 +117,7 @@ function HistoryRow({
 }: HistoryRowProps) {
   const [title, setTitle] = React.useState(room.title)
   const inputRef = React.useRef<HTMLInputElement>(null)
-  const sortable = useSortable({ id: room.room_id, disabled: !dragEnabled })
+  const sortable = useSortable({ id: room.conversation_id, disabled: !dragEnabled })
 
   React.useEffect(() => setTitle(room.title), [room.title])
   React.useEffect(() => {
@@ -151,7 +151,7 @@ function HistoryRow({
           : 'hover:bg-black/10 dark:hover:bg-white/10',
         sortable.isDragging && 'z-20 bg-sidebar-accent opacity-80 shadow-md',
       )}
-      data-testid={`history-room-${room.room_id}`}
+      data-testid={`history-room-${room.conversation_id}`}
     >
       {dragEnabled ? (
         <>
@@ -189,7 +189,7 @@ function HistoryRow({
         />
       ) : (
         <Link
-          href={routes.room(room.room_id)}
+          href={routes.room(room.conversation_id)}
           prefetch={false}
           scroll={false}
           aria-current={active ? 'page' : undefined}
@@ -272,7 +272,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
   const renameMutation = useOptimisticMutation(
     ({ roomId, title }: { roomId: string; title: string }) => updateRoomHistoryItem(roomId, { title }),
     (data, variables) => ({
-      items: data.items.map((item) => item.room_id === variables.roomId ? { ...item, title: variables.title } : item),
+      items: data.items.map((item) => item.conversation_id === variables.roomId ? { ...item, title: variables.title } : item),
     }),
     'Could not rename the conversation',
   )
@@ -282,7 +282,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
     (data, variables) => {
       const maxOrder = Math.max(0, ...data.items.filter((item) => item.is_pinned).map((item) => item.pin_order ?? 0))
       return {
-        items: data.items.map((item) => item.room_id === variables.roomId
+        items: data.items.map((item) => item.conversation_id === variables.roomId
           ? { ...item, is_pinned: variables.pinned, pin_order: variables.pinned ? maxOrder + 1 : null }
           : item),
       }
@@ -292,7 +292,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
 
   const deleteMutation = useOptimisticMutation(
     (roomId: string) => deleteRoomHistoryItem(roomId),
-    (data, roomId) => ({ items: data.items.filter((item) => item.room_id !== roomId) }),
+    (data, roomId) => ({ items: data.items.filter((item) => item.conversation_id !== roomId) }),
     'Could not delete the conversation',
   )
 
@@ -301,7 +301,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
     (data, roomIds) => {
       const order = new Map(roomIds.map((id, index) => [id, index + 1]))
       return {
-        items: data.items.map((item) => order.has(item.room_id) ? { ...item, pin_order: order.get(item.room_id)! } : item),
+        items: data.items.map((item) => order.has(item.conversation_id) ? { ...item, pin_order: order.get(item.conversation_id)! } : item),
       }
     },
     'Could not save the pinned order',
@@ -317,27 +317,27 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
 
   const renderRow = (room: RoomHistoryItem, dragEnabled = false) => (
     <HistoryRow
-      key={room.room_id}
+      key={room.conversation_id}
       room={room}
       dragEnabled={dragEnabled && !reorderMutation.isPending}
-      active={pathname === routes.room(room.room_id)}
-      editing={editingId === room.room_id}
-      onStartRename={() => setEditingId(room.room_id)}
+      active={pathname === routes.room(room.conversation_id)}
+      editing={editingId === room.conversation_id}
+      onStartRename={() => setEditingId(room.conversation_id)}
       onRename={(title) => {
         setEditingId(null)
-        if (title !== room.title) renameMutation.mutate({ roomId: room.room_id, title })
+        if (title !== room.title) renameMutation.mutate({ roomId: room.conversation_id, title })
       }}
-      onTogglePin={() => pinMutation.mutate({ roomId: room.room_id, pinned: !room.is_pinned })}
+      onTogglePin={() => pinMutation.mutate({ roomId: room.conversation_id, pinned: !room.is_pinned })}
       onDelete={() => setDeleteTarget(room)}
     />
   )
 
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (reorderMutation.isPending || !over || active.id === over.id) return
-    const oldIndex = pinned.findIndex((item) => item.room_id === active.id)
-    const newIndex = pinned.findIndex((item) => item.room_id === over.id)
+    const oldIndex = pinned.findIndex((item) => item.conversation_id === active.id)
+    const newIndex = pinned.findIndex((item) => item.conversation_id === over.id)
     if (oldIndex < 0 || newIndex < 0) return
-    reorderMutation.mutate(arrayMove(pinned, oldIndex, newIndex).map((item) => item.room_id))
+    reorderMutation.mutate(arrayMove(pinned, oldIndex, newIndex).map((item) => item.conversation_id))
   }
 
   return (
@@ -389,7 +389,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
               <SidebarMenuItem>
                 <div className="px-3 pb-1 pt-2 text-[0.68rem] font-medium uppercase tracking-wider text-muted-foreground">Pinned</div>
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                  <SortableContext items={pinned.map((item) => item.room_id)} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={pinned.map((item) => item.conversation_id)} strategy={verticalListSortingStrategy}>
                     <div className="space-y-0.5">{pinned.map((room) => renderRow(room, true))}</div>
                   </SortableContext>
                 </DndContext>
@@ -421,7 +421,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
               disabled={deleteMutation.isPending}
               onClick={() => {
                 if (!deleteTarget) return
-                const roomId = deleteTarget.room_id
+                const roomId = deleteTarget.conversation_id
                 setDeleteTarget(null)
                 deleteMutation.mutate(roomId, {
                   onSuccess: () => {

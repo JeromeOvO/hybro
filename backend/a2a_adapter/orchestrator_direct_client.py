@@ -80,7 +80,7 @@ class _DispatchCommand(Protocol):
     direct_mode: str | None
     task: str
     materialized_resources: list[Any]
-    room_id: str
+    conversation_id: str
     room_epoch: int
     deadline_at: Any
     # url plus a SecretStr token, or None when push is not configured.
@@ -100,7 +100,7 @@ class _ContinuationCommand(Protocol):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str
     room_epoch: int
     created_at: Any
 
@@ -114,7 +114,7 @@ class _ModelReplyCommand(Protocol):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str
     room_epoch: int
     message_text: str
     interaction_fingerprint: str | None
@@ -584,7 +584,7 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
     task: Any,
     *,
     epoch_owner: Any | None,
-    room_id: str | None,
+    conversation_id: str | None,
     room_epoch: int | None,
     call_record_id: str | None,
     message_id: str | None,
@@ -609,9 +609,9 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
             encoded = getattr(file_content, "bytes", None)
             if not isinstance(encoded, str) or not encoded:
                 continue
-            if epoch_owner is None or not room_id or room_epoch is None:
+            if epoch_owner is None or not conversation_id or room_epoch is None:
                 raise RuntimeError(
-                    "epoch_owner, room_id, and active room_epoch are required to persist inline agent file artifacts"
+                    "epoch_owner, conversation_id, and active room_epoch are required to persist inline agent file artifacts"
                 )
             if len(encoded) > (50 * 1024 * 1024 * 4 // 3) + 4:
                 raise ValueError("encoded payload exceeds max 50 MiB base64 length")
@@ -648,7 +648,7 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
                 ).encode()
             ).hexdigest()
             content_url = await epoch_owner.commit(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 room_epoch=room_epoch,
                 source_message_id=message_id or "direct",
                 origin_key=origin_key,
@@ -729,7 +729,7 @@ class DirectA2AStream:
             await _materialize_task_artifacts_epoch_fenced(
                 internal_task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(self._command, "room_id", None),
+                conversation_id=getattr(self._command, "conversation_id", None),
                 room_epoch=getattr(self._command, "room_epoch", None),
                 call_record_id=getattr(self._command, "call_record_id", None),
                 message_id=getattr(self._command, "message_id", None),
@@ -1069,7 +1069,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "message_id", None),
@@ -1193,7 +1193,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "message_id", None),
@@ -1268,7 +1268,7 @@ class OrchestratorDirectA2AClient:
         call_record_id: str,
         endpoint_scope: str,
         agent_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         message_id: str,
         expected_task_id: str,
@@ -1295,7 +1295,7 @@ class OrchestratorDirectA2AClient:
                 await _materialize_task_artifacts_epoch_fenced(
                     task,
                     epoch_owner=self._epoch_owner,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     room_epoch=room_epoch,
                     call_record_id=call_record_id,
                     message_id=message_id,
@@ -1404,7 +1404,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),
@@ -1461,7 +1461,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),
@@ -1513,7 +1513,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),

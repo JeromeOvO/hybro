@@ -94,12 +94,12 @@ def agent_tool(name: str, label: str) -> ToolDefinition:
 def make_passthrough_run(*, agent_ids=("agent-1",), source="mention", text="hello"):
     config = RoomAgentSessionConfig(
         session_id="session-1",
-        room_id="room-1",
+        conversation_id="room-1",
         profile=passthrough_profile(),
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             source=source,
-            room_id="room-1",
+            conversation_id="room-1",
             agent_ids=list(agent_ids),
             authorization_basis=AuthorizationBasis(kind="mention"),
         ),
@@ -217,7 +217,7 @@ class PublicHistory:
         self.events: list[str] = []
         self.translator = PublicProjectionTranslator()
 
-    async def read(self, _room_id, _run_id):
+    async def read(self, _conversation_id, _run_id):
         return list(self.records.values())
 
     async def lifecycle(self, event_type, run, payload):
@@ -231,7 +231,7 @@ class PublicHistory:
                 sequence=len(self.events),
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -240,7 +240,7 @@ class PublicHistory:
         if projected is None or projected.event_id in self.records:
             return
         self.records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": len(self.records) + 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -270,7 +270,7 @@ class PublicHistory:
             room_seq += 1
             assert fold.apply(
                 {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "room_seq": room_seq,
                     "kind": "agent_response",
                     "ts": NOW.isoformat(),
@@ -284,7 +284,7 @@ class PublicHistory:
             )
         room_seq += 1
         settled = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_seq,
             "kind": "run_event",
             "ts": NOW.isoformat(),

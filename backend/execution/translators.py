@@ -8,7 +8,7 @@ def room_response_to_execution_ack(
     response: RoomCenterUserMessageResponse,
 ) -> ExecutionAck:
     return ExecutionAck(
-        room_id=response.room_id,
+        conversation_id=response.conversation_id,
         message_id=response.message_id,
         dispatch_root_message_id=response.dispatch_root_message_id,
         user_id=response.user_id,

@@ -33,7 +33,7 @@ describe('handleArtifactUpdate', () => {
       { roomId: 'room-1', lifecycle: makeLifecycle() },
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-1',
@@ -117,7 +117,7 @@ describe('handleArtifactUpdate', () => {
         { roomId: 'room-1', lifecycle: makeLifecycle() },
         {
           type: 'artifact_update',
-          room_id: 'room-1',
+          conversation_id: 'room-1',
           timestamp: '2026-07-13T00:00:01.000Z',
           data,
         } as unknown as Parameters<typeof handleArtifactUpdate>[1],
@@ -161,7 +161,7 @@ describe('handleArtifactUpdate', () => {
       { roomId: 'room-1', lifecycle: makeLifecycle() },
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-1',

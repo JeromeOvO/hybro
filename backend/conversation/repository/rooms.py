@@ -13,9 +13,11 @@ class ConversationRoomStore:
     def __init__(self, *, room_repository) -> None:
         self._room_repository = room_repository
 
-    async def get_room_by_room_id(self, room_id: str) -> Room | None:
+    async def get_room_by_room_id(self, conversation_id: str) -> Room | None:
         try:
-            return _safe_parse_room(await self._room_repository.get_by_id(room_id))
+            return _safe_parse_room(
+                await self._room_repository.get_by_id(conversation_id)
+            )
         except Exception:
             logger.error("Failed to get room", exc_info=True)
             return None

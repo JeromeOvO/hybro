@@ -108,7 +108,7 @@ class RoomTimelineProjector:
             return None, None
         if (
             request.get("request_id") != request_id
-            or request.get("room_id") != agent_message.room_id
+            or request.get("room_id") != agent_message.conversation_id
             or request.get("public_source") not in {"agent", "supervisor", "system"}
             or request.get("status") in {"canceled", "expired"}
         ):
@@ -178,7 +178,7 @@ class RoomTimelineProjector:
         if message_content is not None and message_content.attachments:
             for attachment in message_content.attachments:
                 metadata = await self._attachment_metadata_reader.get_for_room_file(
-                    user_msg.room_id,
+                    user_msg.conversation_id,
                     attachment.file_id,
                 )
                 attachment.file_url = (
@@ -189,7 +189,7 @@ class RoomTimelineProjector:
                     else None
                 )
         return RoomMessage(
-            room_id=user_msg.room_id,
+            conversation_id=user_msg.conversation_id,
             message_id=user_msg.message_id,
             client_request_id=user_msg.client_request_id,
             message_type="user",
@@ -290,7 +290,7 @@ class RoomTimelineProjector:
             public_extend_info["hitl_request_id"] = trusted_hitl_request_id
 
         return RoomMessage(
-            room_id=agent_msg.room_id,
+            conversation_id=agent_msg.conversation_id,
             message_id=agent_msg.message_id,
             client_request_id=agent_msg.client_request_id,
             message_type="agent",

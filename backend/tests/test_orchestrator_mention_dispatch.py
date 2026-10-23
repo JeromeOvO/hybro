@@ -23,7 +23,7 @@ OTHER_ID = "aabbccddeeff00112233445566778899"
 def _message(text: str, extend_info: dict | None = None):
     return SimpleNamespace(
         message_id="msg-1",
-        room_id="room-1",
+        conversation_id="room-1",
         message_content=SimpleNamespace(message_text=text, attachments=None),
         extend_info=extend_info or {},
     )
@@ -31,7 +31,7 @@ def _message(text: str, extend_info: dict | None = None):
 
 def _request(*, scope: dict, mode: str = "supervisor") -> ExecutionRequest:
     return ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode=mode,
         agent_scope=scope,
@@ -43,7 +43,7 @@ def _resolver(message, *, room_agents: list[str] | None = None):
     async def get_user_message(message_id):
         return message
 
-    async def list_room_agent_ids(room_id):
+    async def list_room_agent_ids(conversation_id):
         return room_agents or []
 
     return RoomMessageEnvelopeResolver(

@@ -241,9 +241,9 @@ class MongoAgentToolBindingStore:
             key=lambda item: item.tool_name,
         )
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
-            {"room_id": room_id, "room_epoch": room_epoch}
+            {"room_id": conversation_id, "room_epoch": room_epoch}
         )
         return int(getattr(result, "deleted_count", 0))
 
@@ -520,9 +520,9 @@ class MongoAgentCallLedgerStore:
         values = await _to_list(self.collection.find({"run_id": run_id}))
         return [_from_document(AgentCallLedgerRecord, value) for value in values]
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
-            {"room_id": room_id, "room_epoch": room_epoch}
+            {"room_id": conversation_id, "room_epoch": room_epoch}
         )
         return int(getattr(result, "deleted_count", 0))
 
@@ -766,9 +766,9 @@ class MongoObservationInboxStore:
         result = await self.collection.delete_many({"binding_scope": binding_scope})
         return int(getattr(result, "deleted_count", 0))
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
-            {"room_id": room_id, "room_epoch": room_epoch}
+            {"room_id": conversation_id, "room_epoch": room_epoch}
         )
         return int(getattr(result, "deleted_count", 0))
 
@@ -816,9 +816,9 @@ class MongoObservationConflictStore:
         )
         return [_from_document(A2AObservationConflictRecord, value) for value in values]
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
-            {"room_id": room_id, "room_epoch": room_epoch}
+            {"room_id": conversation_id, "room_epoch": room_epoch}
         )
         return int(getattr(result, "deleted_count", 0))
 
@@ -827,18 +827,20 @@ class MongoRoomEpochStore:
     def __init__(self, collection: AsyncMongoCollection) -> None:
         self.collection = _bounded(collection)
 
-    async def read(self, room_id: str) -> RoomEpoch | None:
-        value = await self.collection.find_one({"room_id": room_id})
+    async def read(self, conversation_id: str) -> RoomEpoch | None:
+        value = await self.collection.find_one({"room_id": conversation_id})
         return _from_document(RoomEpoch, value) if value else None
 
-    async def read_active(self, room_id: str) -> RoomEpoch | None:
-        value = await self.collection.find_one({"room_id": room_id, "active": True})
+    async def read_active(self, conversation_id: str) -> RoomEpoch | None:
+        value = await self.collection.find_one(
+            {"room_id": conversation_id, "active": True}
+        )
         return _from_document(RoomEpoch, value) if value else None
 
     async def activate(
-        self, room_id: str, creation_id: str, *, activated_at: datetime
+        self, conversation_id: str, creation_id: str, *, activated_at: datetime
     ) -> tuple[str, RoomEpoch | None]:
-        value = await self.collection.find_one({"room_id": room_id})
+        value = await self.collection.find_one({"room_id": conversation_id})
         current = _from_document(RoomEpoch, value) if value else None
         if current and current.active:
             return (
@@ -850,7 +852,7 @@ class MongoRoomEpochStore:
             return "conflict", current
         epoch = 1 if current is None else current.high_water_mark + 1
         record = RoomEpoch(
-            room_id=room_id,
+            conversation_id=conversation_id,
             epoch=epoch,
             high_water_mark=epoch,
             active=True,
@@ -861,7 +863,7 @@ class MongoRoomEpochStore:
         try:
             result = await self.collection.replace_one(
                 {
-                    "room_id": room_id,
+                    "room_id": conversation_id,
                     "high_water_mark": current.high_water_mark
                     if current
                     else {"$exists": False},
@@ -883,7 +885,7 @@ class MongoRoomEpochStore:
         )
         if accepted:
             return "accepted", record
-        winner_value = await self.collection.find_one({"room_id": room_id})
+        winner_value = await self.collection.find_one({"room_id": conversation_id})
         winner = _from_document(RoomEpoch, winner_value) if winner_value else None
         if winner is not None and _same_room_activation(winner, record):
             return "replayed", winner
@@ -892,11 +894,16 @@ class MongoRoomEpochStore:
         return "conflict", winner or current
 
     async def deactivate(
-        self, room_id: str, epoch: int, deletion_id: str, *, deactivated_at: datetime
+        self,
+        conversation_id: str,
+        epoch: int,
+        deletion_id: str,
+        *,
+        deactivated_at: datetime,
     ) -> tuple[str, RoomEpoch | None]:
-        current = await self.read_active(room_id)
+        current = await self.read_active(conversation_id)
         if current is None or current.epoch != epoch:
-            value = await self.collection.find_one({"room_id": room_id})
+            value = await self.collection.find_one({"room_id": conversation_id})
             existing = _from_document(RoomEpoch, value) if value else None
             if (
                 existing
@@ -916,7 +923,7 @@ class MongoRoomEpochStore:
         operation_error: RecoverableAdapterError | None = None
         try:
             result = await self.collection.replace_one(
-                {"room_id": room_id, "epoch": epoch, "active": True},
+                {"room_id": conversation_id, "epoch": epoch, "active": True},
                 record.model_dump(mode="python"),
             )
         except RecoverableAdapterError as exc:
@@ -924,7 +931,7 @@ class MongoRoomEpochStore:
             result = None
         if result is not None and int(getattr(result, "modified_count", 0)) == 1:
             return "accepted", record
-        winner_value = await self.collection.find_one({"room_id": room_id})
+        winner_value = await self.collection.find_one({"room_id": conversation_id})
         winner = _from_document(RoomEpoch, winner_value) if winner_value else None
         if winner is not None and _same_room_deactivation(winner, record):
             return "replayed", winner
@@ -932,18 +939,18 @@ class MongoRoomEpochStore:
             raise operation_error
         return "conflict", winner or current
 
-    async def verify_active(self, room_id: str, epoch: int) -> bool:
+    async def verify_active(self, conversation_id: str, epoch: int) -> bool:
         value = await self.collection.find_one(
-            {"room_id": room_id, "epoch": epoch, "active": True}
+            {"room_id": conversation_id, "epoch": epoch, "active": True}
         )
         return value is not None
 
     async def verify_cleanup_epoch(
-        self, room_id: str, epoch: int, deletion_id: str
+        self, conversation_id: str, epoch: int, deletion_id: str
     ) -> bool:
         value = await self.collection.find_one(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "epoch": epoch,
                 "active": False,
                 "deletion_id": deletion_id,
@@ -954,7 +961,7 @@ class MongoRoomEpochStore:
 
 def _same_room_activation(winner: RoomEpoch, intended: RoomEpoch) -> bool:
     return (
-        winner.room_id == intended.room_id
+        winner.conversation_id == intended.conversation_id
         and winner.epoch == intended.epoch
         and winner.high_water_mark == intended.high_water_mark
         and winner.active
@@ -965,7 +972,7 @@ def _same_room_activation(winner: RoomEpoch, intended: RoomEpoch) -> bool:
 
 def _same_room_deactivation(winner: RoomEpoch, intended: RoomEpoch) -> bool:
     return (
-        winner.room_id == intended.room_id
+        winner.conversation_id == intended.conversation_id
         and winner.epoch == intended.epoch
         and winner.high_water_mark == intended.high_water_mark
         and not winner.active
@@ -984,7 +991,7 @@ def _inbox_evidence_identity(
         record.payload_digest,
         record.received_at,
         record.binding_scope,
-        record.room_id,
+        record.conversation_id,
         record.room_epoch,
         record.call_record_id,
         record.task_id,
@@ -998,7 +1005,7 @@ def _inbox_evidence_identity(
 def _conflict_identity(record: A2AObservationConflictRecord) -> tuple[str, ...]:
     return (
         record.conflict_id,
-        record.room_id,
+        record.conversation_id,
         str(record.room_epoch),
         record.source_identity,
         record.accepted_observation_id,

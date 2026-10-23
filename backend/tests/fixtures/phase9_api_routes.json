@@ -773,7 +773,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.ChatRooms",
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -801,7 +801,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.ChatRooms",
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "response_class": null,
     "response_model": "RoomHistoryItem",
     "status_code": null,
@@ -829,7 +829,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/rooms/{room_id}/active-runs",
+    "path": "/api/v1/rooms/{conversation_id}/active-runs",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -857,7 +857,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.ChatRooms",
-    "path": "/api/v1/rooms/{room_id}/messages",
+    "path": "/api/v1/rooms/{conversation_id}/messages",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -886,7 +886,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.ChatRooms",
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -916,7 +916,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/rooms/{room_id}/messages",
+    "path": "/api/v1/rooms/{conversation_id}/messages",
     "response_class": null,
     "response_model": "RoomCenterUserMessageResponse",
     "status_code": null,
@@ -968,7 +968,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.RoomRouteReader",
-    "path": "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "path": "/api/v1/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -994,7 +994,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/interactions/{interaction_id}/cancel",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1022,7 +1022,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/pending",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1050,7 +1050,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/respond-batch",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1105,7 +1105,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.SSEStateReader",
-    "path": "/api/v1/sse/room/{room_id}/events",
+    "path": "/api/v1/sse/room/{conversation_id}/events",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1133,7 +1133,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.SSERouteTransport",
-    "path": "/api/v1/sse/room/{room_id}/status",
+    "path": "/api/v1/sse/room/{conversation_id}/status",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1161,7 +1161,7 @@
       "422"
     ],
     "owning_protocol": "common.protocols.SSERouteTransport",
-    "path": "/api/v1/sse/room/{room_id}/stream",
+    "path": "/api/v1/sse/room/{conversation_id}/stream",
     "response_class": null,
     "response_model": null,
     "status_code": null,

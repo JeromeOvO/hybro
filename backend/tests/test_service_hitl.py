@@ -181,7 +181,7 @@ async def test_canonical_interaction_cancel_claims_run_before_hitl_mutation():
     )
 
     version = await service.cancel_interaction_by_user(
-        room_id="room-1", interaction_id="interaction-1", expected_version=1
+        conversation_id="room-1", interaction_id="interaction-1", expected_version=1
     )
 
     assert version == 2
@@ -209,7 +209,7 @@ async def test_canonical_interaction_cancel_loses_to_completed_run():
 
     with pytest.raises(HITLConflictError, match="lifecycle winner"):
         await service.cancel_interaction_by_user(
-            room_id="room-1", interaction_id="interaction-1", expected_version=1
+            conversation_id="room-1", interaction_id="interaction-1", expected_version=1
         )
 
     lifecycle.terminalize_interaction.assert_not_awaited()
@@ -231,7 +231,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=sample_hitl_request,
         )
@@ -239,7 +239,7 @@ class TestEmitHitlEvent:
         mock_hitl_delivery.emit.assert_awaited_once()
         event = mock_hitl_delivery.emit.await_args.args[0]
 
-        assert event.room_id == sample_hitl_request.room_id
+        assert event.conversation_id == sample_hitl_request.conversation_id
         assert event.event_type == "hitl_request"
         assert event.request_id == sample_hitl_request.request_id
         assert event.prompt == sample_hitl_request.prompt
@@ -258,7 +258,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_RECEIVED,
             request=sample_hitl_request,
         )
@@ -280,7 +280,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.ERROR,
             request=sample_hitl_request,
             error="Something went wrong",
@@ -312,7 +312,7 @@ class TestEmitHitlEvent:
         )
 
         await hitl_service._emit_hitl_event(
-            room_id=req.room_id,
+            conversation_id=req.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=req,
         )
@@ -349,7 +349,7 @@ class TestEmitHitlEvent:
         )
 
         await hitl_service._emit_hitl_event(
-            room_id=req.room_id,
+            conversation_id=req.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=req,
         )
@@ -371,7 +371,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=sample_hitl_request,
         )
@@ -379,7 +379,7 @@ class TestEmitHitlEvent:
         assert request_event.related_message_id == sample_hitl_request.user_message_id
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_RECEIVED,
             request=sample_hitl_request,
         )

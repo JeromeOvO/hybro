@@ -38,7 +38,7 @@ class AuthorizationRefreshPort(Protocol):
         *,
         binding: AgentToolBindingRecord,
         requesting_subject_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         resource_refs: list[str],
     ) -> Literal["authorized", "denied", "transient_failure"]: ...
@@ -51,7 +51,7 @@ class AgentToolBindingStore(Protocol):
 
     async def list_for_run(self, run_id: str) -> list[AgentToolBindingRecord]: ...
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int: ...
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int: ...
 
 
 class PreparedInvocationSnapshotReader(Protocol):
@@ -118,7 +118,7 @@ class AgentCallLedgerStore(Protocol):
 
     async def list_for_run(self, run_id: str) -> list[AgentCallLedgerRecord]: ...
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int: ...
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int: ...
 
 
 class ObservationInboxStore(Protocol):
@@ -171,7 +171,7 @@ class ObservationInboxStore(Protocol):
 
     async def delete_by_binding_scope(self, binding_scope: str) -> int: ...
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int: ...
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int: ...
 
 
 class NormalizedObservationRecorder(Protocol):
@@ -196,7 +196,7 @@ class ObservationConflictStore(Protocol):
         self, source_identity: str
     ) -> list[A2AObservationConflictRecord]: ...
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int: ...
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int: ...
 
 
 class A2ADispatchPort(Protocol):
@@ -230,7 +230,7 @@ class ResourceMaterializerPort(Protocol):
         self,
         manifest: FrozenCallResourceManifest,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         allowed_input_modes: list[str],
         deadline_at: datetime,
@@ -275,11 +275,11 @@ class HITLApplicationPort(Protocol):
     ) -> tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str] | None: ...
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]: ...
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]: ...
 
     async def publish(self, interaction_id: str, *, call_record_id: str) -> str: ...
@@ -320,23 +320,23 @@ class ObservationIngressAuthenticator(Protocol):
 
 
 class RoomEpochStore(Protocol):
-    async def read_active(self, room_id: str) -> RoomEpoch | None: ...
+    async def read_active(self, conversation_id: str) -> RoomEpoch | None: ...
 
     async def activate(
-        self, room_id: str, creation_id: str, *, activated_at: datetime
+        self, conversation_id: str, creation_id: str, *, activated_at: datetime
     ) -> tuple[StoreOutcome, RoomEpoch | None]: ...
 
     async def deactivate(
         self,
-        room_id: str,
+        conversation_id: str,
         epoch: int,
         deletion_id: str,
         *,
         deactivated_at: datetime,
     ) -> tuple[StoreOutcome, RoomEpoch | None]: ...
 
-    async def verify_active(self, room_id: str, epoch: int) -> bool: ...
+    async def verify_active(self, conversation_id: str, epoch: int) -> bool: ...
 
     async def verify_cleanup_epoch(
-        self, room_id: str, epoch: int, deletion_id: str
+        self, conversation_id: str, epoch: int, deletion_id: str
     ) -> bool: ...

@@ -640,7 +640,7 @@ src/hooks/room/sse-handlers/
     `-- misc.ts
 ```
 
-`src/lib/types/sse.ts` defines the final room SSE frame envelope as `{ type, room_id, timestamp, data }`. The handled room frame types are:
+`src/lib/types/sse.ts` defines the final room SSE frame envelope as `{ type, conversation_id, timestamp, data }`. The handled room frame types are:
 
 - Connection/system: `connected`, `heartbeat`, `error`, `run_event`, `cancellation`.
 - Turn and task updates: `processing_status`, `task_submitted`, `task_update`, `artifact_update`.
@@ -1267,7 +1267,7 @@ auto-refreshes pending HITL so a follow-up open prompt replaces the recovery UI
 without a manual "Check status" click; that button remains only for
 `delivery_uncertain`. When both an applying recovery and a new open prompt exist,
 the composer prefers the open prompt. The client submits the complete answer
-inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
+inventory to `POST /rooms/{conversation_id}/hitl/respond-batch`, preserving
 `client_request_id` for run correlation. A successful answer acknowledgement
 confirms the submitted answers, but resumes processing only if the current exact
 User/client root and interaction still permit it. Terminal canonical state, a

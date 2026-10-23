@@ -8,9 +8,9 @@ from typing import Any
 class IdempotencyConflictError(Exception):
     """The same room/request key was reused for a different semantic payload."""
 
-    def __init__(self, room_id: str, client_request_id: str) -> None:
+    def __init__(self, conversation_id: str, client_request_id: str) -> None:
         super().__init__("The idempotency key was already used for a different request")
-        self.room_id = room_id
+        self.conversation_id = conversation_id
         self.client_request_id = client_request_id
 
 

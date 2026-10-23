@@ -92,12 +92,15 @@ def test_models_default_to_chat_product():
         ).owner_product
         == "chat"
     )
-    assert RoomInfo(room_id="r", room_name="r", owner_id="o").owner_product == "chat"
+    assert (
+        RoomInfo(conversation_id="r", room_name="r", owner_id="o").owner_product
+        == "chat"
+    )
 
 
 def test_create_room_doc_and_room_info_thread_owner_product():
     doc = create_room_doc(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="o",
         owner_name="O",
         room_name="r",
@@ -201,13 +204,13 @@ async def test_pinned_order_refuses_session_container():
             success=True,
             status_code=200,
             error=None,
-            room_list=[SimpleNamespace(room_id="room-1", is_pinned=True)],
+            room_list=[SimpleNamespace(conversation_id="room-1", is_pinned=True)],
         )
     )
     rooms.update_history_fields = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await reorder_pinned_rooms(
-            PinnedRoomOrderUpdate(room_ids=["room-1"]),
+            PinnedRoomOrderUpdate(conversation_ids=["room-1"]),
             user=_user(),
             store=_store(_room()),
             rooms=rooms,
@@ -235,7 +238,7 @@ async def test_sse_cancel_refuses_session_container():
     db = MagicMock()
     db.get_room_user_message_by_message_id = AsyncMock(
         return_value=RoomUserMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             user_id=OWNER,
             message_content=MessageContent(message_text="hi"),
@@ -262,7 +265,7 @@ async def test_file_upload_refuses_session_container():
     with pytest.raises(HTTPException) as exc_info:
         await upload_file(
             upload,
-            room_id="room-1",
+            conversation_id="room-1",
             user=_user(),
             storage=storage,
             room_ownership=ownership,

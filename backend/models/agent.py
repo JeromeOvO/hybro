@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel, field_serializer
 
+from common.dto.base import accepts_stored_conversation_id
 from common.types import AgentCard
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ class AgentCapabilityIssue(BaseModel):
     agent_id: str
     error_message: str
     query_text: str  # What was asked (for context)
-    room_id: str | None = None
+    conversation_id: str | None = accepts_stored_conversation_id(None)
     message_id: str | None = None
     status: IssueStatus = IssueStatus.open
     created_at: datetime

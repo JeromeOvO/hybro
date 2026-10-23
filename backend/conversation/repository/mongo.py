@@ -97,8 +97,8 @@ class RoomMongoRepository:
             name="owner_history_order",
         )
 
-    async def get_by_id(self, room_id: str) -> dict | None:
-        return await self._rooms.find_one({"room_id": room_id})
+    async def get_by_id(self, conversation_id: str) -> dict | None:
+        return await self._rooms.find_one({"room_id": conversation_id})
 
     async def get_by_owner(self, owner_id: str) -> list[dict]:
         return await self._rooms.find(
@@ -164,10 +164,10 @@ class RoomMongoRepository:
         inserted_id = await self._rooms.insert_one(dict(room))
         return str(room.get("room_id") or inserted_id)
 
-    async def update(self, room_id: str, updates: dict) -> bool:
+    async def update(self, conversation_id: str, updates: dict) -> bool:
         return await self._rooms.update_one(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "$or": [
                     {"lifecycle_state": "active"},
                     {"lifecycle_state": {"$exists": False}},
@@ -176,10 +176,10 @@ class RoomMongoRepository:
             {"$set": dict(updates)},
         )
 
-    async def update_fields(self, room_id: str, updates: dict) -> dict | None:
+    async def update_fields(self, conversation_id: str, updates: dict) -> dict | None:
         return await self._rooms.find_one_and_update(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "$or": [
                     {"lifecycle_state": "active"},
                     {"lifecycle_state": {"$exists": False}},
@@ -189,10 +189,10 @@ class RoomMongoRepository:
             return_document=True,
         )
 
-    async def touch_activity(self, room_id: str, activity_at: datetime) -> bool:
+    async def touch_activity(self, conversation_id: str, activity_at: datetime) -> bool:
         return await self._rooms.update_one(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "$or": [
                     {"lifecycle_state": "active"},
                     {"lifecycle_state": {"$exists": False}},
@@ -203,7 +203,7 @@ class RoomMongoRepository:
 
     async def set_membership(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         agent_set: dict[str, str],
         membership_origin: str,
@@ -212,7 +212,7 @@ class RoomMongoRepository:
         source_group_name: str | None = None,
     ) -> dict | None:
         return await self.update_fields(
-            room_id,
+            conversation_id,
             {
                 "room_agent_set": dict(agent_set),
                 "membership_origin": membership_origin,
@@ -222,8 +222,8 @@ class RoomMongoRepository:
             },
         )
 
-    async def delete(self, room_id: str) -> bool:
-        return await self._rooms.delete_one({"room_id": room_id})
+    async def delete(self, conversation_id: str) -> bool:
+        return await self._rooms.delete_one({"room_id": conversation_id})
 
 
 class MessageMongoRepository:
@@ -237,9 +237,9 @@ class MessageMongoRepository:
         self._user_messages = mongo.collection(user_collection_name)
         self._agent_messages = mongo.collection(agent_collection_name)
 
-    async def delete_room_state(self, room_id: str) -> bool:
+    async def delete_room_state(self, conversation_id: str) -> bool:
         return await delete_room_rows(
-            (self._user_messages, self._agent_messages), room_id
+            (self._user_messages, self._agent_messages), conversation_id
         )
 
     async def ensure_indexes(self) -> None:
@@ -264,7 +264,7 @@ class MessageMongoRepository:
 
     async def get_user_message_by_idempotency_key(
         self,
-        room_id: str,
+        conversation_id: str,
         client_request_id: str,
     ) -> dict | None:
         normalized_client_request_id = client_request_id.strip()
@@ -275,7 +275,7 @@ class MessageMongoRepository:
             raise ValueError("Invalid client_request_id for idempotency lookup")
         return await self._user_messages.find_one(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "client_request_id": normalized_client_request_id,
             }
         )
@@ -287,12 +287,12 @@ class MessageMongoRepository:
         candidate = normalize_timeline_document(
             _canonical_user_message_document(document)
         )
-        room_id = candidate.get("room_id")
+        conversation_id = candidate.get("room_id")
         client_request_id = candidate.get("client_request_id")
         fingerprint = candidate.get("idempotency_fingerprint")
         fingerprint_version = candidate.get("idempotency_fingerprint_version")
-        if not isinstance(room_id, str) or not room_id:
-            raise ValueError("Idempotent user-message insert requires room_id")
+        if not isinstance(conversation_id, str) or not conversation_id:
+            raise ValueError("Idempotent user-message insert requires conversation_id")
         if (
             not isinstance(client_request_id, str)
             or not client_request_id
@@ -314,7 +314,7 @@ class MessageMongoRepository:
             await self._user_messages.insert_one(candidate)
         except DuplicateKeyError as exc:
             existing = await self.get_user_message_by_idempotency_key(
-                room_id,
+                conversation_id,
                 client_request_id,
             )
             if existing is None:
@@ -338,7 +338,7 @@ class MessageMongoRepository:
                     created=False,
                     document=deepcopy(existing),
                 )
-            raise IdempotencyConflictError(room_id, client_request_id) from None
+            raise IdempotencyConflictError(conversation_id, client_request_id) from None
 
         return UserMessageInsertResult(
             message_id=candidate["message_id"],
@@ -375,11 +375,11 @@ class MessageMongoRepository:
         return [by_id[message_id] for message_id in message_ids if message_id in by_id]
 
     async def get_for_room(
-        self, room_id: str, limit: int, before: datetime | None = None
+        self, conversation_id: str, limit: int, before: datetime | None = None
     ) -> list[dict]:
         if limit <= 0:
             return []
-        query: dict[str, Any] = {"room_id": room_id}
+        query: dict[str, Any] = {"room_id": conversation_id}
         if before is not None:
             query["timeline_sort_us"] = {"$lt": timeline_sort_us_from_value(before)}
         sort = [("timeline_sort_us", -1), ("message_id", -1)]
@@ -396,7 +396,7 @@ class MessageMongoRepository:
 
     async def get_timeline_page(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         limit: int,
         before: TimelinePosition | None,
@@ -404,12 +404,12 @@ class MessageMongoRepository:
         fetch_limit = limit + 1
         sort = [("timeline_sort_us", -1), ("message_id", -1)]
         user_rows = await self._user_messages.find(
-            _timeline_query(room_id, source="user", before=before),
+            _timeline_query(conversation_id, source="user", before=before),
             sort=sort,
             limit=fetch_limit,
         )
         agent_rows = await self._agent_messages.find(
-            _timeline_query(room_id, source="agent", before=before),
+            _timeline_query(conversation_id, source="agent", before=before),
             sort=sort,
             limit=fetch_limit,
         )
@@ -445,10 +445,10 @@ class MessageMongoRepository:
         return await self._agent_messages.find_one({"message_id": message_id})
 
     async def get_user_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         rows = await self._user_messages.find(
-            _room_message_query(room_id, before),
+            _room_message_query(conversation_id, before),
             sort=[("timeline_sort_us", -1), ("message_id", -1)],
             limit=limit,
         )
@@ -456,10 +456,10 @@ class MessageMongoRepository:
         return rows
 
     async def get_agent_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         rows = await self._agent_messages.find(
-            _room_message_query(room_id, before),
+            _room_message_query(conversation_id, before),
             sort=[("timeline_sort_us", -1), ("message_id", -1)],
             limit=limit,
         )
@@ -616,26 +616,30 @@ class MessageMongoRepository:
     async def count_agent_messages(self, query: dict) -> int:
         return await self._agent_messages.count(dict(query))
 
-    async def delete_for_room(self, room_id: str) -> dict[str, int]:
-        user_count = await self._user_messages.delete_many({"room_id": room_id})
-        agent_count = await self._agent_messages.delete_many({"room_id": room_id})
+    async def delete_for_room(self, conversation_id: str) -> dict[str, int]:
+        user_count = await self._user_messages.delete_many({"room_id": conversation_id})
+        agent_count = await self._agent_messages.delete_many(
+            {"room_id": conversation_id}
+        )
         return {"user_messages": user_count, "agent_messages": agent_count}
 
 
-def _room_message_query(room_id: str, before: datetime | None) -> dict[str, Any]:
-    query: dict[str, Any] = {"room_id": room_id}
+def _room_message_query(
+    conversation_id: str, before: datetime | None
+) -> dict[str, Any]:
+    query: dict[str, Any] = {"room_id": conversation_id}
     if before is not None:
         query["timeline_sort_us"] = {"$lt": timeline_sort_us_from_value(before)}
     return query
 
 
 def _timeline_query(
-    room_id: str,
+    conversation_id: str,
     *,
     source: str,
     before: TimelinePosition | None,
 ) -> dict[str, Any]:
-    query: dict[str, Any] = {"room_id": room_id}
+    query: dict[str, Any] = {"room_id": conversation_id}
     if before is None:
         return query
 

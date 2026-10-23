@@ -783,388 +783,6 @@
         }
       }
     },
-    "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail": {
-      "get": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Get Canonical Agent Call Detail",
-        "description": "Return authenticated private Tool output by opaque canonical identity.",
-        "operationId": "get_canonical_agent_call_detail_api_v1_rooms__room_id__agent_calls__run_id___public_call_id__detail_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "public_call_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Public Call Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/rooms/{room_id}/hitl/respond-batch": {
-      "post": {
-        "tags": [
-          "hitl",
-          "hitl"
-        ],
-        "summary": "Respond To Hitl Interaction",
-        "description": "Atomically submit every required answer for one interaction.",
-        "operationId": "respond_to_hitl_interaction_api_v1_rooms__room_id__hitl_respond_batch_post",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HITLBatchResponseRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/rooms/{room_id}/hitl/pending": {
-      "get": {
-        "tags": [
-          "hitl",
-          "hitl"
-        ],
-        "summary": "Get Pending Hitl Requests",
-        "description": "Get pending HITL requests for a room (SSE reconnect catch-up).",
-        "operationId": "get_pending_hitl_requests_api_v1_rooms__room_id__hitl_pending_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel": {
-      "post": {
-        "tags": [
-          "hitl",
-          "hitl"
-        ],
-        "summary": "Cancel Hitl Interaction",
-        "description": "Cancel one complete interaction with optimistic version fencing.",
-        "operationId": "cancel_hitl_interaction_api_v1_rooms__room_id__hitl_interactions__interaction_id__cancel_post",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          },
-          {
-            "name": "interaction_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Interaction Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HITLCancelCommand"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sse/room/{room_id}/stream": {
-      "get": {
-        "tags": [
-          "sse"
-        ],
-        "summary": "Stream Room Messages",
-        "description": "create SSE message stream for specified room\n\nThe stream is snapshot-driven (Room Stream Snapshot plan \u00a74): the\n``connected`` handshake carries the room's latest contiguous ``room_seq``\nand a ``snapshot`` frame follows as the first frame. ``?snapshot=1``\nforces a fresh fold from the authoritative room event log (gap recovery).\nWithout a bound snapshot service, or when the snapshot build fails, the\nstream continues delta-only with an unchanged envelope.\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    StreamingResponse: SSE stream response",
-        "operationId": "stream_room_messages_api_v1_sse_room__room_id__stream_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "room ID",
-              "title": "Room Id"
-            },
-            "description": "room ID"
-          },
-          {
-            "name": "snapshot",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Snapshot"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sse/room/{room_id}/status": {
-      "get": {
-        "tags": [
-          "sse"
-        ],
-        "summary": "Get Room Sse Status",
-        "description": "get SSE connection status for specified room\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    dict: room connection status information",
-        "operationId": "get_room_sse_status_api_v1_sse_room__room_id__status_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "room ID",
-              "title": "Room Id"
-            },
-            "description": "room ID"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sse/room/{room_id}/events": {
-      "get": {
-        "tags": [
-          "sse"
-        ],
-        "summary": "Get Room Events",
-        "description": "Replay persisted public room events (Room Stream Snapshot plan \u00a75).\n\nThis is a fallback read path, not a delivery channel: the primary\nlive-recovery path remains re-requesting a snapshot over the stream.\nCold hydration (no ``after`` yet) is ``after=0``. Auth is identical to\nthe SSE stream route.",
-        "operationId": "get_room_events_api_v1_sse_room__room_id__events_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "room ID",
-              "title": "Room Id"
-            },
-            "description": "room ID"
-          },
-          {
-            "name": "after",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "After"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 1000,
-              "minimum": 1,
-              "default": 500,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/sse/message/{message_id}/cancel": {
       "post": {
         "tags": [
@@ -1400,7 +1018,7 @@
           "files"
         ],
         "summary": "Upload File",
-        "description": "Upload a file for attachment to a room message.\n\nAccepts multipart/form-data with:\n- file: The file to upload\n- room_id: The room this file belongs to\n\nReturns FileUploadResponse with a stable authenticated content URL.",
+        "description": "Upload a file for attachment to a room message.\n\nAccepts multipart/form-data with:\n- file: The file to upload\n- conversation_id: The room this file belongs to\n\nReturns FileUploadResponse with a stable authenticated content URL.",
         "operationId": "upload_file_api_v1_files_upload_post",
         "requestBody": {
           "content": {
@@ -2029,176 +1647,6 @@
         }
       }
     },
-    "/api/v1/rooms/{room_id}": {
-      "get": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Room Setting",
-        "description": "Get room settings - PROTECTED (requires room ownership)",
-        "operationId": "inquiry_room_setting_api_v1_rooms__room_id__get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Update Room History Item",
-        "operationId": "update_room_history_item_api_v1_rooms__room_id__patch",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoomHistoryUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomHistoryItem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Delete Room History Item",
-        "operationId": "delete_room_history_item_api_v1_rooms__room_id__delete",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/rooms/{room_id}/active-runs": {
-      "get": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Active Runs",
-        "description": "List non-terminal orchestration runs for a room \u2014 same auth as room settings.",
-        "operationId": "inquiry_active_runs_api_v1_rooms__room_id__active_runs_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/rooms/pinned-order": {
       "put": {
         "tags": [
@@ -2222,120 +1670,6 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/rooms/{room_id}/messages": {
-      "get": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Room Messages",
-        "description": "Read room messages - PROTECTED (requires room ownership)",
-        "operationId": "inquiry_room_messages_api_v1_rooms__room_id__messages_get",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Send Message",
-        "description": "Send message to room - PROTECTED (requires room ownership)\n\nThis endpoint:\n1. Creates the user message and generates agent messages\n2. Persists a changed request mode as the room's next-message default\n3. Automatically queues background processing of agent messages\n\nThe mode write completes before a successful acknowledgement is returned.\nThe frontend no longer needs to call processRoomUserMessage separately.\nProcessing happens atomically to prevent orphaned messages on page refresh.",
-        "operationId": "send_message_api_v1_rooms__room_id__messages_post",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomCenterUserMessageResponse"
-                }
               }
             }
           },
@@ -2416,6 +1750,672 @@
           },
           "default": {
             "description": "Rejected push notification (400 invalid, 401 unauthorized, 413 too large, 503 unavailable)."
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Setting",
+        "description": "Get room settings - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_setting_api_v1_rooms__conversation_id__get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room History Item",
+        "operationId": "update_room_history_item_api_v1_rooms__conversation_id__patch",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomHistoryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomHistoryItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Delete Room History Item",
+        "operationId": "delete_room_history_item_api_v1_rooms__conversation_id__delete",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/active-runs": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Active Runs",
+        "description": "List non-terminal orchestration runs for a room \u2014 same auth as room settings.",
+        "operationId": "inquiry_active_runs_api_v1_rooms__conversation_id__active_runs_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Get Canonical Agent Call Detail",
+        "description": "Return authenticated private Tool output by opaque canonical identity.",
+        "operationId": "get_canonical_agent_call_detail_api_v1_rooms__conversation_id__agent_calls__run_id___public_call_id__detail_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "public_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Public Call Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/messages": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Messages",
+        "description": "Read room messages - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_messages_api_v1_rooms__conversation_id__messages_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Send Message",
+        "description": "Send message to room - PROTECTED (requires room ownership)\n\nThis endpoint:\n1. Creates the user message and generates agent messages\n2. Persists a changed request mode as the room's next-message default\n3. Automatically queues background processing of agent messages\n\nThe mode write completes before a successful acknowledgement is returned.\nThe frontend no longer needs to call processRoomUserMessage separately.\nProcessing happens atomically to prevent orphaned messages on page refresh.",
+        "operationId": "send_message_api_v1_rooms__conversation_id__messages_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomCenterUserMessageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/hitl/respond-batch": {
+      "post": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Respond To Hitl Interaction",
+        "description": "Atomically submit every required answer for one interaction.",
+        "operationId": "respond_to_hitl_interaction_api_v1_rooms__conversation_id__hitl_respond_batch_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HITLBatchResponseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/hitl/pending": {
+      "get": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Get Pending Hitl Requests",
+        "description": "Get pending HITL requests for a room (SSE reconnect catch-up).",
+        "operationId": "get_pending_hitl_requests_api_v1_rooms__conversation_id__hitl_pending_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{conversation_id}/hitl/interactions/{interaction_id}/cancel": {
+      "post": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Cancel Hitl Interaction",
+        "description": "Cancel one complete interaction with optimistic version fencing.",
+        "operationId": "cancel_hitl_interaction_api_v1_rooms__conversation_id__hitl_interactions__interaction_id__cancel_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "interaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Interaction Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HITLCancelCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/room/{conversation_id}/stream": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Stream Room Messages",
+        "description": "create SSE message stream for specified room\n\nThe stream is snapshot-driven (Room Stream Snapshot plan \u00a74): the\n``connected`` handshake carries the room's latest contiguous ``room_seq``\nand a ``snapshot`` frame follows as the first frame. ``?snapshot=1``\nforces a fresh fold from the authoritative room event log (gap recovery).\nWithout a bound snapshot service, or when the snapshot build fails, the\nstream continues delta-only with an unchanged envelope.\n\nArgs:\n    conversation_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    StreamingResponse: SSE stream response",
+        "operationId": "stream_room_messages_api_v1_sse_room__conversation_id__stream_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "room ID",
+              "title": "Conversation Id"
+            },
+            "description": "room ID"
+          },
+          {
+            "name": "snapshot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Snapshot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/room/{conversation_id}/status": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Get Room Sse Status",
+        "description": "get SSE connection status for specified room\n\nArgs:\n    conversation_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    dict: room connection status information",
+        "operationId": "get_room_sse_status_api_v1_sse_room__conversation_id__status_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "room ID",
+              "title": "Conversation Id"
+            },
+            "description": "room ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/room/{conversation_id}/events": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Get Room Events",
+        "description": "Replay persisted public room events (Room Stream Snapshot plan \u00a75).\n\nThis is a fallback read path, not a delivery channel: the primary\nlive-recovery path remains re-requesting a snapshot over the stream.\nCold hydration (no ``after`` yet) is ``after=0``. Auth is identical to\nthe SSE stream route.",
+        "operationId": "get_room_events_api_v1_sse_room__conversation_id__events_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "room ID",
+              "title": "Conversation Id"
+            },
+            "description": "room ID"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -3149,15 +3149,15 @@
             "format": "binary",
             "title": "File"
           },
-          "room_id": {
+          "conversation_id": {
             "type": "string",
-            "title": "Room Id"
+            "title": "Conversation Id"
           }
         },
         "type": "object",
         "required": [
           "file",
-          "room_id"
+          "conversation_id"
         ],
         "title": "Body_upload_file_api_v1_files_upload_post"
       },
@@ -3942,18 +3942,18 @@
       },
       "PinnedRoomOrderUpdate": {
         "properties": {
-          "room_ids": {
+          "conversation_ids": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "maxItems": 100,
-            "title": "Room Ids"
+            "title": "Conversation Ids"
           }
         },
         "type": "object",
         "required": [
-          "room_ids"
+          "conversation_ids"
         ],
         "title": "PinnedRoomOrderUpdate"
       },
@@ -4005,17 +4005,6 @@
       },
       "RoomCenterUserMessageResponse": {
         "properties": {
-          "room_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Room Id"
-          },
           "message_id": {
             "anyOf": [
               {
@@ -4145,6 +4134,17 @@
             "type": "integer",
             "title": "Status Code",
             "default": 200
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
           }
         },
         "type": "object",
@@ -4155,10 +4155,6 @@
       },
       "RoomHistoryItem": {
         "properties": {
-          "room_id": {
-            "type": "string",
-            "title": "Room Id"
-          },
           "title": {
             "type": "string",
             "title": "Title"
@@ -4188,11 +4184,15 @@
             "type": "string",
             "title": "Status",
             "default": "idle"
+          },
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
           }
         },
         "type": "object",
         "required": [
-          "room_id",
+          "conversation_id",
           "title",
           "last_activity_at"
         ],
@@ -4246,10 +4246,6 @@
       },
       "RoomUserMessage": {
         "properties": {
-          "room_id": {
-            "type": "string",
-            "title": "Room Id"
-          },
           "message_id": {
             "type": "string",
             "title": "Message Id"
@@ -4419,11 +4415,15 @@
                 "type": "null"
               }
             ]
+          },
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
           }
         },
         "type": "object",
         "required": [
-          "room_id",
+          "conversation_id",
           "message_id",
           "message_content"
         ],

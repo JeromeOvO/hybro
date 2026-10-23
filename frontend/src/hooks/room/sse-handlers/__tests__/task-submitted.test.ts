@@ -29,7 +29,7 @@ function makeTaskSubmitted(
   return {
     type: 'task_submitted',
     timestamp: '2026-02-17T10:00:00Z',
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     data: {
       message_id: 'agent-message-1',
       task_id: 'task-1',

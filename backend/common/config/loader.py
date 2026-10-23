@@ -230,7 +230,9 @@ class Settings(BaseModel):
     redis_url: str = (
         ""  # e.g. "redis://localhost:6379/0" - empty string disables broker
     )
-    redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
+    redis_sse_channel_prefix: str = (
+        "sse:room:"  # per-room channel: sse:room:{conversation_id}
+    )
     redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
     redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
     redis_terminal_key_prefix: str = "terminal:"

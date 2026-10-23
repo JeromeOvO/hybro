@@ -34,9 +34,11 @@ class HITLPersistencePort(Protocol):
         *update_docs: dict[str, Any],
         **updates: Any,
     ) -> bool: ...
-    async def get_pending_hitl_requests(self, room_id: str) -> list[dict[str, Any]]: ...
+    async def get_pending_hitl_requests(
+        self, conversation_id: str
+    ) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests_strict(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests_for_message(
         self, message_id: str
@@ -52,7 +54,7 @@ class HITLPersistencePort(Protocol):
     async def find_pending_hitl_request_for_agent_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         display_message_id: str | None,
         continuation_message_id: str | None,
         agent_id: str | None,

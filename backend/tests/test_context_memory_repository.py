@@ -601,7 +601,7 @@ async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
     result = await compaction.compact_if_needed(
         repository=memory_repo,
         content_repository=content_repo,
-        room_id="r1",
+        conversation_id="r1",
         config=default_config,
         now=lambda: datetime.now(UTC),
     )
@@ -712,14 +712,14 @@ async def test_push_and_trim_if_absent_handles_concurrent_duplicate_race(
     pushes = []
 
     async def fake_push(
-        room_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None
+        conversation_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None
     ):
         pushes.append(turn)
         if len(pushes) == 2:
             doc["conversation_history"].append({"turn_id": "t1"})
         return None
 
-    async def fake_get(room_id):
+    async def fake_get(conversation_id):
         return deepcopy(doc)
 
     monkeypatch.setattr(memory_repo, "_push_turn", fake_push)
@@ -1025,7 +1025,7 @@ async def test_compact_turns_bulk_returns_false_on_mongo_write_failure(
 async def test_content_upsert_and_get(content_repo):
     stored = await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="hello",
         content_type="text",
@@ -1044,7 +1044,7 @@ async def test_content_upsert_replaces_existing_content_and_expiry(content_repo)
 
     await content_repo.upsert_full_content(
         document_id="doc-old",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="old",
         content_type="text",
@@ -1055,7 +1055,7 @@ async def test_content_upsert_replaces_existing_content_and_expiry(content_repo)
     )
     stored = await content_repo.upsert_full_content(
         document_id="doc-new",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="new",
         content_type="text/markdown",

@@ -38,7 +38,7 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
     history = direct_history if isinstance(direct_history, list) else []
 
     return RoomMemoryState(
-        room_id=doc.get("room_id", ""),
+        conversation_id=doc.get("room_id", ""),
         memory_id=doc.get("memory_id", ""),
         conversation_history=[turn_from_dict(turn) for turn in history],
         summary=memory_content.get("summary"),
@@ -115,7 +115,7 @@ def turn_from_dict(doc: dict[str, Any] | Any) -> ConversationTurnData:
 
 def assemble_context_dto(
     *,
-    room_id: str,
+    conversation_id: str,
     stable_prefix: str,
     dynamic_suffix: str,
     result: AssemblyResult,
@@ -137,18 +137,18 @@ def assemble_context_dto(
     }
     metadata.update(extra_metadata or {})
     return AssembledContext(
-        room_id=room_id,
+        conversation_id=conversation_id,
         blocks=[
             ContextBlock(
                 block_id="stable_prefix",
-                room_id=room_id,
+                conversation_id=conversation_id,
                 content=stable_prefix,
                 token_count=result.stable_prefix_tokens,
                 block_type="stable_prefix",
             ),
             ContextBlock(
                 block_id="dynamic_suffix",
-                room_id=room_id,
+                conversation_id=conversation_id,
                 content=dynamic_suffix,
                 token_count=result.dynamic_suffix_tokens,
                 block_type="dynamic_suffix",
@@ -161,7 +161,7 @@ def assemble_context_dto(
 
 def search_result_from_record(
     *,
-    room_id: str,
+    conversation_id: str,
     content: str,
     keyword_score: float,
     relevance_score: float,
@@ -169,7 +169,7 @@ def search_result_from_record(
     metadata: dict[str, Any],
 ) -> MemorySearchResult:
     return MemorySearchResult(
-        room_id=room_id,
+        conversation_id=conversation_id,
         content=content,
         keyword_score=keyword_score,
         relevance_score=relevance_score,
@@ -182,14 +182,14 @@ def search_result_from_record(
 
 def compaction_result_dto(
     *,
-    room_id: str,
+    conversation_id: str,
     compacted_count: int,
     tokens_saved: int,
     memory_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> CompactionResult:
     return CompactionResult(
-        room_id=room_id,
+        conversation_id=conversation_id,
         compacted_count=compacted_count,
         tokens_saved=tokens_saved,
         memory_id=memory_id,

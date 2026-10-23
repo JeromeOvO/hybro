@@ -23,7 +23,7 @@ class TestSSEConnection:
 
     def _connection(self) -> SSEConnection:
         return SSEConnection(
-            room_id="room-1",
+            conversation_id="room-1",
             connection_id="conn-1",
             heartbeat_interval=0.01,
             now=utcnow,
@@ -37,7 +37,7 @@ class TestSSEConnection:
         assert result is True
         parsed = await conn.queue.get()
         assert parsed["type"] == "test_event"
-        assert parsed["room_id"] == "room-1"
+        assert parsed["conversation_id"] == "room-1"
         assert parsed["data"] == {"key": "value"}
 
     @pytest.mark.asyncio
@@ -61,7 +61,7 @@ class TestSSEConnection:
         msg = await conn.get_message(timeout=0.01)
         parsed = json.loads(msg)
         assert parsed["type"] == "heartbeat"
-        assert parsed["room_id"] == "room-1"
+        assert parsed["conversation_id"] == "room-1"
 
     def test_close_marks_inactive(self):
         conn = self._connection()

@@ -243,7 +243,7 @@ async def test_facade_treats_confirmed_stable_task_delivery_as_success():
     facade._record_terminal_delivery = MagicMock()
 
     assert await facade.send_task_update(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="sys-msg-1",
         status="completed",
         delivery_id="terminal:event-1:system-task",
@@ -395,15 +395,15 @@ class _FakeTransport(_LifecycleComponent):
     def set_draining(self, draining: bool):
         self.draining = draining
 
-    async def open_connection(self, room_id: str):
-        self.compat_calls.append(("open_connection", room_id))
+    async def open_connection(self, conversation_id: str):
+        self.compat_calls.append(("open_connection", conversation_id))
         return "connection"
 
-    async def remove_connection(self, room_id: str, connection_id: str):
-        self.compat_calls.append(("remove_connection", room_id, connection_id))
+    async def remove_connection(self, conversation_id: str, connection_id: str):
+        self.compat_calls.append(("remove_connection", conversation_id, connection_id))
 
-    def get_room_status(self, room_id: str):
-        return {"room_id": room_id}
+    def get_room_status(self, conversation_id: str):
+        return {"room_id": conversation_id}
 
 
 class _FakePublisher(_LifecycleComponent):

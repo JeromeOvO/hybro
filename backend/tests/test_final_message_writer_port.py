@@ -41,9 +41,9 @@ def _store(collection):
     )
 
 
-def _document(room_id: str = "room-1") -> dict:
+def _document(conversation_id: str = "room-1") -> dict:
     return {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "message_id": "final-1",
         "message_type": "agent",
         "agent_id": "system_hybro",

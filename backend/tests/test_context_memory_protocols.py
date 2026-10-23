@@ -22,24 +22,24 @@ class FakeMongo:
 
 
 class FakeMemoryRepository:
-    async def get_room_memory(self, room_id: str) -> dict | None:
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
         return None
 
-    async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
+    async def upsert_room_memory(self, conversation_id: str, memory: dict) -> None:
         return None
 
-    async def delete_room_memory(self, room_id: str) -> bool:
+    async def delete_room_memory(self, conversation_id: str) -> bool:
         return True
 
     async def create_room_memory(self, memory: dict) -> str:
         return memory["memory_id"]
 
-    async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
-        return {"room_id": room_id, **defaults}
+    async def ensure_room_memory(self, conversation_id: str, defaults: dict) -> dict:
+        return {"room_id": conversation_id, **defaults}
 
     async def push_and_trim_conversation_turn(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         *,
         max_turns: int,
@@ -50,7 +50,7 @@ class FakeMemoryRepository:
 
     async def push_and_trim_conversation_turn_if_absent(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         *,
         turn_id: str,
@@ -61,16 +61,16 @@ class FakeMemoryRepository:
         return True, True, False
 
     async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
+        self, conversation_id: str, turn_id: str, turn_notes: dict
     ) -> bool:
         return True
 
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
         return None
 
     async def update_room_summary_atomic(
         self,
-        room_id: str,
+        conversation_id: str,
         room_summary: dict,
         *,
         new_facts: list[dict] | None = None,
@@ -79,7 +79,7 @@ class FakeMemoryRepository:
         return True
 
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         return True
 
@@ -94,21 +94,25 @@ class FakeContentRepository:
     async def get_content_by_document_id(self, document_id: str) -> dict | None:
         return None
 
-    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
+    async def get_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> dict | None:
         return None
 
-    async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
+    async def delete_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> bool:
         return True
 
-    async def delete_content_by_room_id(self, room_id: str) -> int:
+    async def delete_content_by_room_id(self, conversation_id: str) -> int:
         return 0
 
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        return {"room_id": room_id}
+    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
+        return {"room_id": conversation_id}
 
     async def text_search(
         self,
-        room_id: str,
+        conversation_id: str,
         query: str,
         limit: int = 50,
         skip: int = 0,
@@ -116,18 +120,20 @@ class FakeContentRepository:
         return []
 
     async def scan_text_search(
-        self, room_id: str, query: str, limit: int
+        self, conversation_id: str, query: str, limit: int
     ) -> list[dict]:
         return []
 
     async def hydrate_turn_content(
-        self, room_id: str, turn_ids: list[str]
+        self, conversation_id: str, turn_ids: list[str]
     ) -> list[dict]:
         return []
 
 
 class FakeRoomHistoryReader:
-    async def get_messages_for_room(self, room_id: str, limit: int, before=None):
+    async def get_messages_for_room(
+        self, conversation_id: str, limit: int, before=None
+    ):
         return []
 
     async def get_messages_by_ids(self, message_ids: list[str]):

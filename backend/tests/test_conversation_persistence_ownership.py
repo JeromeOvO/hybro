@@ -87,7 +87,7 @@ async def test_room_store_reads_and_writes_through_the_room_repository():
     room = await store.get_room_by_room_id("r1")
 
     assert isinstance(room, Room)
-    assert room.room_id == "r1"
+    assert room.conversation_id == "r1"
     room_repository.get_by_id.assert_awaited_once_with("r1")
 
 

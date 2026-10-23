@@ -24,7 +24,7 @@ def hash_content(content: str) -> str:
 async def store_full_content(
     repository: ContentStorageRepository,
     *,
-    room_id: str,
+    conversation_id: str,
     turn_id: str,
     content: str,
     content_type: str,
@@ -35,10 +35,10 @@ async def store_full_content(
 ) -> str:
     expires_delta = config.expires_delta()
     expires_at = now + expires_delta if expires_delta is not None else None
-    document_id = make_document_id(room_id, turn_id)
+    document_id = make_document_id(conversation_id, turn_id)
     return await repository.upsert_full_content(
         document_id=document_id,
-        room_id=room_id,
+        conversation_id=conversation_id,
         turn_id=turn_id,
         content=content,
         content_type=content_type,
@@ -50,8 +50,8 @@ async def store_full_content(
     )
 
 
-def make_document_id(room_id: str, turn_id: str) -> str:
-    return f"conversation_content:{room_id}:{turn_id}"
+def make_document_id(conversation_id: str, turn_id: str) -> str:
+    return f"conversation_content:{conversation_id}:{turn_id}"
 
 
 async def expand_mongodb_reference(

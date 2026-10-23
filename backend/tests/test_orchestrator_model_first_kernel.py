@@ -279,7 +279,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
             ),
@@ -290,7 +290,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
         room_seq += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_seq,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -626,7 +626,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
             ),
@@ -638,7 +638,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
         room_sequence += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_sequence,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -655,7 +655,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "agent_response",
             "ts": NOW.isoformat(),
@@ -670,7 +670,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -971,7 +971,7 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -981,7 +981,7 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
             continue
         room_sequence += 1
         record = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1043,7 +1043,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -1056,7 +1056,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
             if projected.event_id not in records:
                 room_sequence += 1
                 records[projected.event_id] = {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "room_seq": room_sequence,
                     "kind": "run_event",
                     "ts": NOW.isoformat(),
@@ -1087,7 +1087,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
     assert interrupted.status == "finalizing"
     assert interrupted.proposed_final_message_id is not None
 
-    async def read_canonical_events(_room_id, _run_id):
+    async def read_canonical_events(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = read_canonical_events
@@ -1190,7 +1190,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
             assert child.state == "canceled"
             assert child.terminal_result is not None
             assert a2a.hitl.is_abandoned_for_test("interaction-1")
-            assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
+            assert await a2a.hitl.get_eligible_interactions(run.conversation_id) == []
             assert all(
                 entry.state == "terminal"
                 for batch in _run.tool_batches
@@ -1239,7 +1239,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
             ),
@@ -1251,7 +1251,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
         room_sequence += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_sequence,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -1268,7 +1268,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1505,7 +1505,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -1515,7 +1515,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
             return
         room_sequence += 1
         records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1562,7 +1562,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
     )
     assert saved.outcome == "accepted"
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -1623,7 +1623,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
         assert fold.apply(record), record
     room_sequence += 1
     settled_record = {
-        "room_id": terminal.run.room_id,
+        "room_id": terminal.run.conversation_id,
         "room_seq": room_sequence,
         "kind": "run_event",
         "ts": NOW.isoformat(),
@@ -1718,7 +1718,7 @@ async def _terminal_public_tool_replay_fixture(status):
                 "duration_ms": 0,
                 "result_text": "",
             },
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
         ),
@@ -1764,7 +1764,7 @@ async def test_terminal_preflight_reconciles_exact_public_outcome_for_all_status
     else:
         assert payload["failure_reason"] == expected_failure
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [record]
 
     emissions = []
@@ -1829,7 +1829,7 @@ async def test_terminal_preflight_rejects_malformed_public_tool_end_before_effec
     else:
         record["payload_public"]["payload"].pop(delete_key)
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [record]
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -1892,7 +1892,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -1902,7 +1902,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
             return
         room_sequence += 1
         records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1979,7 +1979,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
     )
     assert saved.outcome == "accepted"
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -2016,7 +2016,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": terminal.run.room_id,
+            "room_id": terminal.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -2120,7 +2120,7 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
                 "duration_ms": 0,
                 "result_text": "",
             },
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
         ),
@@ -2142,7 +2142,7 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
     }
     canonical_records = [record, record] if conflict == "duplicate" else [record]
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return canonical_records
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -2291,7 +2291,7 @@ async def test_terminal_recovery_rejects_incomplete_child_of_closed_legacy_turn(
         }
     )
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 9,
@@ -2671,7 +2671,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -2681,7 +2681,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
             append_record(
                 projected.event_id,
                 {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "kind": "run_event",
                     "ts": NOW.isoformat(),
                     "payload_public": {
@@ -2716,7 +2716,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         append_record(
             event_id,
             {
-                "room_id": initial_run.room_id,
+                "room_id": initial_run.conversation_id,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
                 "payload_public": {
@@ -2762,7 +2762,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         append_record(
             event_id,
             {
-                "room_id": initial_run.room_id,
+                "room_id": initial_run.conversation_id,
                 "kind": kind,
                 "ts": NOW.isoformat(),
                 "payload_public": payload,
@@ -2845,7 +2845,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         for entry in batch.entries
     )
 
-    async def read_canonical_events(_room_id: str, _run_id: str):
+    async def read_canonical_events(_conversation_id: str, _run_id: str):
         return list(records_by_id.values())
 
     def restarted_kernel() -> OrchestratorKernel:
@@ -2882,7 +2882,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
     append_record(
         f"agent_response:{final_message_id}",
         {
-            "room_id": completed.run.room_id,
+            "room_id": completed.run.conversation_id,
             "kind": "agent_response",
             "ts": NOW.isoformat(),
             "payload_public": {
@@ -3132,7 +3132,7 @@ async def test_real_continuation_ingress_preserves_follow_up_for_kernel_surface(
     second_record = await ledger.load_by_record_id(call.call_record_id)
     assert second_record is not None
     assert second_record.pending_interaction_id == "interaction-2"
-    assert await hitl.get_published_interactions(call.room_id) == []
+    assert await hitl.get_published_interactions(call.conversation_id) == []
 
     class Artifacts:
         async def materialize(self, *args, **kwargs):
@@ -3209,7 +3209,7 @@ async def test_real_continuation_ingress_preserves_follow_up_for_kernel_surface(
     assert [
         interaction.interaction_id
         for interaction, _route, _fingerprint in await hitl.get_published_interactions(
-            call.room_id
+            call.conversation_id
         )
     ] == ["interaction-2"]
 
@@ -3466,7 +3466,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
             sequence=1,
             timestamp=NOW,
             payload={"mode": "ultimate"},
-            room_id=result.run.room_id,
+            conversation_id=result.run.conversation_id,
             user_message_id=result.run.request.user_message_id,
             client_request_id=result.run.client_request_id,
         ),
@@ -3475,7 +3475,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
     assert started is not None
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -3500,7 +3500,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
             ),
@@ -3511,7 +3511,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
         room_seq += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_seq,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),

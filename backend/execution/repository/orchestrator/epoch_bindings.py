@@ -35,7 +35,7 @@ def require_room_epoch_store() -> MongoRoomEpochStore:
 
 
 class EpochScopedOrchestratorCleanup:
-    """Delete all seven orchestrator collections at exact (room_id, epoch) scope.
+    """Delete all seven orchestrator collections at exact (conversation_id, epoch) scope.
 
     Room-state cleanup intentionally skips every orchestrator collection
     (``excluded_from_room_state_delete``) so a deletion can only remove the
@@ -63,7 +63,7 @@ class EpochScopedOrchestratorCleanup:
         self._runs = runs
         self._run_events = run_events
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         deleted = 0
         for store in (
             self._bindings,
@@ -72,9 +72,9 @@ class EpochScopedOrchestratorCleanup:
             self._conflicts,
             self._run_events,
         ):
-            deleted += await store.delete_by_epoch(room_id, room_epoch)
+            deleted += await store.delete_by_epoch(conversation_id, room_epoch)
         result = await self._runs.delete_many(
-            {"room_id": room_id, "request.room_epoch": room_epoch}
+            {"room_id": conversation_id, "request.room_epoch": room_epoch}
         )
         deleted += int(getattr(result, "deleted_count", 0) or 0)
         return deleted

@@ -70,7 +70,7 @@ describe('handleHitlRequest', () => {
       },
       {
         type: 'hitl_request',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp,
         data: {
           request_id: 'old-hitl',
@@ -133,7 +133,7 @@ describe('handleHitlRequest', () => {
     ] as const) {
       await handleHitlRequest(ctx, {
         type: 'hitl_request',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp,
         data: {
           request_id: requestId,
@@ -188,7 +188,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'security_training',
@@ -222,7 +222,7 @@ describe('handleHitlRequest', () => {
     }
     for (const interactionId of ['interaction-1', 'interaction-2']) {
       await handleHitlRequest(ctx, {
-        type: 'hitl_request', room_id: 'room-1', timestamp,
+        type: 'hitl_request', conversation_id: 'room-1', timestamp,
         data: {
           request_id: 'cloud_providers', message_id: 'agent-message', source: 'agent',
           prompt: `Providers for ${interactionId}?`, prompt_type: 'text',
@@ -238,7 +238,7 @@ describe('handleHitlRequest', () => {
     )
 
     handleHitlResponse(ctx, {
-      type: 'hitl_response', room_id: 'room-1', timestamp,
+      type: 'hitl_response', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'cloud_providers', message_id: 'agent-message', source: 'agent',
         status: 'responded', interaction_id: 'interaction-1',
@@ -267,7 +267,7 @@ describe('handleHitlRequest', () => {
     }
     for (const requestId of ['round-1', 'round-2']) {
       await handleHitlRequest(ctx, {
-        type: 'hitl_request', room_id: 'room-1', timestamp,
+        type: 'hitl_request', conversation_id: 'room-1', timestamp,
         data: {
           request_id: requestId, message_id: 'agent-message', source: 'agent',
           prompt: `Question ${requestId}`, prompt_type: 'text',
@@ -304,7 +304,7 @@ describe('handleHitlRequest', () => {
       reconcileWithDb: async () => {}, hitlRequestIndex: index, setCancelling: () => {},
     }
     await handleHitlRequest(ctx, {
-      type: 'hitl_request', room_id: 'room-1', timestamp,
+      type: 'hitl_request', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'request-error', message_id: 'agent-message', source: 'agent',
         prompt: 'Question?', prompt_type: 'text', interaction_id: 'interaction-error',
@@ -313,7 +313,7 @@ describe('handleHitlRequest', () => {
     }, 'req-1')
 
     handleHitlResponse(ctx, {
-      type: 'hitl_response', room_id: 'room-1', timestamp,
+      type: 'hitl_response', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'request-error', message_id: 'agent-message', source: 'agent',
         status: 'error', error_message: 'Unable to continue',
@@ -352,7 +352,7 @@ describe('handleHitlRequest', () => {
 
     await handleHitlRequest(ctx, {
       type: 'hitl_request',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',
@@ -379,7 +379,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',
@@ -407,7 +407,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',

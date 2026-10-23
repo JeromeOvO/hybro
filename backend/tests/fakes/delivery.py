@@ -29,39 +29,44 @@ class FakeDeliveryCompat:
         self.delivery_kv_connected = False
         self.delivery_pubsub_connected = False
 
-    async def open_connection(self, room_id: str) -> SSEConnection:
+    async def open_connection(self, conversation_id: str) -> SSEConnection:
         if self.draining:
             raise ConnectionRefusedError(
                 "Server is draining - rejecting new SSE connections"
             )
         connection = SSEConnection(
-            room_id=room_id,
-            connection_id=f"conn-{len(self.room_connections.get(room_id, {})) + 1}",
+            conversation_id=conversation_id,
+            connection_id=f"conn-{len(self.room_connections.get(conversation_id, {})) + 1}",
             heartbeat_interval=0.01,
             now=utcnow,
         )
-        self.room_connections.setdefault(room_id, {})[connection.connection_id] = (
-            connection
-        )
+        self.room_connections.setdefault(conversation_id, {})[
+            connection.connection_id
+        ] = connection
         return connection
 
-    async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        connection = self.room_connections.get(room_id, {}).pop(connection_id, None)
+    async def remove_connection(self, conversation_id: str, connection_id: str) -> None:
+        connection = self.room_connections.get(conversation_id, {}).pop(
+            connection_id, None
+        )
         if connection is not None:
             connection.close()
-        if room_id in self.room_connections and not self.room_connections[room_id]:
-            self.room_connections.pop(room_id)
+        if (
+            conversation_id in self.room_connections
+            and not self.room_connections[conversation_id]
+        ):
+            self.room_connections.pop(conversation_id)
 
-    def get_room_status(self, room_id: str) -> dict:
-        connections = self.room_connections.get(room_id, {})
+    def get_room_status(self, conversation_id: str) -> dict:
+        connections = self.room_connections.get(conversation_id, {})
         if not connections:
             return {
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "active_connections": 0,
                 "status": "no_connections",
             }
         return {
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "active_connections": len(connections),
             "status": "active",
         }
@@ -79,7 +84,7 @@ class FakeDeliveryCompat:
                 connection.close()
         self.room_connections.clear()
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
+    async def publish_sse(self, conversation_id: str, frame: dict[str, Any]) -> bool:
         self.frames.append((frame["type"], frame["data"]))
         return True
 
@@ -104,7 +109,7 @@ class FakeDeliveryCompat:
     def is_connected(self) -> bool:
         return self.delivery_pubsub_connected
 
-    async def _should_deliver(self, room_id: str, frame: dict) -> bool:
+    async def _should_deliver(self, conversation_id: str, frame: dict) -> bool:
         if frame.get("type") != "processing_status":
             return True
         data = frame.get("data")
@@ -115,8 +120,8 @@ class FakeDeliveryCompat:
         if status not in TERMINAL_STATUSES or not message_id:
             return True
 
-        local_key = f"{room_id}:{message_id}"
-        redis_key = f"terminal:{room_id}:{message_id}"
+        local_key = f"{conversation_id}:{message_id}"
+        redis_key = f"terminal:{conversation_id}:{message_id}"
         if local_key in self.terminal_status_sent:
             return False
         if self.redis_service is not None:
@@ -138,11 +143,13 @@ class FakeEventPublisher:
         if self.compat is None:
             return
         frame = to_sse_frame(event, timestamp=utcnow())
-        room_id = frame["room_id"]
-        if not await self.compat._should_deliver(room_id, frame):
+        conversation_id = frame["conversation_id"]
+        if not await self.compat._should_deliver(conversation_id, frame):
             return
         self.compat.frames.append((frame["type"], frame["data"]))
-        connections = list(self.compat.room_connections.get(room_id, {}).values())
+        connections = list(
+            self.compat.room_connections.get(conversation_id, {}).values()
+        )
         for connection in connections:
             await connection.queue.put(frame)
 

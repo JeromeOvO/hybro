@@ -33,13 +33,13 @@ class InMemoryOrchestratorContractHarness:
         self._projection_claims: dict[tuple[str, str], tuple[str, int]] = {}
 
     def create(self, run: OrchestratorRunState) -> HarnessOutcome:
-        epoch = self.room_epochs.setdefault(run.room_id, run.request.room_epoch)
+        epoch = self.room_epochs.setdefault(run.conversation_id, run.request.room_epoch)
         if epoch != run.request.room_epoch:
             return "gone"
         if run.run_id in self.runs:
             return "replayed" if self.runs[run.run_id] == run else "conflict"
         if any(
-            existing.room_id == run.room_id
+            existing.conversation_id == run.conversation_id
             and existing.status in NON_TERMINAL_RUN_STATUSES
             for existing in self.runs.values()
         ):
@@ -85,9 +85,9 @@ class InMemoryOrchestratorContractHarness:
         ):
             return "conflict"
         previous_owner = run.recovery_claim.owner_id
-        if self._room_locks.get(run.room_id) not in {None, previous_owner}:
+        if self._room_locks.get(run.conversation_id) not in {None, previous_owner}:
             return "conflict"
-        self._room_locks[run.room_id] = owner_id
+        self._room_locks[run.conversation_id] = owner_id
         self.runs[run_id] = run.model_copy(
             update={
                 "recovery_claim": run.recovery_claim.model_copy(
@@ -122,7 +122,7 @@ class InMemoryOrchestratorContractHarness:
             or claim.lease_expires_at is None
             or claim.lease_expires_at <= renewed_at
             or lease_expires_at <= claim.lease_expires_at
-            or self._room_locks.get(run.room_id) != owner_id
+            or self._room_locks.get(run.conversation_id) != owner_id
         ):
             return "conflict"
         self.runs[run_id] = run.model_copy(
@@ -153,7 +153,7 @@ class InMemoryOrchestratorContractHarness:
         if (
             run.state_version != expected_state_version
             or run.recovery_claim.owner_id != owner_id
-            or self._room_locks.get(run.room_id) != owner_id
+            or self._room_locks.get(run.conversation_id) != owner_id
         ):
             return "conflict"
         self.runs[run_id] = run.model_copy(
@@ -167,7 +167,7 @@ class InMemoryOrchestratorContractHarness:
                 "state_version": run.state_version + 1,
             }
         )
-        self._room_locks.pop(run.room_id, None)
+        self._room_locks.pop(run.conversation_id, None)
         return "accepted"
 
     def save_authoritative(self, run: OrchestratorRunState) -> None:
@@ -210,20 +210,20 @@ class InMemoryOrchestratorContractHarness:
         if (
             run is None
             or run.request.room_epoch != room_epoch
-            or self.room_epochs.get(run.room_id) != room_epoch
+            or self.room_epochs.get(run.conversation_id) != room_epoch
         ):
             return "gone"
-        if self._room_locks.get(run.room_id) not in {None, owner_id}:
+        if self._room_locks.get(run.conversation_id) not in {None, owner_id}:
             return "conflict"
-        self._room_locks[run.room_id] = owner_id
+        self._room_locks[run.conversation_id] = owner_id
         self._projection_claims[(run_id, intent_id)] = (owner_id, room_epoch)
         return "accepted"
 
     def release_projection(self, run_id: str, intent_id: str, *, owner_id: str) -> None:
         run = self.runs[run_id]
         self._projection_claims.pop((run_id, intent_id), None)
-        if self._room_locks.get(run.room_id) == owner_id:
-            self._room_locks.pop(run.room_id)
+        if self._room_locks.get(run.conversation_id) == owner_id:
+            self._room_locks.pop(run.conversation_id)
 
     def confirm_projection(
         self, run_id: str, intent_id: str, *, owner_id: str, room_epoch: int
@@ -231,31 +231,33 @@ class InMemoryOrchestratorContractHarness:
         run = self.runs.get(run_id)
         if (
             run is None
-            or self.room_epochs.get(run.room_id) != room_epoch
+            or self.room_epochs.get(run.conversation_id) != room_epoch
             or self._projection_claims.get((run_id, intent_id))
             != (owner_id, room_epoch)
         ):
             return "gone"
         return "accepted"
 
-    def delete_room(self, room_id: str, *, owner_id: str) -> HarnessOutcome:
-        if self._room_locks.get(room_id) not in {None, owner_id}:
+    def delete_room(self, conversation_id: str, *, owner_id: str) -> HarnessOutcome:
+        if self._room_locks.get(conversation_id) not in {None, owner_id}:
             return "conflict"
-        self._room_locks[room_id] = owner_id
-        self.room_epochs[room_id] = self.room_epochs.get(room_id, 0) + 1
+        self._room_locks[conversation_id] = owner_id
+        self.room_epochs[conversation_id] = self.room_epochs.get(conversation_id, 0) + 1
         deleted = {
-            run_id for run_id, run in self.runs.items() if run.room_id == room_id
+            run_id
+            for run_id, run in self.runs.items()
+            if run.conversation_id == conversation_id
         }
         for run_id in deleted:
             self.runs.pop(run_id)
         for key in list(self._projection_claims):
             if key[0] in deleted:
                 self._projection_claims.pop(key)
-        self._room_locks.pop(room_id)
+        self._room_locks.pop(conversation_id)
         return "accepted"
 
     def _has_active_epoch(self, run: OrchestratorRunState) -> bool:
-        return self.room_epochs.get(run.room_id) == run.request.room_epoch
+        return self.room_epochs.get(run.conversation_id) == run.request.room_epoch
 
     def _is_recovery_due(self, run: OrchestratorRunState, *, at: datetime) -> bool:
         claim = run.recovery_claim

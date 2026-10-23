@@ -26,11 +26,11 @@ async def test_client_request_id_and_mode_validation(
         json=test_room_payload("Security Test Room"),
     )
     assert room_resp.status_code == 200
-    room_id = room_resp.json().get("room_id")
+    conversation_id = room_resp.json().get("conversation_id")
 
     # 1. Missing client_request_id
     missing_id_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "message": "Hello",
             "mode": "supervisor",
@@ -43,7 +43,7 @@ async def test_client_request_id_and_mode_validation(
 
     # 2. Oversized client_request_id (> 128 chars)
     oversized_id_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "message": "Hello",
             "mode": "supervisor",
@@ -57,7 +57,7 @@ async def test_client_request_id_and_mode_validation(
 
     # 3. Invalid mode (not direct or supervisor)
     invalid_mode_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "message": "Hello",
             "mode": "invalid_mode",

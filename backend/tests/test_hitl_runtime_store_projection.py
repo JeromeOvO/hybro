@@ -58,11 +58,11 @@ class _FakeCollection:
             and "status" in clauses[0]
         ):
             identity = dict(clauses[0])
-            room_id = identity.pop("room_id", None)
+            conversation_id = identity.pop("room_id", None)
             status = identity.pop("status", None)
             source = identity.pop("public_source", None)
             recorded_query = {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "status": status,
                 "public_source": source,
                 "$or": [identity],
@@ -220,7 +220,7 @@ async def test_scoped_pending_query_uses_agent_message_identity_only():
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id="display-msg-1",
         continuation_message_id="continuation-msg-1",
         agent_id="agent-1",
@@ -263,7 +263,7 @@ async def test_public_pending_query_returns_none_for_ambiguous_identities():
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id="display-msg-1",
         continuation_message_id="continuation-msg-1",
         agent_id="agent-1",
@@ -294,7 +294,7 @@ async def test_pending_query_without_display_or_continuation_identity_returns_no
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id=None,
         continuation_message_id=None,
         agent_id="agent-1",

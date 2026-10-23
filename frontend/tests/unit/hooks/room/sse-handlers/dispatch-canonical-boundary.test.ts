@@ -30,18 +30,18 @@ describe('canonical dispatcher exact-root boundary', () => {
   it('does not suppress an unrelated legacy task merely because the room has canonical capability', async () => {
     const dispatch = dispatcher()
     await dispatch({
-      type: 'connected', room_id: 'room-1', timestamp,
+      type: 'connected', conversation_id: 'room-1', timestamp,
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatch({
-      type: 'snapshot', room_id: 'room-1', timestamp,
+      type: 'snapshot', conversation_id: 'room-1', timestamp,
       data: {
         room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     await dispatch({
-      type: 'task_submitted', room_id: 'room-1', timestamp,
+      type: 'task_submitted', conversation_id: 'room-1', timestamp,
       data: {
         room_seq: 1, room_event_id: 'legacy-task-1', message_id: 'legacy-agent-1',
         task_id: 'legacy-task', agent_name: 'Weather Agent', agent_id: 'agent-1',

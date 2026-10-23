@@ -155,12 +155,12 @@ class SessionFacade:
 
         seq_before = await self._waiter.latest_seq(conversation_id)
         execution_request = ExecutionRequest(
-            room_id=conversation_id,
+            conversation_id=conversation_id,
             sender_id=owner.user_id,
             sender_name=record.client_label,
             # The chat send shape; the server assigns the message id.
             message={
-                "room_id": conversation_id,
+                "conversation_id": conversation_id,
                 "message_id": "",
                 "message_type": "user",
                 "message_content": {"message_text": text},
@@ -275,10 +275,10 @@ class SessionFacade:
         runs = await self._engine.get_latest_runs_for_rooms(list(open_rooms))
         listed = {record.session_id for record in records}
         missing = [
-            open_rooms[room_id]
-            for room_id, run in runs.items()
+            open_rooms[conversation_id]
+            for conversation_id, run in runs.items()
             if _state_value(run) == "awaiting_input"
-            and open_rooms.get(room_id) not in listed
+            and open_rooms.get(conversation_id) not in listed
         ]
         found = await asyncio.gather(*(self._store.get(sid) for sid in missing))
         return [record for record in found if record is not None] + records
@@ -341,18 +341,21 @@ class SessionFacade:
             )
         )
         current = await self._store.set_conversation_if_unset(
-            record.session_id, room.room_id
+            record.session_id, room.conversation_id
         )
         if current is None:
             raise _error("session_not_found", "Session not found")
-        if current.conversation_id != room.room_id:
+        if current.conversation_id != room.conversation_id:
             # A concurrent request created the container first.
             try:
-                await self._rooms.delete_room(room.room_id, owner.user_id)
+                await self._rooms.delete_room(room.conversation_id, owner.user_id)
             except Exception:
                 logger.warning(
                     "session_orphan_container_delete_failed",
-                    extra={"session_id": record.session_id, "room_id": room.room_id},
+                    extra={
+                        "session_id": record.session_id,
+                        "conversation_id": room.conversation_id,
+                    },
                     exc_info=True,
                 )
         return current
@@ -671,7 +674,7 @@ class SessionFacade:
         except Exception:
             logger.warning(
                 "session_close_pending_lookup_failed",
-                extra={"room_id": conversation_id},
+                extra={"conversation_id": conversation_id},
                 exc_info=True,
             )
             pending = []
@@ -692,7 +695,7 @@ class SessionFacade:
                     logger.warning(
                         "session_close_interaction_cancel_failed",
                         extra={
-                            "room_id": conversation_id,
+                            "conversation_id": conversation_id,
                             "interaction_id": interaction_id,
                         },
                         exc_info=True,
@@ -713,7 +716,7 @@ class SessionFacade:
                 # tolerated; the session is closed regardless.
                 logger.warning(
                     "session_close_run_cancel_failed",
-                    extra={"room_id": conversation_id, "run_id": run.run_id},
+                    extra={"conversation_id": conversation_id, "run_id": run.run_id},
                     exc_info=True,
                 )
 

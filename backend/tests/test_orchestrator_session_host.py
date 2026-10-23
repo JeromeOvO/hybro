@@ -88,7 +88,7 @@ async def test_session_requires_active_epoch_and_rejects_duplicate_rooms(catalog
 
     with pytest.raises(SessionConflict, match="epoch is not active"):
         await host.create_session(
-            room_id="room-1",
+            conversation_id="room-1",
             profile=profile(),
             candidate_scope=make_run().candidate_scope,
             requesting_subject_id="user-1",
@@ -97,7 +97,7 @@ async def test_session_requires_active_epoch_and_rejects_duplicate_rooms(catalog
 
     await epoch_store.activate("room-1", "create-1", activated_at=NOW)
     first = await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -106,7 +106,7 @@ async def test_session_requires_active_epoch_and_rejects_duplicate_rooms(catalog
     assert host.get_session("room-1") is first
     with pytest.raises(SessionConflict, match="already active"):
         await host.create_session(
-            room_id="room-1",
+            conversation_id="room-1",
             profile=profile(),
             candidate_scope=make_run().candidate_scope,
             requesting_subject_id="user-1",
@@ -134,7 +134,7 @@ async def test_prompt_runs_the_kernel_and_forwards_lifecycle_events(catalog):
         listener=listener,
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -179,7 +179,7 @@ async def test_observation_sink_reenters_without_a_session_object(catalog):
     )
     assert len(observed) == 1
     assert observed[0].run_id == run.run_id
-    assert observed[0].room_id == run.room_id
+    assert observed[0].conversation_id == run.conversation_id
     assert observed[0].payload["result_status"] == "completed"
     assert observed[0].sequence == run.state_version
 
@@ -249,7 +249,7 @@ async def test_run_addressed_observation_sink_attaches_lifecycle_listener():
     listener.assert_awaited_once()
     forwarded = listener.await_args.args[0]
     assert forwarded.event_type == "message_completed"
-    assert forwarded.room_id == run.room_id
+    assert forwarded.conversation_id == run.conversation_id
     assert forwarded.run_id == run.run_id
 
 
@@ -268,7 +268,7 @@ async def test_no_hosted_session_canonical_observation_converges_public_lifecycl
         if public is None:
             return
         await room_events.append(
-            room_id=public.room_id,
+            conversation_id=public.conversation_id,
             kind="run_event",
             payload_public={
                 "event_id": public.event_id,
@@ -299,7 +299,7 @@ async def test_no_hosted_session_canonical_observation_converges_public_lifecycl
         run_factory=DefaultRunFactory(),
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -345,7 +345,7 @@ async def test_no_hosted_session_canonical_observation_converges_public_lifecycl
     final_message_id = saved.proposed_final_message_id
     assert final_message_id is not None
     await room_events.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="agent_response",
         payload_public={
             "message_id": final_message_id,
@@ -359,7 +359,7 @@ async def test_no_hosted_session_canonical_observation_converges_public_lifecycl
         ts=NOW,
     )
     await room_events.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public={
             "event_id": f"public:{saved.run_id}:run_settled",
@@ -413,7 +413,7 @@ async def test_no_hosted_session_does_not_checkpoint_public_terminal_before_ack(
         run_factory=DefaultRunFactory(),
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -487,7 +487,7 @@ async def test_router_user_cancellation_terminalizes_live_canonical_run(catalog)
         run_factory=DefaultRunFactory(),
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -561,7 +561,7 @@ async def test_interrupt_requires_durable_cancellation_before_reconciliation(cat
         run_factory=DefaultRunFactory(),
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -629,7 +629,7 @@ async def test_shutdown_cancels_tasks_without_persisting_terminal_state(catalog)
         runtime=blocking,
     )
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",
@@ -675,7 +675,7 @@ async def test_host_only_schedules_typed_recoverable_failures(catalog, failure):
     await epochs.activate("room-1", "create-1", activated_at=NOW)
     host = _host(run_store=store, epoch_store=epochs, runtime=FailingModel())
     await host.create_session(
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(),
         candidate_scope=make_run().candidate_scope,
         requesting_subject_id="user-1",

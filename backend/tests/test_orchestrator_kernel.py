@@ -154,7 +154,7 @@ async def test_recovery_adopts_durable_final_after_active_assistant_id_was_clear
     )
     kernel, _, runtime, _ = await make_kernel([], run=run)
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,
@@ -210,7 +210,7 @@ async def test_recovery_repairs_stale_offset_from_durable_chunks_before_aborting
     )
     kernel, _, runtime, _ = await make_kernel([final_events("recovered")], run=run)
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,
@@ -1557,7 +1557,7 @@ async def test_recovery_keeps_multi_batch_turn_open_when_entry_still_parked():
     stored = await store.load(next(iter(store.runs)))
     assert stored is not None
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,

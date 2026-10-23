@@ -362,7 +362,7 @@ async def emit_hitl_request_events(
         request_ids.append(question.question_id)
         choices = list(question.choices) if question.choices else None
         event = HITLRequestEvent(
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             run_id=record.run_id if canonical else None,
             request_id=question.question_id,
             message_id=message_id,
@@ -448,7 +448,7 @@ async def emit_hitl_resolved_events(
         request_ids.append(question.question_id)
         given = answered.get(question.question_id)
         event = HITLResolvedEvent(
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             run_id=record.run_id if canonical else None,
             request_id=question.question_id,
             message_id=message_id,

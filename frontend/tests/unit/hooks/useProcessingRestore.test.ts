@@ -193,7 +193,7 @@ describe('useProcessingRestore', () => {
       }, 'db')
     })
     vi.mocked(inquiryActiveRuns).mockResolvedValue({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       active_runs: [],
       success: true,
       status_code: 200,
@@ -257,7 +257,7 @@ describe('useProcessingRestore', () => {
       reconciliationCompleted = true
     })
     vi.mocked(inquiryActiveRuns).mockResolvedValue({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       active_runs: [],
       success: true,
       status_code: 200,

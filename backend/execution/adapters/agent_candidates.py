@@ -87,12 +87,12 @@ class AgentServiceCandidateSource:
         self,
         *,
         run_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         requesting_subject_id: str,
         candidate_agent_ids: list[str],
     ) -> list[AgentToolCandidate]:
-        del run_id, room_id, room_epoch
+        del run_id, conversation_id, room_epoch
         excluded = (
             await self._exclusion_reader.get_excluded_agent_ids()
             if self._exclusion_reader is not None

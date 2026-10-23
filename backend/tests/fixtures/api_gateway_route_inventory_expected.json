@@ -657,7 +657,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "methods": [
       "DELETE"
     ],
@@ -679,7 +679,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "methods": [
       "GET"
     ],
@@ -702,7 +702,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "methods": [
       "PATCH"
     ],
@@ -724,7 +724,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/active-runs",
+    "path": "/api/v1/rooms/{conversation_id}/active-runs",
     "methods": [
       "GET"
     ],
@@ -746,7 +746,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "path": "/api/v1/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail",
     "methods": [
       "GET"
     ],
@@ -767,7 +767,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/interactions/{interaction_id}/cancel",
     "methods": [
       "POST"
     ],
@@ -790,7 +790,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/pending",
     "methods": [
       "GET"
     ],
@@ -813,7 +813,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/respond-batch",
     "methods": [
       "POST"
     ],
@@ -836,7 +836,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/messages",
+    "path": "/api/v1/rooms/{conversation_id}/messages",
     "methods": [
       "GET"
     ],
@@ -858,7 +858,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/messages",
+    "path": "/api/v1/rooms/{conversation_id}/messages",
     "methods": [
       "POST"
     ],
@@ -993,7 +993,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/events",
+    "path": "/api/v1/sse/room/{conversation_id}/events",
     "methods": [
       "GET"
     ],
@@ -1014,7 +1014,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/status",
+    "path": "/api/v1/sse/room/{conversation_id}/status",
     "methods": [
       "GET"
     ],
@@ -1036,7 +1036,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/stream",
+    "path": "/api/v1/sse/room/{conversation_id}/stream",
     "methods": [
       "GET"
     ],

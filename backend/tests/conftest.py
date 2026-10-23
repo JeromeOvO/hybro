@@ -233,7 +233,7 @@ def sample_private_agent(sample_agent_card, mock_user) -> Agent:
 def sample_room(mock_user, sample_agent) -> Room:
     """Create a sample room with all fields populated (normal/non-debate mode)."""
     return Room(
-        room_id="test-room-001",
+        conversation_id="test-room-001",
         room_name="Test Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
@@ -250,7 +250,7 @@ def sample_room(mock_user, sample_agent) -> Room:
 def sample_debate_room(mock_user, sample_agent) -> Room:
     """Create a sample room with debate mode enabled."""
     return Room(
-        room_id="test-debate-room-001",
+        conversation_id="test-debate-room-001",
         room_name="Debate Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
@@ -267,7 +267,7 @@ def sample_debate_room(mock_user, sample_agent) -> Room:
 def sample_supervisor_room(mock_user, sample_agent) -> Room:
     """Create a sample room with supervisor mode enabled."""
     return Room(
-        room_id="test-supervisor-room-001",
+        conversation_id="test-supervisor-room-001",
         room_name="Supervisor Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
@@ -284,7 +284,7 @@ def sample_supervisor_room(mock_user, sample_agent) -> Room:
 def sample_user_message(sample_room, mock_user) -> RoomUserMessage:
     """Create a sample user message."""
     return RoomUserMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-user-msg-001",
         user_id=mock_user.user_id,
         message_content=MessageContent(message_text="Hello, this is a test message"),
@@ -297,7 +297,7 @@ def sample_agent_message(
 ) -> RoomAgentMessage:
     """Create a sample agent message."""
     return RoomAgentMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-agent-msg-001",
         agent_id=sample_agent.agent_id,
         related_message_id=sample_user_message.message_id,
@@ -321,7 +321,7 @@ def sample_agent_message_with_task(
 ) -> RoomAgentMessage:
     """Create a sample agent message with task tracking."""
     return RoomAgentMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-agent-task-msg-001",
         agent_id=sample_agent.agent_id,
         related_message_id=sample_user_message.message_id,
@@ -345,7 +345,7 @@ def sample_hitl_request(sample_room, sample_user_message) -> HITLRequest:
         interaction_id="test-hitl-req-001",
         question_index=0,
         question_count=1,
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         user_message_id=sample_user_message.message_id,
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,
         public_source=HITLPublicSource.SUPERVISOR,
@@ -646,7 +646,7 @@ def sample_file_upload_metadata():
 
     def _make(
         file_id="f_test_001",
-        room_id="room_test_123",
+        conversation_id="room_test_123",
         user_id="user_test_123",
         mime_type="image/png",
         file_name="test.png",
@@ -654,9 +654,9 @@ def sample_file_upload_metadata():
     ):
         return {
             "file_id": file_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "user_id": user_id,
-            "s3_key": f"uploads/{room_id}/{file_id}/{file_name}",
+            "s3_key": f"uploads/{conversation_id}/{file_id}/{file_name}",
             "mime_type": mime_type,
             "file_name": file_name,
             "size_bytes": size_bytes,

@@ -138,7 +138,7 @@ class UserAttachmentRequest(BaseModel):
 
 
 class RoomCenterUserMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     related_message_id: str | None = None
     user_id: str | None = None
@@ -157,7 +157,7 @@ class RoomCenterUserMessageRequest(BaseModel):
 
 
 class RoomCenterAgentMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     related_message_id: str | None = None
     agent_id: str | None = None
@@ -177,7 +177,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
 
 
 class RoomCenterRoomMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     limit: Any | None = None
     cursor: Any | None = None
     message_id: str | None = None

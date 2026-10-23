@@ -74,9 +74,9 @@ class MemoryRepositorySpy:
         self.compacted_entries: list[dict] = []
         self.get_calls = 0
 
-    async def get_room_memory(self, room_id: str) -> dict | None:
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
         self.get_calls += 1
-        if self.doc and self.doc.get("room_id") == room_id:
+        if self.doc and self.doc.get("room_id") == conversation_id:
             return self.doc
         return None
 
@@ -84,17 +84,17 @@ class MemoryRepositorySpy:
         self.doc = memory
         return memory["memory_id"]
 
-    async def delete_room_memory(self, room_id: str) -> bool:
-        if self.doc and self.doc.get("room_id") == room_id:
+    async def delete_room_memory(self, conversation_id: str) -> bool:
+        if self.doc and self.doc.get("room_id") == conversation_id:
             self.doc = None
             return True
         return False
 
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         self.compacted_entries.extend(compacted_turns)
-        if not self.doc or self.doc.get("room_id") != room_id:
+        if not self.doc or self.doc.get("room_id") != conversation_id:
             return False
         by_id = {entry["turn_id"]: entry for entry in compacted_turns}
         for turn in self.doc["conversation_history"]:
@@ -120,22 +120,24 @@ class ContentRepositorySpy:
     async def get_content_by_document_id(self, document_id: str) -> dict | None:
         return self.docs.get(document_id)
 
-    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
+    async def get_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> dict | None:
         for doc in self.docs.values():
-            if doc["room_id"] == room_id and doc["turn_id"] == turn_id:
+            if doc["room_id"] == conversation_id and doc["turn_id"] == turn_id:
                 return doc
         return None
 
-    async def delete_content_by_room_id(self, _room_id: str) -> int:
+    async def delete_content_by_room_id(self, _conversation_id: str) -> int:
         return 0
 
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        docs = [doc for doc in self.docs.values() if doc["room_id"] == room_id]
-        return {"room_id": room_id, "total_documents": len(docs)}
+    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
+        docs = [doc for doc in self.docs.values() if doc["room_id"] == conversation_id]
+        return {"room_id": conversation_id, "total_documents": len(docs)}
 
     async def text_search(
         self,
-        _room_id: str,
+        _conversation_id: str,
         _query: str,
         limit: int = 50,
         skip: int = 0,
@@ -143,13 +145,15 @@ class ContentRepositorySpy:
         return []
 
     async def scan_text_search(
-        self, _room_id: str, _query: str, _limit: int
+        self, _conversation_id: str, _query: str, _limit: int
     ) -> list[dict]:
         return []
 
 
 class RoomHistoryReaderStub:
-    async def get_messages_for_room(self, _room_id: str, _limit: int, before=None):
+    async def get_messages_for_room(
+        self, _conversation_id: str, _limit: int, before=None
+    ):
         return []
 
     async def get_messages_by_ids(self, _message_ids: list[str]):
@@ -241,7 +245,7 @@ async def test_compact_room_memory_preserves_recent_and_stores_content_hash() ->
     result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=content_repo,
-        room_id="r1",
+        conversation_id="r1",
         room_memory_doc=None,
         config=config(preserve_recent_turns=1),
         now=now,
@@ -298,7 +302,7 @@ async def test_expand_turn_content_returns_full_and_mongodb_content() -> None:
     content_repo = ContentRepositorySpy()
     await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="stored content",
         content_type="text",
@@ -325,7 +329,7 @@ async def test_expand_turn_content_raises_when_stored_content_expired() -> None:
     content_repo = ContentRepositorySpy()
     await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="expired content",
         content_type="text",
@@ -346,13 +350,13 @@ async def test_fetch_turn_content_returns_graceful_fallback_errors() -> None:
         MemoryRepositorySpy(None),
         ContentRepositorySpy(),
         turn_id="t1",
-        room_id="missing",
+        conversation_id="missing",
     )
     missing_turn = await compaction.fetch_turn_content(
         MemoryRepositorySpy(room_doc([full_turn("t1", "one")])),
         ContentRepositorySpy(),
         turn_id="t2",
-        room_id="r1",
+        conversation_id="r1",
     )
     unsupported = await compaction.fetch_turn_content(
         MemoryRepositorySpy(
@@ -367,7 +371,7 @@ async def test_fetch_turn_content_returns_graceful_fallback_errors() -> None:
         ),
         ContentRepositorySpy(),
         turn_id="t3",
-        room_id="r1",
+        conversation_id="r1",
     )
 
     assert missing_room == "[Error: Room missing not found]"

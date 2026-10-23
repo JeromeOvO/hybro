@@ -213,7 +213,7 @@ class A2APushNotificationIngress:
                     call_record_id=call.call_record_id,
                     endpoint_scope=call.dispatch_snapshot.endpoint_scope,
                     agent_id=call.agent_id,
-                    room_id=call.room_id,
+                    conversation_id=call.conversation_id,
                     room_epoch=call.room_epoch,
                     message_id=call.dispatch_snapshot.message_id,
                     expected_task_id=call.a2a_task_id,

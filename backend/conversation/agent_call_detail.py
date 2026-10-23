@@ -68,7 +68,7 @@ class CanonicalAgentCallDetailService:
     async def _artifact_descriptor(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         artifact_ref: str,
     ) -> CanonicalArtifactDescriptor:
         match = _ROOM_FILE_REF_RE.fullmatch(artifact_ref)
@@ -77,7 +77,7 @@ class CanonicalAgentCallDetailService:
             return CanonicalArtifactDescriptor(artifact_ref=artifact_ref)
         try:
             metadata = await self._artifact_metadata_reader.get_for_room_file(
-                room_id,
+                conversation_id,
                 file_id,
             )
         except Exception:
@@ -104,12 +104,12 @@ class CanonicalAgentCallDetailService:
     async def get(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         run_id: str,
         public_call_id: str,
     ) -> CanonicalAgentCallDetail | None:
         run = await self._run_store.load(run_id)
-        if run is None or run.room_id != room_id:
+        if run is None or run.conversation_id != conversation_id:
             return None
         entry = next(
             (
@@ -136,7 +136,7 @@ class CanonicalAgentCallDetailService:
                     typed_parts.append(CanonicalDataPart(data=data))
         artifacts = [
             await self._artifact_descriptor(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 artifact_ref=artifact_ref,
             )
             for artifact_ref in result.artifact_refs

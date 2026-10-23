@@ -52,9 +52,9 @@ export const handlers = [
     const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       success: true,
-      room_id: 'test-room-id',
+      conversation_id: 'test-room-id',
       room: {
-        room_id: 'test-room-id',
+        conversation_id: 'test-room-id',
         room_name: body.room_name || 'Test Room',
         room_owner_id: 'test-user',
         room_owner_name: body.room_owner_name || 'Test User',
@@ -67,9 +67,9 @@ export const handlers = [
   http.get(`${rooms}/:roomId`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: params.roomId,
+      conversation_id: params.roomId,
       room: {
-        room_id: params.roomId,
+        conversation_id: params.roomId,
         room_name: 'Test Room',
         room_owner_id: 'test-user',
         room_owner_name: 'Test User',
@@ -82,7 +82,7 @@ export const handlers = [
   http.get(`${rooms}/:roomId/active-runs`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: params.roomId,
+      conversation_id: params.roomId,
       active_runs: [],
     })
   }),
@@ -91,12 +91,12 @@ export const handlers = [
     const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       success: true,
-      room_id: params.roomId,
+      conversation_id: params.roomId,
       message_id: `msg-${Date.now()}`,
       user_id: body.user_id,
       user_name: body.user_name,
       message: {
-        room_id: params.roomId,
+        conversation_id: params.roomId,
         message_id: `msg-${Date.now()}`,
         message_type: 'user',
         message_content: {
@@ -110,7 +110,7 @@ export const handlers = [
   http.get(`${rooms}/:roomId/messages`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: params.roomId,
+      conversation_id: params.roomId,
       message_list: [],
     })
   }),
@@ -133,7 +133,7 @@ export const handlers = [
   // SSE API handlers
   http.get(`${sseBase}/room/:roomId/status`, async () => {
     return HttpResponse.json({
-      room_id: 'test-room',
+      conversation_id: 'test-room',
       active_connections: 1,
       status: 'active',
     })

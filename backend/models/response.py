@@ -54,7 +54,7 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
 
 class OrchestrationResponse(BaseModel):
     task_id: str | None = None
-    room_id: str | None = None
+    conversation_id: str | None = None
     meta_task_ids: list[str] | None = None
     room_agent_message_list: list[RoomAgentMessage] | None = None
     agent_id: str | None = None
@@ -107,7 +107,7 @@ class ActiveRunRef(BaseModel):
 
 
 class RoomCenterRoomSettingResponse(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     room_agent_set: list[str] | None = None
     resolved_agents: list[RoomAgentRef] | None = None
     room_default_status: str | None = None  # ok | degraded | empty | all_unavailable
@@ -120,7 +120,7 @@ class RoomCenterRoomSettingResponse(BaseModel):
 
 
 class RoomHistoryItem(BaseModel):
-    room_id: str
+    conversation_id: str
     title: str
     last_activity_at: datetime
     is_pinned: bool = False
@@ -135,7 +135,7 @@ class RoomHistoryResponse(BaseModel):
 class RoomCenterActiveRunsResponse(BaseModel):
     """Lightweight payload for reconnect / reconcile without full room settings."""
 
-    room_id: str | None = None
+    conversation_id: str | None = None
     active_runs: list[ActiveRunRef] | None = None
     success: bool
     error: str | None = None
@@ -143,7 +143,7 @@ class RoomCenterActiveRunsResponse(BaseModel):
 
 
 class RoomCenterUserMessageResponse(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     dispatch_root_message_id: str | None = None
     user_id: str | None = None
@@ -159,7 +159,7 @@ class RoomCenterUserMessageResponse(BaseModel):
 
 
 class RoomCenterAgentMessageResponse(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
@@ -173,7 +173,7 @@ class RoomCenterAgentMessageResponse(BaseModel):
 
 
 class RoomCenterRoomMessageResponse(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_list: list[RoomMessage] | None = None
     has_more: bool | None = None
     next_cursor: str | None = None

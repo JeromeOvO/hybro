@@ -224,7 +224,7 @@ class RoomMessageEnvelopeResolver:
         mode = request.mode
         scope = request.agent_scope.model_dump(mode="json")
         candidate_agent_ids = await self._resolve_candidate_agent_ids(
-            request.room_id, scope, user_id=request.sender_id
+            request.conversation_id, scope, user_id=request.sender_id
         )
         scope_source = str(scope.get("source") or "explicit_selection")
         group_id = (
@@ -274,7 +274,7 @@ class RoomMessageEnvelopeResolver:
         return blocks
 
     async def _resolve_candidate_agent_ids(
-        self, room_id: str | None, scope: Any, *, user_id: str | None = None
+        self, conversation_id: str | None, scope: Any, *, user_id: str | None = None
     ) -> list[str]:
         if not isinstance(scope, dict):
             raise UnsupportedEnvelopeError(
@@ -285,11 +285,11 @@ class RoomMessageEnvelopeResolver:
             agent_ids = scope.get("agent_ids") or []
             return [str(agent_id) for agent_id in agent_ids if agent_id]
         if source == "room_default":
-            if room_id is None:
+            if conversation_id is None:
                 raise UnsupportedEnvelopeError(
-                    "orchestrator room scope requires room_id"
+                    "orchestrator room scope requires conversation_id"
                 )
-            return await self._list_room_agent_ids(room_id)
+            return await self._list_room_agent_ids(conversation_id)
         if source == "all_agents":
             if self._list_all_active_agent_ids is None:
                 raise UnsupportedEnvelopeError(
@@ -371,7 +371,7 @@ _SCOPE_AUTHORIZATION_KINDS = {
 
 def _build_candidate_scope(
     *,
-    room_id: str,
+    conversation_id: str,
     agent_ids: list[str],
     scope_source: str = "explicit_selection",
     group_id: str | None = None,
@@ -379,14 +379,14 @@ def _build_candidate_scope(
 ) -> CandidateScopeSnapshot:
     basis = AuthorizationBasis(
         kind=_SCOPE_AUTHORIZATION_KINDS.get(scope_source, "explicit_selection"),
-        room_id=room_id,
+        conversation_id=conversation_id,
         group_id=group_id,
         selected_by_user_id=requesting_subject_id or None,
     )
     return CandidateScopeSnapshot(
-        snapshot_id=f"scope-{_sha256_hex(json.dumps([room_id, sorted(agent_ids), scope_source, group_id or '']))}",
+        snapshot_id=f"scope-{_sha256_hex(json.dumps([conversation_id, sorted(agent_ids), scope_source, group_id or '']))}",
         source=scope_source,
-        room_id=room_id,
+        conversation_id=conversation_id,
         group_id=group_id,
         agent_ids=list(dict.fromkeys(agent_ids)),
         authorization_basis=basis,
@@ -644,7 +644,7 @@ class DualRuntimeRouter:
         interaction_id: str,
         answers: list[dict[str, str]],
         responder_id: str,
-        room_id: str,
+        conversation_id: str,
     ) -> str:
         if self._runtime is None:
             raise OrchestratorRoutingError("orchestrator HITL ingress is not bound")
@@ -652,7 +652,7 @@ class DualRuntimeRouter:
         if read is None:
             raise OrchestratorHITLNotOwnedError(interaction_id)
         spec, route, _fingerprint = read
-        if route.room_id != room_id:
+        if route.conversation_id != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         run = await self._runtime.run_store.load(route.orchestration_run_id)
         if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
@@ -719,7 +719,7 @@ class DualRuntimeRouter:
     async def cancel_hitl_interaction(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         expected_version: int,
     ) -> int:
@@ -729,7 +729,7 @@ class DualRuntimeRouter:
         if read is None:
             raise KeyError(interaction_id)
         spec, route, _fingerprint = read
-        if route.room_id != room_id:
+        if route.conversation_id != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         if route.interaction_revision != expected_version:
             raise HITLConflictError("HITL interaction changed before cancellation")
@@ -763,7 +763,7 @@ class DualRuntimeRouter:
         # Close the public interaction before settling the owning Run; a
         # terminal run_settled event is invalid while HITL remains active.
         await self._emit_hitl_resolved_events(
-            room_id=room_id,
+            conversation_id=conversation_id,
             spec=spec,
             route=route,
             status="canceled",
@@ -776,7 +776,7 @@ class DualRuntimeRouter:
         hitl_port = getattr(self._runtime, "hitl_port", None)
         if hitl_port is None:
             return
-        interactions = await hitl_port.get_eligible_interactions(run.room_id)
+        interactions = await hitl_port.get_eligible_interactions(run.conversation_id)
         for spec, route, _fingerprint in interactions:
             if route.orchestration_run_id != run.run_id:
                 continue
@@ -788,7 +788,7 @@ class DualRuntimeRouter:
             if abandoned not in {"accepted", "replayed", "absent"}:
                 raise HITLConflictError("HITL interaction could not be canceled")
             await self._emit_hitl_resolved_events(
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 spec=spec,
                 route=route,
                 status="canceled",
@@ -863,7 +863,7 @@ class DualRuntimeRouter:
     async def _emit_hitl_resolved_events(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         spec: A2AInteractionSpec,
         route: Any,
         status: str,
@@ -898,11 +898,13 @@ class DualRuntimeRouter:
             ),
         )
 
-    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
+    async def get_pending_hitl(self, conversation_id: str) -> list[HITLRequest]:
         if self._runtime is None:
             return []
 
-        interactions = await self._runtime.hitl_port.get_published_interactions(room_id)
+        interactions = await self._runtime.hitl_port.get_published_interactions(
+            conversation_id
+        )
         requests: list[HITLRequest] = []
         for spec, route, _fingerprint in interactions:
             run = await self._runtime.run_store.load(route.orchestration_run_id)
@@ -943,7 +945,7 @@ class DualRuntimeRouter:
                 requests.append(
                     HITLRequest(
                         request_id=question.question_id,
-                        room_id=room_id,
+                        conversation_id=conversation_id,
                         user_message_id=user_message_id,
                         source="agent",
                         prompt=sanitize_public_text(
@@ -1004,11 +1006,11 @@ class DualRuntimeRouter:
         envelope, profile = await self._resolve_envelope_and_profile(
             request, message_id=message_id
         )
-        room_id = request.room_id
+        conversation_id = request.conversation_id
 
         requesting_subject_id = envelope.requesting_subject_id or request.sender_id
         candidate_scope = _build_candidate_scope(
-            room_id=room_id,
+            conversation_id=conversation_id,
             agent_ids=envelope.candidate_agent_ids,
             scope_source=envelope.scope_source,
             group_id=envelope.group_id,
@@ -1027,21 +1029,21 @@ class DualRuntimeRouter:
         )
 
         session_host = self._runtime.session_host
-        session = session_host.get_session(room_id)
+        session = session_host.get_session(conversation_id)
         if session is not None:
             if await session.has_active_run():
                 raise SessionConflict("a Run is already active for this Room")
             # A session pins ONE Run id and ONE frozen catalog, so an idle
             # (terminal) session is replaced by a freshly prepared one for
             # every new message instead of replaying the stale Run id.
-            session_host.drop_session(room_id)
-        epoch = await self._runtime.epoch_store.read_active(room_id)
+            session_host.drop_session(conversation_id)
+        epoch = await self._runtime.epoch_store.read_active(conversation_id)
         if epoch is None:
             raise UnsupportedEnvelopeError("Room epoch is not active")
         run_id = f"run-{uuid4().hex}"
         prepared = await self._runtime.catalog_assembler.prepare(
             run_id=run_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_epoch=epoch.epoch,
             requesting_subject_id=requesting_subject_id,
             candidate_scope=candidate_scope,
@@ -1055,11 +1057,11 @@ class DualRuntimeRouter:
             created_at=datetime.now(UTC),
         )
         conversation_history = await self._load_conversation_history(
-            room_id,
+            conversation_id,
             current_message_id=message_id,
         )
         await session_host.create_session(
-            room_id=room_id,
+            conversation_id=conversation_id,
             profile=profile,
             candidate_scope=candidate_scope,
             requesting_subject_id=requesting_subject_id,
@@ -1089,26 +1091,26 @@ class DualRuntimeRouter:
             created_at=datetime.now(UTC),
         )
         result = await session_host.prompt(
-            room_id,
+            conversation_id,
             message,
             client_request_id=request.client_request_id,
         )
         return OrchestrationResponse(
             task_id=result.run.run_id if getattr(result, "run", None) else None,
-            room_id=room_id,
+            conversation_id=conversation_id,
             success=True,
             status_code=200,
         )
 
     async def _load_conversation_history(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         current_message_id: str,
     ) -> tuple[ModelMessage, ...]:
         if self._room_memory_reader is None:
             return ()
-        document = await self._room_memory_reader(room_id)
+        document = await self._room_memory_reader(conversation_id)
         if not document:
             return ()
         state = normalize_room_memory(document)

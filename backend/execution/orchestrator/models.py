@@ -7,13 +7,19 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from common.dto.base import stored_conversation_id
+
 from .persistence import TERMINAL_RUN_STATUSES
 
 
 class ContractModel(BaseModel):
-    """Strict base for persisted orchestrator contracts."""
+    """Strict base for persisted orchestrator contracts.
 
-    model_config = ConfigDict(extra="forbid")
+    ``serialize_by_alias`` keeps stored keys such as ``room_id`` (see
+    ``stored_conversation_id``) in every dump, including digest inputs.
+    """
+
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
 
 
 class ResolvedModelSnapshot(ContractModel):
@@ -659,7 +665,7 @@ class AuthorizationBasis(ContractModel):
         "mention",
         "all_active_agents",
     ]
-    room_id: str | None = None
+    conversation_id: str | None = stored_conversation_id(None)
     group_id: str | None = None
     selected_by_user_id: str | None = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -683,7 +689,7 @@ class CandidateScopeSnapshot(ContractModel):
     snapshot_id: str
     revision: int = Field(default=1, ge=1)
     source: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     group_id: str | None = None
     agent_ids: list[str]
     agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
@@ -724,7 +730,7 @@ class OrchestratorRunState(ContractModel):
     # way without guessing from store identity.
     runtime_generation: Literal["orchestrator"] = "orchestrator"
     session_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     client_request_id: str | None
     request: RunRequestSnapshot
     profile: OrchestratorProfile
@@ -894,7 +900,7 @@ class OrchestratorEvent(ContractModel):
     event_type: EventType
     session_id: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     sequence: int = Field(gt=0)
     state_version: int = Field(ge=0)

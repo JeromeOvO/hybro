@@ -69,10 +69,10 @@ class InMemoryCollection:
 
 class AlwaysValidLeases:
     @asynccontextmanager
-    async def hold(self, _room_id, _owner):
+    async def hold(self, _conversation_id, _owner):
         yield "test-lease"
 
-    async def assert_valid(self, _room_id, _lease_id):
+    async def assert_valid(self, _conversation_id, _lease_id):
         return None
 
 
@@ -147,7 +147,7 @@ async def test_room_files_upload_persists_ready_metadata_and_content():
         file_bytes=b"hello",
         filename="../../report.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="text/plain",
     )
 
@@ -220,7 +220,7 @@ async def test_user_upload_survives_lost_finalize_acknowledgement():
         file_bytes=b"hello",
         filename="report.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="text/plain",
     )
 
@@ -243,7 +243,7 @@ async def test_agent_artifact_rejects_configured_room_without_write_leases():
 
     with pytest.raises(FileStoragePlatformError) as exc_info:
         await files.store_agent_artifact(
-            room_id="room-1",
+            conversation_id="room-1",
             source_message_id="message-1",
             origin_key="origin-1",
             content=b"result",
@@ -273,7 +273,7 @@ async def test_agent_artifact_translates_transient_content_backend_failure():
 
     with pytest.raises(RetryableFileStoragePlatformError) as exc_info:
         await files.store_agent_artifact(
-            room_id="room-1",
+            conversation_id="room-1",
             source_message_id="message-1",
             origin_key="origin-1",
             content=b"result",
@@ -299,7 +299,7 @@ async def test_agent_artifact_survives_lost_finalize_acknowledgement():
     files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -327,11 +327,11 @@ async def test_room_files_normalizes_mime_types_before_persistence():
         file_bytes=b"user",
         filename="user.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="Text/Plain; charset=UTF-8",
     )
     agent = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-unsafe-mime",
         content=b"agent",
@@ -361,7 +361,7 @@ async def test_room_files_rejects_upload_before_writing_metadata_or_content():
             file_bytes=b"123456",
             filename="large.txt",
             owner_id="user-1",
-            room_id="room-1",
+            conversation_id="room-1",
             content_type="text/plain",
         )
 
@@ -424,7 +424,7 @@ async def test_room_files_materializes_agent_artifact_idempotently():
     files._leases = AlwaysValidLeases()
 
     first = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -432,7 +432,7 @@ async def test_room_files_materializes_agent_artifact_idempotently():
         mime_type="text/plain",
     )
     second = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -474,7 +474,7 @@ async def test_room_files_resumes_pending_agent_artifact_without_duplicate_origi
     files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -503,7 +503,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     )
     files._leases = AlwaysValidLeases()
     old = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-old",
         content=b"old",
@@ -511,7 +511,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
         mime_type="text/plain",
     )
     new = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-new",
         content=b"new",
@@ -520,7 +520,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     )
 
     deleted = await files.delete_superseded_agent_artifacts(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         file_ids={old["file_id"]},
     )

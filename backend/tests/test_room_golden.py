@@ -25,7 +25,7 @@ async def test_golden_room_create_membership_provenance_cases():
         )
     )
 
-    assert room.room_id == "room-1"
+    assert room.conversation_id == "room-1"
     assert room.room_name == "Golden Room"
     assert dict(room.agent_set) == {"a1": "Agent One", "a2": "Agent Two"}
     assert room.membership_origin == "manual"
@@ -50,7 +50,7 @@ async def test_golden_user_message_dispatch_root_matches_message_id():
     saved = await facade.save_user_message(
         "r1",
         UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             sender_id="owner",
             sender_name="Owner",
             message_text="Hello",

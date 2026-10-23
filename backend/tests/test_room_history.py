@@ -116,7 +116,7 @@ async def test_saving_messages_touches_durable_room_activity():
     await facade.save_user_message(
         "r1",
         UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             message_text="Hello",
             sender_id="owner",
         ),
@@ -142,7 +142,7 @@ async def test_streaming_agent_message_updates_do_not_touch_room_activity():
         now=lambda: datetime(2026, 8, 10, tzinfo=UTC),
     )
     message = SimpleNamespace(
-        room_id="r1",
+        conversation_id="r1",
         model_dump=lambda **_kwargs: {"room_id": "r1", "message_content": {}},
     )
 
@@ -159,7 +159,7 @@ def _user(user_id: str = "owner") -> ClerkUser:
 
 
 def _room(
-    room_id: str,
+    conversation_id: str,
     *,
     owner_id: str = "owner",
     pinned: bool = False,
@@ -168,8 +168,8 @@ def _room(
 ):
     activity = datetime(2026, 8, activity_day, tzinfo=UTC)
     return SimpleNamespace(
-        room_id=room_id,
-        room_name=f"Room {room_id}",
+        conversation_id=conversation_id,
+        room_name=f"Room {conversation_id}",
         room_owner_id=owner_id,
         room_created_at=activity,
         last_activity_at=activity,
@@ -203,7 +203,7 @@ async def test_history_uses_repository_order_and_bulk_status():
 
     response = await get_room_history(user=_user(), engine=engine, rooms=chat_rooms)
 
-    assert [item.room_id for item in response.items] == [
+    assert [item.conversation_id for item in response.items] == [
         "pinned-one",
         "pinned-two",
         "recent-new",
@@ -237,7 +237,7 @@ async def test_reorder_requires_complete_owned_pinned_set_before_writing():
 
     with pytest.raises(HTTPException) as exc_info:
         await reorder_pinned_rooms(
-            payload=PinnedRoomOrderUpdate(room_ids=["p1"]),
+            payload=PinnedRoomOrderUpdate(conversation_ids=["p1"]),
             user=_user(),
             store=store,
             rooms=chat_rooms,
@@ -265,7 +265,7 @@ async def test_reorder_persists_complete_manual_order_after_ownership_checks():
     )
 
     result = await reorder_pinned_rooms(
-        payload=PinnedRoomOrderUpdate(room_ids=["p2", "p1"]),
+        payload=PinnedRoomOrderUpdate(conversation_ids=["p2", "p1"]),
         user=_user(),
         store=store,
         rooms=chat_rooms,

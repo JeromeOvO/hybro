@@ -164,15 +164,15 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       )
 
       if (response.success && response.room) {
-        const roomId = response.room.room_id
+        const roomId = response.room.conversation_id
         if (!roomId) {
-          throw new Error('Room created but no room_id returned')
+          throw new Error('Room created but no conversation_id returned')
         }
 
         const queryClient = getActiveQueryClient()
         if (queryClient) {
           await optimisticallyUpsertCreatedRoom(queryClient, userId, {
-            room_id: roomId,
+            conversation_id: roomId,
             title: roomName,
             last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
             is_pinned: false,
@@ -268,16 +268,16 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         },
       )
 
-      if (!response.success || !response.room?.room_id) {
+      if (!response.success || !response.room?.conversation_id) {
         toast.error('Failed to create room')
         return false
       }
 
-      const roomId = response.room.room_id
+      const roomId = response.room.conversation_id
       const queryClient = getActiveQueryClient()
       if (queryClient) {
         await optimisticallyUpsertCreatedRoom(queryClient, userId, {
-          room_id: roomId,
+          conversation_id: roomId,
           title: template.title,
           last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
           is_pinned: false,

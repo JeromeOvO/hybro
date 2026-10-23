@@ -181,7 +181,7 @@ export interface MetaTask {
 }
 export interface OrchestrationResponse {
   task_id?: string | null;
-  room_id?: string | null;
+  conversation_id?: string | null;
   meta_task_ids?: string[] | null;
   room_agent_message_list?: RoomAgentMessage[] | null;
   agent_id?: string | null;
@@ -190,7 +190,7 @@ export interface OrchestrationResponse {
   status_code?: number;
 }
 export interface RoomAgentMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;
@@ -207,7 +207,7 @@ export interface MessageContent {
   [k: string]: unknown;
 }
 export interface Room {
-  room_id?: string;
+  conversation_id?: string;
   room_name: string;
   room_owner_id: string;
   room_owner_name: string;
@@ -224,7 +224,7 @@ export interface Room {
   source_group_name?: string | null;
 }
 export interface RoomCenterAgentMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
@@ -236,7 +236,7 @@ export interface RoomCenterAgentMessageResponse {
   status_code?: number;
 }
 export interface RoomCenterRoomMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_list?: RoomMessage[] | null;
   has_more?: boolean | null;
   next_cursor?: string | null;
@@ -248,7 +248,7 @@ export interface RoomCenterRoomMessageResponse {
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;
@@ -269,7 +269,7 @@ export interface RoomMessage {
   extend_info?: unknown;
 }
 export interface RoomCenterRoomSettingResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   room_agent_set?: string[] | null;
   resolved_agents?: RoomAgentRefWire[] | null;
   room_default_status?: "ok" | "degraded" | "empty" | "all_unavailable" | null;
@@ -287,7 +287,7 @@ export interface ActiveRunRefWire {
   updated_at?: string | null;
 }
 export interface RoomCenterActiveRunsResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   active_runs?: ActiveRunRefWire[] | null;
   success: boolean;
   error?: string | null;
@@ -303,7 +303,7 @@ export interface ScopeResolutionErrorWire {
   message: string;
 }
 export interface RoomCenterUserMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   dispatch_root_message_id?: string | null;
   user_id?: string | null;
@@ -316,7 +316,7 @@ export interface RoomCenterUserMessageResponse {
   status_code?: number;
 }
 export interface RoomUserMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;

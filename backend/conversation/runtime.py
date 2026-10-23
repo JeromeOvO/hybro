@@ -106,14 +106,14 @@ class ConversationRuntime:
     async def get_idempotent_user_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         client_request_id: str,
         idempotency_fingerprint: str,
         idempotency_fingerprint_version: int,
     ) -> RoomCenterUserMessageResponse | None:
         """Return a stable replay/conflict response without running side effects."""
         return await self._message_sender.get_idempotent_user_message(
-            room_id=room_id,
+            conversation_id=conversation_id,
             client_request_id=client_request_id,
             idempotency_fingerprint=idempotency_fingerprint,
             idempotency_fingerprint_version=idempotency_fingerprint_version,

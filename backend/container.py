@@ -401,7 +401,7 @@ async def terminalize_canonical_hitl_run(
                 sequence=current.state_version,
                 timestamp=datetime.now(UTC),
                 payload=payload,
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
             )
@@ -557,16 +557,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _room_snapshot_service = SnapshotService(store=_room_event_store)
             app.state.room_snapshot_service = _room_snapshot_service
 
-            async def _room_seq_reader(room_id: str) -> int | None:
-                return await _room_event_store.latest_seq(room_id)
+            async def _room_seq_reader(conversation_id: str) -> int | None:
+                return await _room_event_store.latest_seq(conversation_id)
 
-            async def _snapshot_provider(room_id: str) -> dict[str, Any] | None:
+            async def _snapshot_provider(conversation_id: str) -> dict[str, Any] | None:
                 try:
-                    return await _room_snapshot_service.snapshot(room_id)
+                    return await _room_snapshot_service.snapshot(conversation_id)
                 except Exception:
                     logger.warning(
                         "resync snapshot build failed",
-                        extra={"room_id": room_id},
+                        extra={"conversation_id": conversation_id},
                         exc_info=True,
                     )
                     return None
@@ -879,7 +879,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     }
                 )
                 event_id = f"public:{run_id}:{kind}:{interaction['interaction_id']}"
-                records = await _read_canonical_run_events(run.room_id, run_id)
+                records = await _read_canonical_run_events(run.conversation_id, run_id)
                 parent_event_id = _latest_canonical_parent_id(
                     records
                 ) or _canonical_parent_ids.get(run_id)
@@ -888,7 +888,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     room_event_id,
                 ) = await _delivery_deps.event_publisher.emit_checked_identified(
                     RunEventNotification(
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         event_id=event_id,
                         run_id=run_id,
                         seq=run.state_version,
@@ -1025,7 +1025,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     orchestration_run_id=run.run_id,
                 )
                 requests = await hitl_manager.request_interaction(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     user_message_id=run.request.user_message_id,
                     interaction_id=interaction_id,
                     application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -1074,11 +1074,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         answers,
                         datetime.now(UTC),
                     )
-                    session = orchestrator_runtime.session_host.get_session(run.room_id)
+                    session = orchestrator_runtime.session_host.get_session(
+                        run.conversation_id
+                    )
                     if session is not None and session.owns_run(run_id):
                         resume_result = (
                             await orchestrator_runtime.session_host.observe_tool(
-                                run.room_id, observation
+                                run.conversation_id, observation
                             )
                         )
                     else:
@@ -1101,7 +1103,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         extra={
                             "run_id": run_id,
                             "call_id": call_id,
-                            "room_id": run.room_id,
+                            "conversation_id": run.conversation_id,
                             "resume_error": f"{type(exc).__name__}: {exc}",
                         },
                         exc_info=True,
@@ -1438,7 +1440,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 return
             emitted = await _delivery_deps.event_publisher.emit_checked(
                 canonical_processing_status_adapter(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     user_message_id=run.request.user_message_id,
                     client_request_id=run.client_request_id,
                     status=status,
@@ -1466,7 +1468,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             payload = canonical_settlement_payload(run)
             settlement_parent_id = _canonical_parent_ids.get(run.run_id)
             if settlement_parent_id is None:
-                records = await _read_canonical_run_events(run.room_id, run.run_id)
+                records = await _read_canonical_run_events(
+                    run.conversation_id, run.run_id
+                )
                 final_message_id = run.proposed_final_message_id
                 parent = next(
                     (
@@ -1488,7 +1492,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 settlement_event_id,
             ) = await _delivery_deps.event_publisher.emit_checked_identified(
                 RunEventNotification(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     event_id=f"public:{run.run_id}:run_settled",
                     delivery_id=f"orchestrator:{run.run_id}:run_settled",
                     run_id=run.run_id,
@@ -1538,7 +1542,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # Phase 1): public run_event payload types for LLM calls, retries,
             # orchestrator decisions, and tool calls. Payloads are produced
             # exclusively by the PublicProjectionTranslator (redaction).
-            if event.room_id:
+            if event.conversation_id:
                 if current_run.tool_catalog is not None:
                     canonical_summary_registry.register_catalog(
                         current_run.tool_catalog
@@ -1548,7 +1552,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
                 if public_event is not None:
                     notification = RunEventNotification(
-                        room_id=event.room_id,
+                        conversation_id=event.conversation_id,
                         event_id=public_event.event_id,
                         run_id=public_event.run_id,
                         seq=public_event.seq,
@@ -1559,7 +1563,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     parent_event_id = _canonical_parent_ids.get(public_event.run_id)
                     if parent_event_id is None:
                         records = await _read_canonical_run_events(
-                            public_event.room_id, public_event.run_id
+                            public_event.conversation_id, public_event.run_id
                         )
                         parent_event_id = _latest_canonical_parent_id(records)
                         if parent_event_id is not None:
@@ -1628,7 +1632,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 # message_end, never by a process-local latest-event cache
                 # that may already point at turn_end. Readback also keeps
                 # this parent stable after restart.
-                records = await _read_canonical_run_events(run.room_id, run.run_id)
+                records = await _read_canonical_run_events(
+                    run.conversation_id, run.run_id
+                )
                 final_parent_id = _canonical_final_message_end_parent_id(
                     records, final.message_id
                 )
@@ -1642,7 +1648,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     room_event_id,
                 ) = await _delivery_deps.event_publisher.emit_checked_identified(
                     AgentMessageFinal(
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         message_id=final.message_id,
                         agent_id="system:hybro",
                         content={
@@ -1657,7 +1663,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     parent_event_id=final_parent_id,
                 )
                 if room_event_id is None:
-                    records = await _read_canonical_run_events(run.room_id, run.run_id)
+                    records = await _read_canonical_run_events(
+                        run.conversation_id, run.run_id
+                    )
                     persisted = next(
                         (
                             record
@@ -1687,7 +1695,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 }
 
             async def _read_canonical_run_events(
-                room_id: str, run_id: str
+                conversation_id: str, run_id: str
             ) -> list[dict[str, object]]:
                 if _room_event_store is None:
                     return []
@@ -1695,7 +1703,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 after = -1
                 while True:
                     page = await _room_event_store.read_range(
-                        room_id,
+                        conversation_id,
                         after=after,
                         limit=500,
                         include_skipped=False,
@@ -1769,8 +1777,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 RoomMessageEnvelopeResolver,
             )
 
-            async def _list_room_agent_ids(room_id: str) -> list[str]:
-                room = await room_store.get_room_by_room_id(room_id)
+            async def _list_room_agent_ids(conversation_id: str) -> list[str]:
+                room = await room_store.get_room_by_room_id(conversation_id)
                 return list((room.room_agent_set or {}).keys()) if room else []
 
             async def _list_group_agent_ids(group_id: str) -> list[str]:
@@ -1851,7 +1859,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     request = document.get("request") or {}
                     return RunInfo(
                         run_id=str(document.get("run_id") or ""),
-                        room_id=str(document.get("room_id") or ""),
+                        conversation_id=str(document.get("room_id") or ""),
                         state=state,
                         trigger_message_id=request.get("user_message_id"),
                         seq=int(document.get("state_version") or 0),
@@ -1887,17 +1895,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     )
                     return await cursor.to_list(length=None)
 
-                async def get_runs_for_room(self, room_id: str):
-                    documents = await self._read([room_id])
+                async def get_runs_for_room(self, conversation_id: str):
+                    documents = await self._read([conversation_id])
                     return [self._to_run_info(document) for document in documents]
 
                 async def get_latest_runs_for_rooms(self, room_ids: list[str]):
                     documents = await self._read(room_ids)
                     latest = {}
                     for document in documents:
-                        room_id = str(document.get("room_id") or "")
-                        if room_id and room_id not in latest:
-                            latest[room_id] = self._to_run_info(document)
+                        conversation_id = str(document.get("room_id") or "")
+                        if conversation_id and conversation_id not in latest:
+                            latest[conversation_id] = self._to_run_info(document)
                     return latest
 
             execution_facade.bind_active_run_reader(_CanonicalActiveRunReader())

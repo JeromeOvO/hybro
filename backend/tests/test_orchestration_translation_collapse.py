@@ -21,7 +21,7 @@ from execution.orchestrator_routing import (
 def _message(extend_info: dict | None = None):
     return SimpleNamespace(
         message_id="msg-1",
-        room_id="room-1",
+        conversation_id="room-1",
         message_content=SimpleNamespace(message_text="hello", attachments=None),
         extend_info=extend_info or {},
     )
@@ -65,7 +65,7 @@ async def test_envelope_reads_mode_and_scope_from_the_execution_request():
         list_room_agent_ids=AsyncMock(return_value=["agent-room"]),
     )
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="supervisor",
         agent_scope={"source": "mention", "agent_ids": ["agent-1"]},
@@ -89,7 +89,8 @@ async def test_envelope_loads_the_persisted_message_by_id():
     )
 
     envelope = await resolver.load_envelope(
-        ExecutionRequest(room_id="room-1", sender_id="user-1"), message_id="msg-9"
+        ExecutionRequest(conversation_id="room-1", sender_id="user-1"),
+        message_id="msg-9",
     )
 
     get_user_message.assert_awaited_once_with("msg-9")
@@ -104,7 +105,7 @@ async def test_facade_passes_the_execution_request_and_message_id_to_the_router(
     facade, _ = _make_facade(
         task_factory=RecordingTaskFactory(), orchestrator_router=router
     )
-    request = ExecutionRequest(room_id="room-1", sender_id="user-1")
+    request = ExecutionRequest(conversation_id="room-1", sender_id="user-1")
 
     await facade.start_orchestration(
         request, ExecutionAck(success=True, message_id="msg-1")

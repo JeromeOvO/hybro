@@ -23,7 +23,7 @@ class ChatRooms(Protocol):
         seed_group_id: str | None,
         seed_all_current_agents: bool | None,
     ) -> RoomCenterRoomSettingResponse: ...
-    async def get_room(self, room_id: str) -> RoomCenterRoomSettingResponse: ...
+    async def get_room(self, conversation_id: str) -> RoomCenterRoomSettingResponse: ...
     async def list_rooms_for_owner(
         self, owner_id: str
     ) -> RoomCenterRoomSettingResponse: ...
@@ -31,27 +31,27 @@ class ChatRooms(Protocol):
         self, owner_id: str
     ) -> RoomCenterRoomSettingResponse: ...
     async def rename_room(
-        self, room_id: str, room_name: str
+        self, conversation_id: str, room_name: str
     ) -> RoomCenterRoomSettingResponse: ...
     async def update_history_fields(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         is_pinned: bool | None,
         pin_order: float | None,
     ) -> RoomCenterRoomSettingResponse: ...
     async def update_room_default_mode(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         use_supervisor: bool,
     ) -> bool: ...
     async def delete_room(
-        self, room_id: str, *, requesting_user_id: str
+        self, conversation_id: str, *, requesting_user_id: str
     ) -> RoomCenterRoomSettingResponse: ...
     async def read_messages(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         limit: int | None,
         cursor: str | None,

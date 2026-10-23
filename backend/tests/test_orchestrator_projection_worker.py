@@ -39,15 +39,15 @@ from .test_orchestrator_a2a_mongo_parity import FakeCollection
 def _terminal_run(
     *,
     run_id: str = "run-1",
-    room_id: str = "room-1",
+    conversation_id: str = "room-1",
     final_message_id: str = "final-1",
 ):
     run = make_run()
     run = run.model_copy(
         update={
             "run_id": run_id,
-            "session_id": room_id,
-            "room_id": room_id,
+            "session_id": conversation_id,
+            "conversation_id": conversation_id,
             "client_request_id": f"request-{run_id}",
             "request": run.request.model_copy(
                 update={
@@ -82,7 +82,7 @@ def _terminal_run(
             event_intent_id="intent-event",
             final_message_intent_id="intent-message",
             public_run_intent_id="intent-run",
-            final_message_target=room_id,
+            final_message_target=conversation_id,
             public_run_target=run_id,
             created_at=NOW,
         ),
@@ -304,15 +304,15 @@ async def test_final_message_projector_projects_assistant_into_room_memory():
     )
     projected: list[tuple[str, str]] = []
 
-    async def project_memory(room_id: str, message_id: str):
-        projected.append((room_id, message_id))
+    async def project_memory(conversation_id: str, message_id: str):
+        projected.append((conversation_id, message_id))
         return {"projected": True}
 
     projector = MongoFinalMessageProjector(
         _message_writer(_FakeMessageCollection()), memory_projection=project_memory
     )
     assert await projector.project(intent, stored) == "accepted"
-    assert projected == [(stored.room_id, intent.payload["message_id"])]
+    assert projected == [(stored.conversation_id, intent.payload["message_id"])]
 
 
 async def test_final_message_projector_retries_until_room_memory_exists():
@@ -325,7 +325,7 @@ async def test_final_message_projector_retries_until_room_memory_exists():
     )
     attempts = 0
 
-    async def project_memory(_room_id: str, _message_id: str):
+    async def project_memory(_conversation_id: str, _message_id: str):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -493,7 +493,7 @@ def _canonical_room_event(
     event_id: str | None = None,
 ):
     return {
-        "room_id": run.room_id,
+        "room_id": run.conversation_id,
         "room_seq": room_seq,
         "kind": "run_event",
         "payload_public": {
@@ -566,7 +566,7 @@ def _completed_turn_fold_before_settlement(run):
             },
         ),
         {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": 6,
             "kind": "agent_response",
             "payload_public": {

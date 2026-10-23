@@ -45,7 +45,7 @@ class RoomMessageReader:
         For agent messages: return text from sanitized completed artifacts.
         Sort by creation time and return
         """
-        if request.room_id is None:
+        if request.conversation_id is None:
             return RoomCenterRoomMessageResponse(
                 message_list=None,
                 success=False,
@@ -54,7 +54,7 @@ class RoomMessageReader:
             )
 
         try:
-            room_id = request.room_id
+            conversation_id = request.conversation_id
 
             limit = request.limit if request.limit is not None else 200
             if (
@@ -63,7 +63,7 @@ class RoomMessageReader:
                 or not 1 <= limit <= 200
             ):
                 return RoomCenterRoomMessageResponse(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_list=None,
                     success=False,
                     error="limit must be an integer between 1 and 200",
@@ -71,13 +71,15 @@ class RoomMessageReader:
                 )
             try:
                 before = (
-                    decode_timeline_cursor(request.cursor, room_id=room_id)
+                    decode_timeline_cursor(
+                        request.cursor, conversation_id=conversation_id
+                    )
                     if request.cursor is not None
                     else None
                 )
             except TimelineCursorError:
                 return RoomCenterRoomMessageResponse(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_list=None,
                     success=False,
                     error="Invalid timeline cursor",
@@ -85,18 +87,18 @@ class RoomMessageReader:
                 )
 
             page = await self._require_facade().get_timeline_page(
-                room_id,
+                conversation_id,
                 limit=limit,
                 before=before,
             )
             combined_messages = await self._require_timeline_projector().project(page)
             next_cursor = (
-                encode_timeline_cursor(room_id, page.next_position)
+                encode_timeline_cursor(conversation_id, page.next_position)
                 if page.has_more and page.next_position is not None
                 else None
             )
             return RoomCenterRoomMessageResponse(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_list=combined_messages,
                 has_more=page.has_more,
                 next_cursor=next_cursor,
@@ -107,12 +109,12 @@ class RoomMessageReader:
 
         except Exception:
             logger.error(
-                "Failed to retrieve room timeline room_id=%s",
-                request.room_id,
+                "Failed to retrieve room timeline conversation_id=%s",
+                request.conversation_id,
                 exc_info=True,
             )
             return RoomCenterRoomMessageResponse(
-                room_id=request.room_id,
+                conversation_id=request.conversation_id,
                 message_list=None,
                 success=False,
                 error="Failed to retrieve room timeline",

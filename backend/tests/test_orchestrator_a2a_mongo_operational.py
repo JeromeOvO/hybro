@@ -145,7 +145,7 @@ def inbox_record():
         payload_digest="payload",
         received_at=NOW,
         binding_scope=observation.binding_scope,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         call_record_id=observation.call_record_id,
         event_kind=observation.event_kind,

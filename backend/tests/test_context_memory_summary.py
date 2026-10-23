@@ -16,13 +16,13 @@ class SummaryRepository:
         self.projection = projection
         self.updates: list[tuple[str, dict, dict]] = []
 
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
         return self.projection
 
     async def update_room_summary_atomic(
-        self, room_id: str, room_summary: dict, **kwargs
+        self, conversation_id: str, room_summary: dict, **kwargs
     ) -> bool:
-        self.updates.append((room_id, room_summary, kwargs))
+        self.updates.append((conversation_id, room_summary, kwargs))
         return True
 
 
@@ -54,7 +54,7 @@ async def run_update(repository: SummaryRepository, llm: RecordingLLM) -> bool:
         repository=repository,
         llm_provider=llm,
         llm_config=ContextMemoryLLMConfig(),
-        room_id="room-1",
+        conversation_id="room-1",
         synthesis_text="New synthesis",
         synthesis_turn_id="turn-2",
         id_factory=lambda: "fact-new",

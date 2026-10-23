@@ -1,6 +1,6 @@
 [
   {
-    "path": "/api/v1/sse/room/{room_id}/status",
+    "path": "/api/v1/sse/room/{conversation_id}/status",
     "methods": [
       "GET"
     ],
@@ -18,7 +18,7 @@
     }
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/stream",
+    "path": "/api/v1/sse/room/{conversation_id}/stream",
     "methods": [
       "GET"
     ],

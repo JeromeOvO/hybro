@@ -96,7 +96,7 @@ describe('SSEConnection', () => {
 
       const testMessage = {
         type: 'task_update',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: { message_id: 'msg-1', status: 'completed' },
       }
@@ -114,7 +114,7 @@ describe('SSEConnection', () => {
 
       const heartbeat = {
         type: 'heartbeat',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: {},
       }
@@ -131,7 +131,7 @@ describe('SSEConnection', () => {
 
       const frame = {
         type: 'heartbeat',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: {},
       }
@@ -155,7 +155,7 @@ describe('SSEConnection', () => {
       const { instance } = await connectAndOpen({ onMessage: onMessage as never })
 
       const base = {
-        type: 'task_update', room_id: 'test-room', timestamp: new Date().toISOString(),
+        type: 'task_update', conversation_id: 'test-room', timestamp: new Date().toISOString(),
       }
       const first = { ...base, data: { message_id: 'first', status: 'working' } }
       const second = { ...base, data: { message_id: 'second', status: 'completed' } }

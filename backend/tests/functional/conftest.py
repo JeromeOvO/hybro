@@ -106,7 +106,7 @@ def test_room_payload(travel_planner_agent_id: str):
 
 async def auto_respond_pending_hitl(
     client: httpx.AsyncClient,
-    room_id: str,
+    conversation_id: str,
     answers: list[str] | None = None,
     client_request_id: str | None = None,
     seen_request_ids: set[str] | None = None,
@@ -120,7 +120,7 @@ async def auto_respond_pending_hitl(
         "Mid-range hotels and public transit",
     ]
     answered = []
-    pending_resp = await client.get(f"/rooms/{room_id}/hitl/pending")
+    pending_resp = await client.get(f"/rooms/{conversation_id}/hitl/pending")
     if pending_resp.status_code != 200:
         return answered
 
@@ -133,7 +133,7 @@ async def auto_respond_pending_hitl(
             user_answer = default_answers[answer_idx]
 
             submit_resp = await client.post(
-                f"/rooms/{room_id}/hitl/respond-batch",
+                f"/rooms/{conversation_id}/hitl/respond-batch",
                 json={
                     "interaction_id": r["interaction_id"],
                     "answers": [
@@ -191,7 +191,7 @@ def find_terminal_synthesis(
 
 async def wait_for_completion_with_auto_hitl(
     client: httpx.AsyncClient,
-    room_id: str,
+    conversation_id: str,
     answers: list[str] | None = None,
     client_request_id: str | None = None,
     timeout_seconds: float = 65.0,
@@ -207,7 +207,7 @@ async def wait_for_completion_with_auto_hitl(
     while time.time() - start_time < timeout_seconds:
         newly_answered = await auto_respond_pending_hitl(
             client=client,
-            room_id=room_id,
+            conversation_id=conversation_id,
             answers=answers,
             client_request_id=client_request_id,
             seen_request_ids=seen_request_ids,
@@ -215,7 +215,7 @@ async def wait_for_completion_with_auto_hitl(
         all_hitl_answered.extend(newly_answered)
 
         history_resp = await client.get(
-            f"/rooms/{room_id}/messages",
+            f"/rooms/{conversation_id}/messages",
         )
         if history_resp.status_code == 200:
             messages = history_resp.json().get("message_list", [])

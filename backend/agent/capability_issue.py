@@ -5,6 +5,7 @@ from time import monotonic
 from uuid import uuid4
 
 from common.config import settings
+from common.dto.base import to_stored_conversation_keys
 from common.utils.time import utcnow
 from models.agent import AgentCapabilityIssue, IssueStatus
 
@@ -59,7 +60,7 @@ class AgentCapabilityIssueService:
         agent_id: str,
         error_message: str,
         query_text: str,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
         message_id: str | None = None,
     ) -> AgentCapabilityIssue:
         issue = AgentCapabilityIssue(
@@ -67,12 +68,14 @@ class AgentCapabilityIssueService:
             agent_id=agent_id,
             error_message=error_message[:_MAX_ERROR_MESSAGE_LEN],
             query_text=query_text[:_MAX_QUERY_TEXT_LEN],
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             status=IssueStatus.open,
             created_at=self._now(),
         )
-        await self._repo.insert(issue.model_dump(mode="json"))
+        await self._repo.insert(
+            to_stored_conversation_keys(issue.model_dump(mode="json"))
+        )
         self._cache.clear()
         return issue
 

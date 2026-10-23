@@ -84,7 +84,7 @@ class RoomSessionHost:
     async def create_session(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         profile: OrchestratorProfile,
         candidate_scope: CandidateScopeSnapshot,
         requesting_subject_id: str,
@@ -93,14 +93,14 @@ class RoomSessionHost:
         conversation_history: tuple[ModelMessage, ...] = (),
         run_factory: RunFactory | None = None,
     ) -> RoomAgentSession:
-        if room_id in self._sessions:
+        if conversation_id in self._sessions:
             raise SessionConflict("a session is already active for this Room")
-        epoch = await self._epoch_store.read_active(room_id)
+        epoch = await self._epoch_store.read_active(conversation_id)
         if epoch is None:
             raise SessionConflict("Room epoch is not active")
         config = RoomAgentSessionConfig(
-            session_id=f"room:{room_id}:epoch:{epoch.epoch}",
-            room_id=room_id,
+            session_id=f"room:{conversation_id}:epoch:{epoch.epoch}",
+            conversation_id=conversation_id,
             profile=profile,
             candidate_scope=candidate_scope,
             room_epoch=epoch.epoch,
@@ -119,35 +119,35 @@ class RoomSessionHost:
             lifecycle=lifecycle,
             clock=self._clock,
         )
-        self._sessions[room_id] = session
+        self._sessions[conversation_id] = session
         return session
 
-    def get_session(self, room_id: str) -> RoomAgentSession | None:
-        return self._sessions.get(room_id)
+    def get_session(self, conversation_id: str) -> RoomAgentSession | None:
+        return self._sessions.get(conversation_id)
 
-    def drop_session(self, room_id: str) -> None:
-        self._sessions.pop(room_id, None)
+    def drop_session(self, conversation_id: str) -> None:
+        self._sessions.pop(conversation_id, None)
 
     async def prompt(
         self,
-        room_id: str,
+        conversation_id: str,
         message: UserMessage,
         *,
         client_request_id: str | None = None,
     ) -> KernelRunResult:
-        session = self._require_session(room_id)
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(
             session, session.prompt(message, client_request_id=client_request_id)
         )
 
-    async def continue_run(self, room_id: str) -> KernelRunResult:
-        session = self._require_session(room_id)
+    async def continue_run(self, conversation_id: str) -> KernelRunResult:
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(session, session.continue_run())
 
     async def observe_tool(
-        self, room_id: str, observation: ToolObservation
+        self, conversation_id: str, observation: ToolObservation
     ) -> KernelRunResult:
-        session = self._require_session(room_id)
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(session, session.observe_tool(observation))
 
     async def _await_recoverable(
@@ -161,13 +161,13 @@ class RoomSessionHost:
             now=self._clock.now,
         )
 
-    async def abort(self, room_id: str) -> None:
-        await self._require_session(room_id).abort()
+    async def abort(self, conversation_id: str) -> None:
+        await self._require_session(conversation_id).abort()
 
     async def signal_run_cancellation(self, run, cancellation_command_id: str) -> None:
         """Signal a matching hosted Run without waiting for it to stop."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is None or not session.owns_run(run.run_id):
             return
         await session.signal_interrupt(run.run_id, cancellation_command_id)
@@ -175,7 +175,7 @@ class RoomSessionHost:
     async def interrupt_run(self, run, cancellation_command_id: str) -> bool:
         """Signal a matching hosted Run and wait briefly for it to stop."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is None or not session.owns_run(run.run_id):
             return True
         return await session.interrupt(run.run_id, cancellation_command_id)
@@ -199,7 +199,7 @@ class RoomSessionHost:
                     sequence=current.state_version,
                     timestamp=self._clock.now(),
                     payload=payload,
-                    room_id=current.room_id,
+                    conversation_id=current.conversation_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
                 )
@@ -216,7 +216,7 @@ class RoomSessionHost:
     async def abort_run(self, run) -> None:
         """Signal a durably canceling Run, then reconcile terminal settlement."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is not None and session.owns_run(run.run_id):
             await session.abort()
             await self.reconcile_cancellation(run)
@@ -235,7 +235,7 @@ class RoomSessionHost:
                     sequence=current.state_version,
                     timestamp=self._clock.now(),
                     payload=payload,
-                    room_id=current.room_id,
+                    conversation_id=current.conversation_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
                 )
@@ -276,7 +276,7 @@ class RoomSessionHost:
                         sequence=run.state_version,
                         timestamp=self._clock.now(),
                         payload=payload,
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         user_message_id=run.request.user_message_id,
                         client_request_id=run.client_request_id,
                     )
@@ -319,8 +319,8 @@ class RoomSessionHost:
             await session.shutdown()
         self._sessions.clear()
 
-    def _require_session(self, room_id: str) -> RoomAgentSession:
-        session = self._sessions.get(room_id)
+    def _require_session(self, conversation_id: str) -> RoomAgentSession:
+        session = self._sessions.get(conversation_id)
         if session is None:
             raise SessionConflict("no active session for this Room")
         return session

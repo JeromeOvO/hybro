@@ -56,7 +56,7 @@ def _service(**kwargs) -> tuple[HITLService, dict, dict]:
 
 async def _ask(service: HITLService) -> None:
     result = await service.request_interaction(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -124,7 +124,7 @@ async def test_undated_interactions_are_never_due_for_expiry():
 def _orchestrator_runtime(order: list[str], *, run_status: str = "awaiting_user"):
     run = SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         status=run_status,
         tool_catalog=object(),
         cancellation_command_id=None,

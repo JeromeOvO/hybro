@@ -109,7 +109,7 @@ async def test_production_deletion_preserves_strict_phase_and_cleanup_order():
     files.begin_room_deletion.side_effect = record("begin", "deletion-1")
     files.wait_for_room_writes.side_effect = record("drain", True)
 
-    async def record_phase(room_id, deletion_id, phase):
+    async def record_phase(conversation_id, deletion_id, phase):
         events.append(f"phase:{phase}")
         return True
 
@@ -179,7 +179,9 @@ async def test_deletion_deactivates_epoch_tombstone_survives_and_recreation_incr
 
 async def test_deletion_epoch_conflict_returns_409_before_cleanup():
     class ConflictingEpochStore(InMemoryRoomEpochStore):
-        async def deactivate(self, room_id, epoch, deletion_id, *, deactivated_at):
+        async def deactivate(
+            self, conversation_id, epoch, deletion_id, *, deactivated_at
+        ):
             return "conflict", None
 
     epoch_store = ConflictingEpochStore()

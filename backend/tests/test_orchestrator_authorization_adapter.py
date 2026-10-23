@@ -10,7 +10,7 @@ class FakeRoomOwnership:
     def __init__(self, member=True):
         self.member = member
 
-    async def verify_room_agent_membership(self, room_id, agent_id):
+    async def verify_room_agent_membership(self, conversation_id, agent_id):
         return self.member
 
 
@@ -45,7 +45,7 @@ async def test_authorized_when_member_active_and_visible():
     outcome = await adapter.authorize(
         binding=binding(),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -66,7 +66,7 @@ async def test_authorized_all_active_agents_skips_room_membership():
             authorization_kind="all_active_agents",
         ),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -86,7 +86,7 @@ async def test_authorized_mention_skips_room_membership():
             authorization_kind="mention",
         ),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -104,7 +104,7 @@ async def test_authorized_explicit_selection_skips_room_membership():
             authorization_kind="explicit_selection",
         ),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -119,7 +119,7 @@ async def test_denied_when_not_member():
     outcome = await adapter.authorize(
         binding=binding(authorization_kind="room_member"),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -134,7 +134,7 @@ async def test_denied_when_saved_group_member_not_in_room():
     outcome = await adapter.authorize(
         binding=binding(authorization_kind="saved_group_member"),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -149,7 +149,7 @@ async def test_denied_when_inactive():
     outcome = await adapter.authorize(
         binding=binding(),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -164,7 +164,7 @@ async def test_denied_when_private_and_not_owner():
     outcome = await adapter.authorize(
         binding=binding(),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -173,7 +173,7 @@ async def test_denied_when_private_and_not_owner():
 
 async def test_transient_failure_on_connection_error():
     class BrokenOwnership:
-        async def verify_room_agent_membership(self, room_id, agent_id):
+        async def verify_room_agent_membership(self, conversation_id, agent_id):
             raise ConnectionError("down")
 
     adapter = MembershipAuthorizationRefresh(
@@ -183,7 +183,7 @@ async def test_transient_failure_on_connection_error():
     outcome = await adapter.authorize(
         binding=binding(),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         resource_refs=[],
     )
@@ -198,7 +198,7 @@ async def test_denied_when_room_epoch_mismatch():
     outcome = await adapter.authorize(
         binding=binding(),
         requesting_subject_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=999,
         resource_refs=[],
     )

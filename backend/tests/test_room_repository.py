@@ -184,15 +184,15 @@ class AtomicUniqueUserMessageCollection(FakeCollection):
         async with self._insert_lock:
             await asyncio.sleep(0)
             message_id = document.get("message_id")
-            room_id = document.get("room_id")
+            conversation_id = document.get("room_id")
             client_request_id = document.get("client_request_id")
             if any(doc.get("message_id") == message_id for doc in self.docs):
                 raise DuplicateKeyError("duplicate message_id")
             if (
-                isinstance(room_id, str)
+                isinstance(conversation_id, str)
                 and isinstance(client_request_id, str)
                 and any(
-                    doc.get("room_id") == room_id
+                    doc.get("room_id") == conversation_id
                     and doc.get("client_request_id") == client_request_id
                     for doc in self.docs
                 )
@@ -395,13 +395,13 @@ async def test_legacy_user_message_save_rejects_invalid_identity(message):
 
 def _idempotent_message(
     *,
-    room_id: str = "r1",
+    conversation_id: str = "r1",
     client_request_id: str = "request-1",
     message_id: str = "message-1",
     fingerprint: str = "fingerprint-1",
 ) -> dict:
     return {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "message_id": message_id,
         "client_request_id": client_request_id,
         "idempotency_fingerprint": fingerprint,
@@ -488,7 +488,7 @@ async def test_message_id_unique_collision_is_not_misclassified_as_replay():
     ):
         await repo.insert_user_message_idempotently(
             _idempotent_message(
-                room_id="r2",
+                conversation_id="r2",
                 client_request_id="request-2",
                 message_id="message-1",
             )
@@ -506,7 +506,7 @@ async def test_same_client_request_id_is_allowed_in_different_rooms():
 
     first = await repo.insert_user_message_idempotently(_idempotent_message())
     second = await repo.insert_user_message_idempotently(
-        _idempotent_message(room_id="r2", message_id="message-2")
+        _idempotent_message(conversation_id="r2", message_id="message-2")
     )
 
     assert first.created is True
@@ -847,7 +847,7 @@ async def test_runtime_store_full_agent_update_preserves_task_tracking_fields():
         agent_repository=object(),
     )
     message = RoomAgentMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="a1",
         agent_id="agent-1",
         message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
@@ -892,7 +892,7 @@ async def test_runtime_store_generates_agent_message_id_when_empty():
         agent_repository=object(),
     )
     message = RoomAgentMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="",
         agent_id="agent-1",
         message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
@@ -959,10 +959,11 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     )
 
     assert [
-        room.room_id for room in await store.get_rooms_by_room_owner_id("owner-1")
+        room.conversation_id
+        for room in await store.get_rooms_by_room_owner_id("owner-1")
     ] == ["r1"]
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         user_id="owner-1",
         message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
@@ -974,7 +975,7 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
         msg.message_id for msg in await store.get_room_user_messages_by_room_id("r1")
     ] == ["u1"]
     updated_user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         user_id="owner-1",
         message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
@@ -1017,7 +1018,7 @@ async def test_runtime_store_upsert_room_agent_message_preserves_timeline_identi
 
     await store.upsert_room_agent_message(
         RoomAgentMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="summary-1",
             agent_id="agent-1",
             message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
@@ -1063,7 +1064,7 @@ async def test_runtime_store_upsert_room_agent_message_new_insert_sets_timeline_
 
     await store.upsert_room_agent_message(
         RoomAgentMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="new-agent",
             agent_id="agent-1",
             message_created_at=datetime(1970, 1, 1, 0, 0, 1, 123456, tzinfo=UTC),
@@ -1095,7 +1096,7 @@ async def test_runtime_store_upsert_room_agent_message_propagates_insert_failure
     with pytest.raises(RuntimeError, match="insert failed"):
         await store.upsert_room_agent_message(
             RoomAgentMessage(
-                room_id="r1",
+                conversation_id="r1",
                 message_id="new-agent",
                 agent_id="agent-1",
                 message_created_at=datetime(1970, 1, 1, tzinfo=UTC),
@@ -1137,7 +1138,7 @@ async def test_runtime_store_upsert_room_agent_message_first_insert_race_preserv
 
     await store.upsert_room_agent_message(
         RoomAgentMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="raced-insert",
             agent_id="agent-incoming",
             message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
@@ -1185,7 +1186,7 @@ async def test_runtime_store_upsert_room_agent_message_first_insert_cross_room_r
     with pytest.raises(ValueError, match="room_id mismatch"):
         await store.upsert_room_agent_message(
             RoomAgentMessage(
-                room_id="room-b",
+                conversation_id="room-b",
                 message_id="shared-raced-insert",
                 agent_id="agent-b",
                 message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
@@ -1200,11 +1201,11 @@ async def test_runtime_store_upsert_room_agent_message_first_insert_cross_room_r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("room_id", "message_id"),
+    ("conversation_id", "message_id"),
     [("", "message-1"), ("   ", "message-1"), ("room-1", "")],
 )
 async def test_runtime_store_upsert_room_agent_message_rejects_blank_identity(
-    room_id: str,
+    conversation_id: str,
     message_id: str,
 ):
 
@@ -1219,7 +1220,7 @@ async def test_runtime_store_upsert_room_agent_message_rejects_blank_identity(
     with pytest.raises(ValueError, match="requires non-empty"):
         await store.upsert_room_agent_message(
             RoomAgentMessage(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 agent_id="agent-1",
                 message_created_at=datetime(1970, 1, 1, tzinfo=UTC),
@@ -1255,7 +1256,7 @@ async def test_runtime_store_upsert_room_agent_message_rejects_cross_room_collis
     with pytest.raises(ValueError, match="room_id mismatch"):
         await store.upsert_room_agent_message(
             RoomAgentMessage(
-                room_id="room-b",
+                conversation_id="room-b",
                 message_id="shared-id",
                 agent_id="agent-b",
                 message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
@@ -1303,7 +1304,7 @@ async def test_runtime_store_upsert_room_agent_message_propagates_false_cas():
     with pytest.raises(RuntimeError, match="replacement CAS"):
         await store.upsert_room_agent_message(
             RoomAgentMessage(
-                room_id="r1",
+                conversation_id="r1",
                 message_id="raced",
                 agent_id="agent-1",
                 message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
@@ -1348,7 +1349,7 @@ async def test_runtime_store_upsert_replace_toctou_obeys_durable_terminal_winner
 
     await store.upsert_room_agent_message(
         RoomAgentMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="raced",
             agent_id="agent-1",
             message_created_at=datetime(1970, 1, 2, tzinfo=UTC),

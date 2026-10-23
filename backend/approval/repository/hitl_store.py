@@ -64,8 +64,8 @@ class HITLRequestStore:
         self._hitl_requests = hitl_requests
         self._messages = message_writer
 
-    async def delete_room_state(self, room_id: str) -> bool:
-        return await delete_room_rows((self._hitl_requests,), room_id)
+    async def delete_room_state(self, conversation_id: str) -> bool:
+        return await delete_room_rows((self._hitl_requests,), conversation_id)
 
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str
@@ -175,10 +175,10 @@ class HITLRequestStore:
             logger.error("Failed to claim HITL request", exc_info=True)
             return None
 
-    async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
+    async def get_pending_hitl_requests(self, conversation_id: str) -> list[dict]:
         try:
             return await self._hitl_requests.find(
-                _user_visible_interaction_query(room_id=room_id),
+                _user_visible_interaction_query(room_id=conversation_id),
                 sort=[("created_at", 1), ("request_id", 1)],
                 exhaust=True,
             )
@@ -186,10 +186,12 @@ class HITLRequestStore:
             logger.error("Failed to get room HITL requests", exc_info=True)
             return []
 
-    async def get_pending_hitl_requests_strict(self, room_id: str) -> list[dict]:
+    async def get_pending_hitl_requests_strict(
+        self, conversation_id: str
+    ) -> list[dict]:
         """Authoritative room read; failures must propagate to the API client."""
         return await self._hitl_requests.find(
-            _user_visible_interaction_query(room_id=room_id),
+            _user_visible_interaction_query(room_id=conversation_id),
             sort=[("created_at", 1), ("request_id", 1)],
             exhaust=True,
         )
@@ -229,7 +231,7 @@ class HITLRequestStore:
     async def find_pending_hitl_request_for_agent_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         display_message_id: str | None,
         continuation_message_id: str | None,
         agent_id: str | None,
@@ -238,7 +240,7 @@ class HITLRequestStore:
     ) -> dict[str, Any] | None:
         try:
             return await self._find_pending_hitl_request_for_agent_message(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 display_message_id=display_message_id,
                 continuation_message_id=continuation_message_id,
             )
@@ -246,7 +248,7 @@ class HITLRequestStore:
             logger.error(
                 "Failed to find pending agent HITL request",
                 extra={
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "display_message_id": display_message_id,
                     "continuation_message_id": continuation_message_id,
                     "agent_id": agent_id,
@@ -260,7 +262,7 @@ class HITLRequestStore:
     async def _find_pending_hitl_request_for_agent_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         display_message_id: str | None,
         continuation_message_id: str | None,
     ) -> dict[str, Any] | None:
@@ -269,14 +271,14 @@ class HITLRequestStore:
         if display_message_id:
             display_existing = await self._hitl_requests.find_one(
                 self._pending_agent_hitl_identity_query(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     identity_clause={"display_message_id": display_message_id},
                 )
             )
         if continuation_message_id:
             continuation_existing = await self._hitl_requests.find_one(
                 self._pending_agent_hitl_identity_query(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     identity_clause={
                         "continuation_message_id": continuation_message_id
                     },
@@ -289,7 +291,7 @@ class HITLRequestStore:
                 logger.error(
                     "Ambiguous pending agent HITL request lookup",
                     extra={
-                        "room_id": room_id,
+                        "conversation_id": conversation_id,
                         "display_message_id": display_message_id,
                         "continuation_message_id": continuation_message_id,
                         "display_request_id": display_request_id,
@@ -303,11 +305,11 @@ class HITLRequestStore:
     def _pending_agent_hitl_identity_query(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         identity_clause: dict[str, str],
     ) -> dict[str, Any]:
         return _pending_actionable_query(
-            room_id=room_id,
+            room_id=conversation_id,
             public_source="agent",
             **identity_clause,
         )
@@ -327,7 +329,7 @@ class HITLRequestStore:
             logger.error(
                 "Failed to read existing pending agent HITL request after duplicate",
                 extra={
-                    "room_id": doc.get("room_id"),
+                    "conversation_id": doc.get("room_id"),
                     "display_message_id": doc.get("display_message_id"),
                     "continuation_message_id": doc.get("continuation_message_id"),
                 },
@@ -345,7 +347,7 @@ class HITLRequestStore:
         continuation_message_id: str | None,
     ) -> dict[str, Any] | None:
         return await self.find_pending_hitl_request_for_agent_message(
-            room_id=doc.get("room_id"),
+            conversation_id=doc.get("room_id"),
             display_message_id=display_message_id,
             continuation_message_id=continuation_message_id,
             agent_id=doc.get("agent_id"),
@@ -435,7 +437,7 @@ class HITLRequestStore:
                 logger.error(
                     "Ambiguous pending agent HITL duplicate readback",
                     extra={
-                        "room_id": doc.get("room_id"),
+                        "conversation_id": doc.get("room_id"),
                         "display_message_id": display_message_id,
                         "continuation_message_id": continuation_message_id,
                         "display_request_id": display_request_id,

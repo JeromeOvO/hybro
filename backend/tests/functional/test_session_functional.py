@@ -42,8 +42,8 @@ async def _conversation_id(client: httpx.AsyncClient, session_id: str) -> str:
     return conversation_id
 
 
-async def _pending(client: httpx.AsyncClient, room_id: str) -> list[dict]:
-    response = await client.get(f"/rooms/{room_id}/hitl/pending")
+async def _pending(client: httpx.AsyncClient, conversation_id: str) -> list[dict]:
+    response = await client.get(f"/rooms/{conversation_id}/hitl/pending")
     assert response.status_code == 200, response.text
     return response.json().get("requests", [])
 
@@ -67,10 +67,12 @@ async def _wait_for_state(
     raise AssertionError(f"session did not reach {states}: {status}")
 
 
-async def _wait_for_pending(client: httpx.AsyncClient, room_id: str) -> list[dict]:
+async def _wait_for_pending(
+    client: httpx.AsyncClient, conversation_id: str
+) -> list[dict]:
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
-        pending = await _pending(client, room_id)
+        pending = await _pending(client, conversation_id)
         if pending:
             return pending
         await asyncio.sleep(0.5)
@@ -89,7 +91,7 @@ async def test_session_owner_answers_and_client_reads_completed(
     assert first["created_at"].endswith("Z")
     assert "session_id" in first["message"]
     session_id = first["session_id"]
-    room_id = await _conversation_id(client, session_id)
+    conversation_id = await _conversation_id(client, session_id)
 
     # One complete answer keeps the run to a single approval round.
     answers = iter(
@@ -104,7 +106,7 @@ async def test_session_owner_answers_and_client_reads_completed(
     while status["state"] == "waiting_on_owner" and time.monotonic() < deadline:
         assert status["history"][-1]["agent_id"] == travel_planner_agent_id
         # The client view never carries the owner's question.
-        pending = await _wait_for_pending(client, room_id)
+        pending = await _wait_for_pending(client, conversation_id)
         interaction_id = pending[0]["interaction_id"]
         # Answer every question of the interaction together: a listed choice
         # when the agent offered some, else the prepared text.
@@ -112,7 +114,7 @@ async def test_session_owner_answers_and_client_reads_completed(
         for request in questions:
             assert request["prompt"] not in str(status)
         response = await client.post(
-            f"/rooms/{room_id}/hitl/respond-batch",
+            f"/rooms/{conversation_id}/hitl/respond-batch",
             json={
                 "interaction_id": interaction_id,
                 "answers": [
@@ -147,13 +149,15 @@ async def test_session_owner_answers_and_client_reads_completed(
     assert session_id in {item["session_id"] for item in listing.json()["sessions"]}
     history = await client.get("/rooms")
     assert history.status_code == 200
-    assert room_id not in {item["room_id"] for item in history.json()["items"]}
+    assert conversation_id not in {
+        item["conversation_id"] for item in history.json()["items"]
+    }
 
     # Chat read routes still serve the container; chat writes are refused.
-    messages = await client.get(f"/rooms/{room_id}/messages")
+    messages = await client.get(f"/rooms/{conversation_id}/messages")
     assert messages.status_code == 200
     chat_send = await client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "client_request_id": str(uuid.uuid4()),
             "mode": "direct",
@@ -162,7 +166,7 @@ async def test_session_owner_answers_and_client_reads_completed(
         },
     )
     assert chat_send.status_code == 409
-    rename = await client.patch(f"/rooms/{room_id}", json={"title": "Renamed"})
+    rename = await client.patch(f"/rooms/{conversation_id}", json={"title": "Renamed"})
     assert rename.status_code == 409
 
     closed = await client.post(f"/sessions/{session_id}/close")
@@ -188,13 +192,13 @@ async def test_session_owner_reject_reports_rejected(
     client = functional_client
     first = await _send(client, travel_planner_agent_id)
     session_id = first["session_id"]
-    room_id = await _conversation_id(client, session_id)
+    conversation_id = await _conversation_id(client, session_id)
     status = await _wait_for_state(client, session_id, {"waiting_on_owner"} | TERMINAL)
     assert status["state"] == "waiting_on_owner", status
 
-    request = (await _wait_for_pending(client, room_id))[0]
+    request = (await _wait_for_pending(client, conversation_id))[0]
     response = await client.post(
-        f"/rooms/{room_id}/hitl/interactions/{request['interaction_id']}/cancel",
+        f"/rooms/{conversation_id}/hitl/interactions/{request['interaction_id']}/cancel",
         json={
             "interaction_id": request["interaction_id"],
             "expected_interaction_version": request["interaction_version"],

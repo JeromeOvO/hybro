@@ -147,7 +147,9 @@ class A2ACallRecoveryService:
         if claimed is None:
             return False
         record = claimed
-        if not await self.room_epochs.verify_active(record.room_id, record.room_epoch):
+        if not await self.room_epochs.verify_active(
+            record.conversation_id, record.room_epoch
+        ):
             return await self._expire(record, now=now, code="room_epoch_gone")
         if (
             now > record.dispatch_snapshot.deadline_at
@@ -858,7 +860,7 @@ def dispatch_command(
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
         materialized_resources=list(materialized_resources or []),
-        room_id=record.room_id,
+        conversation_id=record.conversation_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,
     )

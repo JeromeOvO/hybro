@@ -8,7 +8,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 
 function makeApiMessage(overrides: Partial<RoomMessage> = {}): RoomMessage {
   return {
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     message_id: 'msg-1',
     message_created_at: '2026-02-17T10:00:00Z',
     message_type: 'user',

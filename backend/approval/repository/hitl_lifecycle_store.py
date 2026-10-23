@@ -34,9 +34,9 @@ class HITLLifecycleStore:
         self._resume_commands = resume_commands
         self._hitl_requests = hitl_requests
 
-    async def delete_room_state(self, room_id: str) -> bool:
+    async def delete_room_state(self, conversation_id: str) -> bool:
         return await delete_room_rows(
-            (self._interactions, self._resume_commands), room_id
+            (self._interactions, self._resume_commands), conversation_id
         )
 
     async def materialize_interaction(

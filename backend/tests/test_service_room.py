@@ -206,7 +206,7 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
     svc.bind_facade(facade)
     _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="hello"),
     )
@@ -227,7 +227,7 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
     assert len(publisher.internal_events) == 1
     event = publisher.internal_events[0]
     assert isinstance(event, MessageCommitted)
-    assert event.room_id == "r1"
+    assert event.conversation_id == "r1"
     assert event.message_id == "u1"
     assert event.message_type == "user"
     assert event.agent_id is None
@@ -248,7 +248,7 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
     svc.bind_facade(facade)
     _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="hello"),
     )
@@ -296,7 +296,7 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
         room_files=room_files,
     )
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="",
         user_id="user-1",
         message_content=MessageContent(
@@ -319,7 +319,7 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
     assert result.created is True
     facade.ensure_user_message_id.assert_called_once_with(user_message)
     room_files.claim_references.assert_awaited_once_with(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="user-1",
         message_id="generated-message-id",
         file_ids=["pdf-1"],
@@ -339,7 +339,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="r1",
+            conversation_id="r1",
             room_name="Room",
             room_owner_id="owner",
             room_owner_name="Owner",
@@ -375,7 +375,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     svc.bind_facade(facade)
     _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         user_id="user-1",
         message_content=MessageContent(
@@ -385,7 +385,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
 
     response, context = await svc.persist_message_to_room(
         RoomCenterUserMessageRequest(
-            room_id="r1",
+            conversation_id="r1",
             user_id="user-1",
             message=user_message,
         ),
@@ -409,7 +409,7 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="r1",
+            conversation_id="r1",
             room_name="Room",
             room_owner_id="owner",
             room_owner_name="Owner",
@@ -432,7 +432,7 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
     )
 
     async def persist(user_message, **_kwargs):
-        assert user_message.room_id == "r1"
+        assert user_message.conversation_id == "r1"
         assert user_message.user_id == "trusted-user"
         assert user_message.message_id == ""
         assert user_message.message_type == "user"
@@ -468,11 +468,11 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
         RoomMessageSender, "_persist_user_message", AsyncMock(side_effect=persist)
     )
     request = RoomCenterUserMessageRequest(
-        room_id="r1",
+        conversation_id="r1",
         user_id="trusted-user",
         client_request_id="request-1",
         message=RoomUserMessage(
-            room_id="spoofed-room",
+            conversation_id="spoofed-room",
             message_id="client-message",
             message_type="agent",
             user_id="spoofed-user",
@@ -553,11 +553,11 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token(
 
     response, context = await svc.persist_message_to_room(
         RoomCenterUserMessageRequest(
-            room_id="r1",
+            conversation_id="r1",
             user_id="user-1",
             client_request_id=" request-1 ",
             message=RoomUserMessage(
-                room_id="r1",
+                conversation_id="r1",
                 message_id="loser-message",
                 user_id="user-1",
                 message_content=MessageContent(message_text="hello"),
@@ -592,7 +592,7 @@ async def test_idempotency_row_without_fingerprint_is_conflict():
     svc.bind_facade(facade)
 
     response = await svc.get_idempotent_user_message(
-        room_id="r1",
+        conversation_id="r1",
         client_request_id="request-1",
         idempotency_fingerprint="fingerprint-1",
         idempotency_fingerprint_version=1,
@@ -623,7 +623,7 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="r1",
+            conversation_id="r1",
             room_name="Room",
             room_owner_id="owner",
             room_owner_name="Owner",
@@ -690,11 +690,11 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     )
     svc.run_message_preflight_to_room = AsyncMock()
     request = RoomCenterUserMessageRequest(
-        room_id="r1",
+        conversation_id="r1",
         user_id="user-1",
         client_request_id="request-1",
         message=RoomUserMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="client-message",
             user_id="user-1",
             message_content=MessageContent(message_text="hello"),
@@ -757,7 +757,7 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
         room_files=room_files,
     )
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="loser-message",
         user_id="user-1",
         message_content=MessageContent(
@@ -785,7 +785,7 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
     assert result.created is False
     assert result.message_id == "winner-message"
     room_files.claim_references.assert_awaited_once_with(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="user-1",
         message_id="loser-message",
         file_ids=["file-1"],
@@ -806,7 +806,7 @@ async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner(
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="r1",
+            conversation_id="r1",
             room_name="Room",
             room_owner_id="owner",
             room_owner_name="Owner",
@@ -849,11 +849,11 @@ async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner(
         ),
     )
     request = RoomCenterUserMessageRequest(
-        room_id="r1",
+        conversation_id="r1",
         user_id="user-1",
         client_request_id="request-1",
         message=RoomUserMessage(
-            room_id="r1",
+            conversation_id="r1",
             message_id="loser-message",
             user_id="user-1",
             message_content=MessageContent(message_text="hello"),
@@ -886,13 +886,13 @@ async def test_room_services_quote_materialization_delegates_to_room_facade():
     facade.materialize_quote.return_value = None
     svc.bind_facade(facade)
     room = Room(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         room_owner_id="owner",
         room_owner_name="Owner",
     )
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="hello"),
     )
@@ -993,13 +993,13 @@ class TestValidateSendMessageRequest:
 
     def test_returns_none_for_valid_request(self, room_center):
         req = MagicMock()
-        req.room_id = "room-001"
+        req.conversation_id = "room-001"
         req.message = MagicMock()
         assert room_center._message_sender._validate_send_message_request(req) is None
 
     def test_returns_error_when_room_id_missing(self, room_center):
         req = MagicMock()
-        req.room_id = None
+        req.conversation_id = None
         req.message = MagicMock()
         result = room_center._message_sender._validate_send_message_request(req)
         assert result is not None
@@ -1008,7 +1008,7 @@ class TestValidateSendMessageRequest:
 
     def test_returns_error_when_message_missing(self, room_center):
         req = MagicMock()
-        req.room_id = "room-001"
+        req.conversation_id = "room-001"
         req.message = None
         result = room_center._message_sender._validate_send_message_request(req)
         assert result is not None
@@ -1020,12 +1020,12 @@ class TestValidateSendMessageRequest:
         from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
 
         oversized_message = RoomUserMessage(
-            room_id="room-001",
+            conversation_id="room-001",
             message_id="msg-001",
             message_content=MessageContent(message_text="x" * (MAX_MESSAGE_LENGTH + 1)),
         )
         req = MagicMock()
-        req.room_id = "room-001"
+        req.conversation_id = "room-001"
         req.message = oversized_message
         result = room_center._message_sender._validate_send_message_request(req)
         assert result is not None
@@ -1038,12 +1038,12 @@ class TestValidateSendMessageRequest:
         from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
 
         ok_message = RoomUserMessage(
-            room_id="room-001",
+            conversation_id="room-001",
             message_id="msg-002",
             message_content=MessageContent(message_text="x" * MAX_MESSAGE_LENGTH),
         )
         req = MagicMock()
-        req.room_id = "room-001"
+        req.conversation_id = "room-001"
         req.message = ok_message
         result = room_center._message_sender._validate_send_message_request(req)
         assert result is None

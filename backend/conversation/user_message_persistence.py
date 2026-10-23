@@ -30,14 +30,14 @@ class UserMessageWriter(Protocol):
 class UserMessageFileLifecycle(Protocol):
     def write_lease(
         self,
-        room_id: str,
+        conversation_id: str,
         owner: str,
     ) -> AbstractAsyncContextManager[str]: ...
 
     async def claim_references(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         owner_id: str,
         message_id: str,
         file_ids: list[str],
@@ -81,11 +81,11 @@ class UserMessageCommitService:
         self._internal_event_publisher = internal_event_publisher
 
     @asynccontextmanager
-    async def _hold_room_write(self, room_id: str):
+    async def _hold_room_write(self, conversation_id: str):
         if self._files is None:
             yield None
             return
-        async with self._files.write_lease(room_id, "user-message") as lease_id:
+        async with self._files.write_lease(conversation_id, "user-message") as lease_id:
             yield lease_id
 
     async def commit(
@@ -93,7 +93,7 @@ class UserMessageCommitService:
         command: UserMessageCommitCommand,
     ) -> UserMessageInsertResult:
         message = command.message
-        async with self._hold_room_write(message.room_id):
+        async with self._hold_room_write(message.conversation_id):
             return await self._commit_with_lease(command)
 
     async def _commit_with_lease(
@@ -155,7 +155,7 @@ class UserMessageCommitService:
         files = self._require_files()
         try:
             await files.claim_references(
-                room_id=message.room_id,
+                conversation_id=message.conversation_id,
                 owner_id=message.user_id or "",
                 message_id=message.message_id,
                 file_ids=file_ids,
@@ -224,7 +224,7 @@ class UserMessageCommitService:
         # Wait for local projection before preflight can process agent messages.
         await publish_message_committed(
             self._internal_event_publisher,
-            room_id=command.message.room_id,
+            conversation_id=command.message.conversation_id,
             message_id=command.message.message_id,
             message_type="user",
             room_agent_set=dict(command.room_agent_set),

@@ -9,7 +9,7 @@ from common.dto import ExecutionAck, ExecutionRequest
 
 def test_execution_request_accepts_only_canonical_scope() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="supervisor",
         agent_scope={"source": "mention", "agent_ids": ["agent-1", "agent-2"]},
@@ -59,7 +59,7 @@ async def test_send_message_persists_changed_mode_before_execution_and_ack(
     patch_chat_rooms_deps["execution_engine"].execute.side_effect = execute
 
     response = await send_message(
-        sample_room.room_id,
+        sample_room.conversation_id,
         request,
         mock_user,
         store=patch_chat_rooms_deps["db_service"],
@@ -72,7 +72,7 @@ async def test_send_message_persists_changed_mode_before_execution_and_ack(
     patch_chat_rooms_deps[
         "chat_rooms"
     ].update_room_default_mode.assert_awaited_once_with(
-        sample_room.room_id,
+        sample_room.conversation_id,
         use_supervisor=True,
     )
     execution_request = patch_chat_rooms_deps[
@@ -107,7 +107,7 @@ async def test_send_message_stops_before_execution_when_mode_write_fails(
 
     with pytest.raises(HTTPException) as exc_info:
         await send_message(
-            sample_room.room_id,
+            sample_room.conversation_id,
             request,
             mock_user,
             store=patch_chat_rooms_deps["db_service"],
@@ -137,7 +137,7 @@ async def test_send_message_rejects_debate_mode(
     )
 
     response = await send_message(
-        sample_room.room_id,
+        sample_room.conversation_id,
         request,
         mock_user,
         store=patch_chat_rooms_deps["db_service"],

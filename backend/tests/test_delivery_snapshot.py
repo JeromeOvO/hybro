@@ -401,13 +401,13 @@ def test_fold_scopes_reused_question_ids_by_interaction():
 async def _seeded_service() -> SnapshotService:
     store = InMemoryRoomEventStore()
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="agent_response",
         payload_public={"message_id": "m1", "agent_id": "a1", "content": "one"},
         event_id="m1-final",
     )
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="agent_response",
         payload_public={"message_id": "m2", "agent_id": "a1", "content": "two"},
         event_id="m2-final",
@@ -443,13 +443,13 @@ async def test_snapshot_force_refolds_from_log():
 async def test_snapshot_stops_at_first_gap():
     store = InMemoryRoomEventStore()
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="agent_response",
         payload_public={"message_id": "m1", "content": "one"},
         event_id="m1-final",
     )
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="agent_response",
         payload_public={"message_id": "m3", "content": "three"},
         event_id="m3-final",
@@ -457,7 +457,7 @@ async def test_snapshot_stops_at_first_gap():
     # Simulate a permanent hole: seq 2 was burned and tombstoned as skipped
     # (InMemory tombstone takes the next free seq, mirroring the healed hole).
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="skipped",
         payload_public={},
         idempotency_key="skip:room-1:2",

@@ -68,7 +68,7 @@ async def _resolve_processing_status_client_request_id(
 
 async def emit_processing_status(
     *,
-    room_id: str,
+    conversation_id: str,
     status: ProcessingStatusLike,
     message_id: str | None,
     event_publisher: EventPublisher,
@@ -83,7 +83,7 @@ async def emit_processing_status(
     frontend_message_id = _require_frontend_message_id(message_id)
     await event_publisher.emit(
         ProcessingStatusEvent(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=frontend_message_id,
             status=status_value,
             related_message_id=lifecycle_message_id,
@@ -124,7 +124,7 @@ def _room_processing_status_error_message(
 
 async def emit_room_processing_status(
     *,
-    room_id: str,
+    conversation_id: str,
     status: ProcessingStatusLike,
     message_id: str | None,
     event_publisher: EventPublisher,
@@ -139,7 +139,7 @@ async def emit_room_processing_status(
         status, details, error_message
     )
     await emit_processing_status(
-        room_id=room_id,
+        conversation_id=conversation_id,
         status=status,
         message_id=message_id,
         event_publisher=event_publisher,

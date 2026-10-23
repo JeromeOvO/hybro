@@ -106,7 +106,7 @@ async def test_terminal_continuation_proof_clears_initial_delivery_uncertainty()
         orchestration_run_id="run-1",
         call_record_id="record-1",
         invocation_id="call-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         binding_id="binding-1",
         agent_id="agent-1",
@@ -160,7 +160,7 @@ async def test_terminal_continuation_proof_clears_initial_delivery_uncertainty()
         interaction_id="interaction-1",
         answers=[{"request_id": "q1", "user_input": "yes"}],
         responder_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
     )
 
     assert result == "completed"
@@ -196,7 +196,7 @@ async def test_follow_up_challenge_proves_continuation_delivery(
         orchestration_run_id="run-1",
         call_record_id="record-1",
         invocation_id="call-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         binding_id="binding-1",
         agent_id="agent-1",
@@ -234,7 +234,7 @@ async def test_follow_up_challenge_proves_continuation_delivery(
         interaction_id="interaction-1",
         answers=[{"request_id": "q1", "user_input": "yes"}],
         responder_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
     )
 
     assert result == "input_required"
@@ -248,7 +248,7 @@ async def test_unproven_continuation_still_reports_delivery_uncertain():
         orchestration_run_id="run-1",
         call_record_id="record-1",
         invocation_id="call-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         binding_id="binding-1",
         agent_id="agent-1",
@@ -287,7 +287,7 @@ async def test_unproven_continuation_still_reports_delivery_uncertain():
             interaction_id="interaction-1",
             answers=[{"request_id": "q1", "user_input": "a"}],
             responder_id="user-1",
-            room_id="room-1",
+            conversation_id="room-1",
         )
 
 
@@ -348,7 +348,7 @@ def test_v2_route_is_invocation_owned_and_rejects_provisional_aliases():
         orchestration_run_id="run-1",
         call_record_id="record-1",
         invocation_id="call-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         binding_id="binding-1",
         agent_id="agent-1",
@@ -394,7 +394,7 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
         await owner.publish(interaction_id, call_record_id=call.call_record_id)
         == "accepted"
     )
-    assert len(await owner.get_published_interactions(call.room_id)) == 1
+    assert len(await owner.get_published_interactions(call.conversation_id)) == 1
     answers = [
         HITLQuestionAnswer.model_validate(
             {
@@ -422,7 +422,7 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
         verified_auth_references=[],
     )
     assert first == replay
-    assert await owner.get_published_interactions(call.room_id) == []
+    assert await owner.get_published_interactions(call.conversation_id) == []
     with pytest.raises(ValueError, match="inventory"):
         await owner.answer(
             interaction_id=interaction_id,
@@ -651,7 +651,7 @@ async def test_router_full_cancellation_claims_run_before_descendant_cleanup():
     )
     run = SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         status="running",
         state_version=1,
         cancellation_command_id=None,
@@ -736,14 +736,14 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
         update={"state": "input_required", "pending_interaction_id": "interaction-1"}
     )
     route = SimpleNamespace(
-        room_id="room-1",
+        conversation_id="room-1",
         orchestration_run_id="run-1",
         call_record_id=record.call_record_id,
         interaction_revision=1,
     )
     run = SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         status="running",
         state_version=1,
         cancellation_command_id=None,
@@ -811,7 +811,7 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
     )
 
     version = await router.cancel_hitl_interaction(
-        room_id="room-1",
+        conversation_id="room-1",
         interaction_id="interaction-1",
         expected_version=1,
     )
@@ -985,7 +985,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
         frame = to_sse_frame(event, timestamp=NOW, room_seq=len(records) + 1)
         records.append(
             {
-                "room_id": frame["room_id"],
+                "room_id": frame["conversation_id"],
                 "room_seq": len(records) + 1,
                 "kind": frame["type"],
                 "ts": frame["timestamp"],
@@ -999,7 +999,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
         if projected is not None:
             await emit_checked(
                 RunEventNotification(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     event_id=projected.event_id,
                     run_id=run.run_id,
                     seq=projected.seq,
@@ -1019,7 +1019,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
                 sequence=current.state_version,
                 timestamp=NOW,
                 payload=payload,
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
             )
@@ -1028,7 +1028,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     async def control(kind, run_id, interaction_id, request_ids):
         await emit_checked(
             RunEventNotification(
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 event_id=f"public:{run_id}:{kind}:{interaction_id}",
                 run_id=run_id,
                 seq=len(records) + 1,
@@ -1050,7 +1050,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     assert waiting.outcome == "awaiting_user"
     child = await ledger.load(run.run_id, "call-1")
     assert child.state == "input_required"
-    assert len(await a2a.hitl.get_published_interactions(run.room_id)) == 1
+    assert len(await a2a.hitl.get_published_interactions(run.conversation_id)) == 1
     waiting_fold = RoomEventFold()
     for record in records:
         assert waiting_fold.apply(record), record
@@ -1084,7 +1084,9 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     )
     assert (
         await router.cancel_hitl_interaction(
-            room_id=run.room_id, interaction_id="interaction-1", expected_version=1
+            conversation_id=run.conversation_id,
+            interaction_id="interaction-1",
+            expected_version=1,
         )
         == 1
     )
@@ -1092,7 +1094,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     assert terminal.status == "canceled"
     assert (await ledger.load(run.run_id, "call-1")).state == "canceled"
     assert a2a.hitl.is_abandoned_for_test("interaction-1")
-    assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
+    assert await a2a.hitl.get_eligible_interactions(run.conversation_id) == []
     assert all(
         entry.state == "terminal" and entry.public_terminal_emitted
         for batch in terminal.tool_batches
@@ -1102,7 +1104,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     async def project_terminal_status(_intent, current):
         await emit_checked(
             RunEventNotification(
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 event_id=f"public:{current.run_id}:run_settled",
                 run_id=current.run_id,
                 seq=current.state_version,

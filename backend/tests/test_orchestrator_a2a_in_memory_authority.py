@@ -55,7 +55,7 @@ async def test_inbox_primary_and_source_index_test_views_are_defensive():
         payload_digest="payload",
         received_at=NOW,
         binding_scope=observation.binding_scope,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         call_record_id=ledger.call_record_id,
         event_kind=observation.event_kind,

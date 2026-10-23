@@ -29,14 +29,18 @@ class StateMemoryRepository:
         self.created = []
         self.compacted = []
 
-    async def get_room_memory(self, room_id: str) -> dict | None:
-        return self.doc if self.doc and self.doc.get("room_id") == room_id else None
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
+        return (
+            self.doc
+            if self.doc and self.doc.get("room_id") == conversation_id
+            else None
+        )
 
-    async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
-        self.doc = {"room_id": room_id, **memory}
+    async def upsert_room_memory(self, conversation_id: str, memory: dict) -> None:
+        self.doc = {"room_id": conversation_id, **memory}
 
-    async def delete_room_memory(self, room_id: str) -> bool:
-        self.deleted.append(room_id)
+    async def delete_room_memory(self, conversation_id: str) -> bool:
+        self.deleted.append(conversation_id)
         if self.fail_delete:
             return False
         existed = self.doc is not None
@@ -48,12 +52,14 @@ class StateMemoryRepository:
         self.created.append(memory)
         return memory["memory_id"]
 
-    async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
+    async def ensure_room_memory(self, conversation_id: str, defaults: dict) -> dict:
         if self.doc is None:
             self.doc = defaults
         return self.doc
 
-    async def push_and_trim_conversation_turn(self, room_id: str, turn: dict, **kwargs):
+    async def push_and_trim_conversation_turn(
+        self, conversation_id: str, turn: dict, **kwargs
+    ):
         if not self.doc:
             return False, False
         self.doc.setdefault("conversation_history", []).append(turn)
@@ -63,7 +69,7 @@ class StateMemoryRepository:
         return True, True
 
     async def push_and_trim_conversation_turn_if_absent(
-        self, room_id: str, turn: dict, **kwargs
+        self, conversation_id: str, turn: dict, **kwargs
     ):
         if not self.doc:
             return False, False, False
@@ -74,15 +80,15 @@ class StateMemoryRepository:
         return True, True, False
 
     async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
+        self, conversation_id: str, turn_id: str, turn_notes: dict
     ) -> bool:
         return True
 
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
         return self.doc
 
     async def update_room_summary_atomic(
-        self, room_id: str, room_summary: dict, **kwargs
+        self, conversation_id: str, room_summary: dict, **kwargs
     ) -> bool:
         if self.doc:
             self.doc["room_summary"] = room_summary
@@ -90,7 +96,7 @@ class StateMemoryRepository:
         return False
 
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         self.compacted.extend(compacted_turns)
         return True
@@ -112,38 +118,44 @@ class StateContentRepository:
     async def get_content_by_document_id(self, document_id: str) -> dict | None:
         return self.docs.get(document_id)
 
-    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
+    async def get_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> dict | None:
         return next(
             (
                 doc
                 for doc in self.docs.values()
-                if doc["room_id"] == room_id and doc["turn_id"] == turn_id
+                if doc["room_id"] == conversation_id and doc["turn_id"] == turn_id
             ),
             None,
         )
 
-    async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
-        doc = await self.get_content_by_turn_id(room_id, turn_id)
+    async def delete_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> bool:
+        doc = await self.get_content_by_turn_id(conversation_id, turn_id)
         if not doc:
             return False
         self.docs.pop(doc["document_id"])
         return True
 
-    async def delete_content_by_room_id(self, room_id: str) -> int:
+    async def delete_content_by_room_id(self, conversation_id: str) -> int:
         if self.raise_on_delete_room:
             raise RuntimeError("content cleanup failed")
-        self.deleted_rooms.append(room_id)
-        keys = [key for key, doc in self.docs.items() if doc["room_id"] == room_id]
+        self.deleted_rooms.append(conversation_id)
+        keys = [
+            key for key, doc in self.docs.items() if doc["room_id"] == conversation_id
+        ]
         for key in keys:
             self.docs.pop(key)
         return len(keys)
 
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        return {"room_id": room_id, "total_documents": len(self.docs)}
+    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
+        return {"room_id": conversation_id, "total_documents": len(self.docs)}
 
     async def text_search(
         self,
-        room_id: str,
+        conversation_id: str,
         query: str,
         limit: int = 50,
         skip: int = 0,
@@ -160,12 +172,12 @@ class StateContentRepository:
         ]
 
     async def scan_text_search(
-        self, room_id: str, query: str, limit: int
+        self, conversation_id: str, query: str, limit: int
     ) -> list[dict]:
-        return await self.text_search(room_id, query, limit=limit)
+        return await self.text_search(conversation_id, query, limit=limit)
 
     async def hydrate_turn_content(
-        self, room_id: str, turn_ids: list[str]
+        self, conversation_id: str, turn_ids: list[str]
     ) -> list[dict]:
         return [
             {
@@ -224,13 +236,13 @@ class RecordingLLM(FakeLLM):
 
 
 class MissingSummaryProjectionRepository(StateMemoryRepository):
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
         return None
 
 
 class FailingSummaryWriteRepository(StateMemoryRepository):
     async def update_room_summary_atomic(
-        self, room_id: str, room_summary: dict, **kwargs
+        self, conversation_id: str, room_summary: dict, **kwargs
     ) -> bool:
         return False
 
@@ -299,7 +311,7 @@ def test_facade_uses_noop_tracer_by_default():
 
 
 def existing_doc():
-    doc = new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+    doc = new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     doc["conversation_history"] = [
         {
             "turn_id": "message:m1",
@@ -321,7 +333,7 @@ async def test_facade_compact_room_memory_accepts_protocol_keyword():
 
     result = await service.compact_room_memory("r1", room_memory=doc)
 
-    assert result.room_id == "r1"
+    assert result.conversation_id == "r1"
     assert result.compacted_count == 1
     assert memory_repo.compacted
 
@@ -330,13 +342,17 @@ async def test_facade_compact_room_memory_accepts_protocol_keyword():
 async def test_facade_assemble_context_creates_transient_doc():
     service = facade(
         history=FakeHistoryReader(
-            [SimpleNamespace(message_id="m1", room_id="r1", content="transient task")]
+            [
+                SimpleNamespace(
+                    message_id="m1", conversation_id="r1", content="transient task"
+                )
+            ]
         )
     )
 
     result = await service.assemble_context("r1", "m1", token_budget=300)
 
-    assert result.room_id == "r1"
+    assert result.conversation_id == "r1"
     assert "transient task" in result.metadata["context"]
     assert result.metadata["message_id"] == "m1"
 
@@ -454,7 +470,7 @@ async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fa
     repo = StateMemoryRepository(existing_doc(), fail_delete=True)
     content_repo = StateContentRepository()
     await content_repo.upsert_full_content(
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         document_id="doc1",
         content="full content",
@@ -483,7 +499,10 @@ async def test_facade_project_message():
         history=FakeHistoryReader(
             [
                 SimpleNamespace(
-                    message_id="m2", room_id="r1", message_type="user", content="new"
+                    message_id="m2",
+                    conversation_id="r1",
+                    message_type="user",
+                    content="new",
                 )
             ]
         ),

@@ -22,7 +22,7 @@ function frame(type: string, data: Record<string, unknown>, roomSeq?: number): A
   return {
     type,
     timestamp: '2026-07-02T00:00:00.000Z',
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     data: roomSeq === undefined ? data : { ...data, room_seq: roomSeq },
   } as AnySSEFrame
 }

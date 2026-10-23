@@ -6,7 +6,7 @@ from common.dto.base import FrozenDTO
 
 
 class CompactionResult(FrozenDTO):
-    room_id: str
+    conversation_id: str
     compacted_count: int
     tokens_saved: int
     memory_id: str | None = None

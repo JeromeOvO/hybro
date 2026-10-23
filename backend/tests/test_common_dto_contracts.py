@@ -43,7 +43,7 @@ def test_common_dtos_can_be_instantiated():
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})
     MessageRecord(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         message_type="user",
         content={},
@@ -52,7 +52,7 @@ def test_common_dtos_can_be_instantiated():
     seed = MembershipSeed(mode="manual", agent_ids=["a1"])
     MembershipUpdateRequest(add_agent_ids=["a2"], remove_agent_ids=["a1"])
     RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="u1",
         owner_name="User",
@@ -66,79 +66,83 @@ def test_common_dtos_can_be_instantiated():
         membership_seed=seed,
     )
     SavedUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         user_id="u1",
         user_name="User",
         message={},
     )
     ExecutionRequest(
-        room_id="r1", message_text="hello", sender_id="u1", sender_name="User"
+        conversation_id="r1", message_text="hello", sender_id="u1", sender_name="User"
     )
     ExecutionAck(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         user_id="u1",
         user_name="User",
         message={},
     )
-    RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
+    RunInfo(run_id="run1", conversation_id="r1", state=RunState.PROCESSING)
     HITLRequest(
         request_id="hitl1",
-        room_id="r1",
+        conversation_id="r1",
         user_message_id="m1",
         prompt="Continue?",
         source="agent",
     )
     HITLResponse(request_id="hitl1", response_text="yes", responder_id="u1")
-    ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
-    CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
+    ContextBlock(block_id="b1", conversation_id="r1", content="context", token_count=3)
+    CompactionResult(conversation_id="r1", compacted_count=1, tokens_saved=10)
     MemorySearchResult(
-        room_id="r1",
+        conversation_id="r1",
         content="memory",
         keyword_score=0.5,
         relevance_score=0.5,
         temporal_decay_factor=1.0,
     )
-    ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
+    ProcessingStatusEvent(conversation_id="r1", message_id="m1", status="processing")
     RunEventNotification(
-        room_id="r1",
+        conversation_id="r1",
         event_id="e1",
         run_id="run1",
         seq=1,
         run_event_type="agent_started",
     )
     AgentMessagePartial(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         agent_id="a1",
         content_delta="hello",
     )
     AgentMessageFinal(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         agent_id="a1",
         content={"text": "done"},
     )
-    CancellationEvent(room_id="r1", message_id="m1")
+    CancellationEvent(conversation_id="r1", message_id="m1")
     HITLRequestEvent(
-        room_id="r1",
+        conversation_id="r1",
         request_id="h1",
         prompt="Continue?",
         prompt_type="text",
         source="agent",
         message_id="m1",
     )
-    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1", source="agent")
+    HITLResolvedEvent(
+        conversation_id="r1", request_id="h1", message_id="m1", source="agent"
+    )
     TaskSubmittedEvent(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         task_id="t1",
         agent_name="Agent",
     )
-    TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
-    ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
-    ErrorEvent(room_id="r1", error="failed")
+    TaskUpdateEvent(conversation_id="r1", message_id="m1", status="working")
+    ArtifactUpdateEvent(
+        conversation_id="r1", message_id="m1", agent_id="a1", artifact={}
+    )
+    ErrorEvent(conversation_id="r1", error="failed")
     LLMResponse(content="ok", model="test")
     ModelInfo(
         model_id="m1",

@@ -27,7 +27,9 @@ class AgentCardResolver(Protocol):
 
 @runtime_checkable
 class RoomRouteReader(Protocol):
-    async def get_room_by_room_id(self, room_id: str) -> RoomRouteRecord | None: ...
+    async def get_room_by_room_id(
+        self, conversation_id: str
+    ) -> RoomRouteRecord | None: ...
 
 
 @runtime_checkable

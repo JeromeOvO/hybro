@@ -63,12 +63,16 @@ class StateMemoryRepository:
         self.compacted_entries: list[dict] = []
         self.get_calls = 0
 
-    async def get_room_memory(self, room_id: str) -> dict | None:
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
         self.get_calls += 1
-        return self.doc if self.doc and self.doc.get("room_id") == room_id else None
+        return (
+            self.doc
+            if self.doc and self.doc.get("room_id") == conversation_id
+            else None
+        )
 
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         self.compacted_entries.extend(compacted_turns)
         if not self.compact_result:
@@ -96,9 +100,13 @@ class StateContentRepository:
     async def get_content_by_document_id(self, document_id: str) -> dict | None:
         return self.docs.get(document_id)
 
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        docs = [doc for doc in self.docs.values() if doc["room_id"] == room_id]
-        return {"room_id": room_id, "total_documents": len(docs)}
+    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
+        docs = [
+            doc
+            for doc in self.docs.values()
+            if doc["conversation_id"] == conversation_id
+        ]
+        return {"conversation_id": conversation_id, "total_documents": len(docs)}
 
 
 def config(**overrides):
@@ -180,7 +188,7 @@ async def test_compact_room_memory_preserves_recent():
     result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=StateContentRepository(),
-        room_id="r1",
+        conversation_id="r1",
         room_memory_doc=None,
         config=config(preserve_recent_turns=1),
         now=now,
@@ -204,7 +212,7 @@ async def test_compact_room_memory_stores_content_and_bounded_brief_summary():
     result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=content_repo,
-        room_id="r1",
+        conversation_id="r1",
         room_memory_doc=None,
         config=config(preserve_recent_turns=0),
         now=now,
@@ -238,7 +246,7 @@ async def test_compact_room_memory_stale_snapshot_already_compact_is_clean_noop(
     result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=StateContentRepository(),
-        room_id="r1",
+        conversation_id="r1",
         room_memory_doc=stale_snapshot,
         config=config(preserve_recent_turns=0),
         now=now,
@@ -258,7 +266,7 @@ async def test_compact_if_needed_returns_none_below_threshold():
         await compaction.compact_if_needed(
             repository=repo,
             content_repository=StateContentRepository(),
-            room_id="r1",
+            conversation_id="r1",
             config=config(max_full_turns=5, max_total_tokens=999),
             now=now,
         )
@@ -275,7 +283,7 @@ async def test_compact_if_needed_uses_single_memory_load_when_compacting():
     result = await compaction.compact_if_needed(
         repository=repo,
         content_repository=StateContentRepository(),
-        room_id="r1",
+        conversation_id="r1",
         config=config(max_full_turns=1, preserve_recent_turns=0),
         now=now,
     )
@@ -293,7 +301,7 @@ async def test_run_compaction_uses_single_memory_load_when_compacting():
     result = await compaction.run_compaction(
         repository=repo,
         content_repository=StateContentRepository(),
-        room_id="r1",
+        conversation_id="r1",
         config=config(max_full_turns=1, preserve_recent_turns=0),
         now=now,
     )
@@ -309,7 +317,7 @@ async def test_run_compaction_returns_skipped_result():
     result = await compaction.run_compaction(
         repository=repo,
         content_repository=StateContentRepository(),
-        room_id="r1",
+        conversation_id="r1",
         config=config(max_full_turns=5, max_total_tokens=999),
         now=now,
     )
@@ -334,7 +342,7 @@ async def test_expand_turn_content_compact_turn():
     content_repo = StateContentRepository()
     await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="stored",
         content_type="text",
@@ -356,7 +364,7 @@ async def test_expand_turn_content_compact_turn_rejects_expired_document():
     content_repo = StateContentRepository()
     await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="expired",
         content_type="text",
@@ -388,7 +396,7 @@ async def test_fetch_turn_content_missing_room():
         StateMemoryRepository(None),
         StateContentRepository(),
         turn_id="t1",
-        room_id="missing",
+        conversation_id="missing",
     )
 
     assert result == "[Error: Room missing not found]"
@@ -399,7 +407,7 @@ async def test_get_compaction_stats():
     content_repo = StateContentRepository()
     await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="stored",
         content_type="text",

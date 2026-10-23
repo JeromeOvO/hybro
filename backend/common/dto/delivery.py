@@ -24,7 +24,7 @@ class DeliveryEmitStatus(StrEnum):
 
 
 class DeliveryEventBase(FrozenDTO):
-    room_id: str
+    conversation_id: str
     timestamp: datetime | None = None
     trace_id: str | None = None
 

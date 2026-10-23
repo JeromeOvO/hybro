@@ -17,24 +17,24 @@ class ChatFacade:
         self._conversation = conversation
         self._repository = repository
 
-    async def get_room(self, room_id: str) -> RoomInfo | None:
-        return await self._conversation.get_room(room_id)
+    async def get_room(self, conversation_id: str) -> RoomInfo | None:
+        return await self._conversation.get_room(conversation_id)
 
     async def create_room(self, request: CreateRoomRequest) -> RoomInfo:
         return await self._conversation.create_room(request)
 
-    async def update_room(self, room_id: str, updates: dict) -> RoomInfo | None:
-        return await self._conversation.update_room(room_id, updates)
+    async def update_room(self, conversation_id: str, updates: dict) -> RoomInfo | None:
+        return await self._conversation.update_room(conversation_id, updates)
 
     async def update_room_default_mode(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         use_supervisor: bool,
     ) -> bool:
         """Atomically update only the persisted room-mode flag."""
         updated = await self._repository.update_fields(
-            room_id,
+            conversation_id,
             {"extend_info.use_supervisor": use_supervisor},
         )
         return updated is not None

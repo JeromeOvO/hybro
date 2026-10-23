@@ -25,7 +25,9 @@ async def test_delta_emit_persists_before_broadcast_and_threads_seq():
     publisher = make_publisher(transport=transport, room_events=store)
 
     status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert status == DeliveryEmitStatus.DELIVERED
@@ -51,7 +53,7 @@ async def test_non_terminal_retry_reuses_same_sequence():
     transport = FakeTransport()
     publisher = make_publisher(transport=transport, room_events=store)
     event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="public:run-1:llm_call_completed:3",
         run_id="run-1",
         seq=3,
@@ -78,7 +80,7 @@ async def test_final_message_retry_reuses_one_durable_room_event():
     transport = FakeTransport()
     publisher = make_publisher(transport=transport, room_events=store)
     event = AgentMessageFinal(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="assistant-1",
         agent_id="system:hybro",
         content={"content": "Final answer"},
@@ -107,7 +109,7 @@ async def test_failed_final_fanout_still_returns_persisted_identity():
 
     status, room_event_id = await publisher.emit_checked_identified(
         AgentMessageFinal(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="assistant-1",
             agent_id="system:hybro",
             content={"content": "Final answer"},
@@ -133,7 +135,7 @@ async def test_dedup_short_circuits_skip_persistence():
 
     status, _ = await publisher.emit_checked_identified(
         ProcessingStatusEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             status="completed",
             delivery_id="terminal:evt-1:processing",
@@ -156,7 +158,7 @@ async def test_distinct_deltas_with_identical_content_do_not_collapse():
     for _ in range(2):
         await publisher.emit_checked_identified(
             AgentMessagePartial(
-                room_id="room-1",
+                conversation_id="room-1",
                 message_id="msg-1",
                 agent_id="a1",
                 content_delta="Hi",
@@ -176,7 +178,7 @@ async def test_parent_event_id_flows_through_persist_and_frame():
 
     decision_status, decision_id = await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id="public:run-1:orchestrator_decision:2",
             run_id="run-1",
             seq=2,
@@ -188,7 +190,7 @@ async def test_parent_event_id_flows_through_persist_and_frame():
 
     child_status, _ = await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id="public:run-1:tool_call_accepted:4",
             run_id="run-1",
             seq=4,

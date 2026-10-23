@@ -104,13 +104,13 @@ async def test_first_terminal_status_passes_and_second_l1_hit_suppresses():
 
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
     assert not await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
     )
@@ -131,14 +131,14 @@ async def test_stable_delivery_id_is_the_cross_instance_dedup_key():
 
     assert await _deliver_once(
         first,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         delivery_id="terminal:event-1:processing",
     )
     assert not await _deliver_once(
         replay,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         delivery_id="terminal:event-1:processing",
@@ -156,7 +156,7 @@ async def test_crashed_reservation_is_in_flight_then_retryable_after_expiry():
     observer = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
 
     reservation = await crashed.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:event-1:processing",
@@ -164,7 +164,7 @@ async def test_crashed_reservation_is_in_flight_then_retryable_after_expiry():
     assert reservation.status == DeliveryReservationStatus.RESERVED
 
     in_flight = await observer.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:event-1:processing",
@@ -174,7 +174,7 @@ async def test_crashed_reservation_is_in_flight_then_retryable_after_expiry():
     # Simulate Redis reservation TTL expiry after the reserving worker crashed.
     redis.values.clear()
     retry = await observer.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:event-1:processing",
@@ -186,7 +186,7 @@ async def test_crashed_reservation_is_in_flight_then_retryable_after_expiry():
 
     replay = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
     confirmed = await replay.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:event-1:processing",
@@ -201,7 +201,7 @@ async def test_l2_redis_nx_miss_suppresses_terminal_status():
 
     assert not await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
@@ -222,7 +222,7 @@ async def test_custom_terminal_prefix_and_ttl_are_used_for_l2():
 
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
@@ -237,13 +237,13 @@ async def test_failed_delivery_release_clears_owned_l1_and_l2_reservations():
     dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
 
     reservation = await dedup.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
     assert reservation.status == DeliveryReservationStatus.RESERVED
     await dedup.release(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         reservation=reservation,
@@ -253,7 +253,7 @@ async def test_failed_delivery_release_clears_owned_l1_and_l2_reservations():
     assert redis.compare_deleted == [("terminal:room-1:msg-1", redis.calls[0][1])]
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
@@ -269,12 +269,12 @@ async def test_release_does_not_delete_a_reclaimed_reservation():
     )
 
     reservation = await dedup.reserve(
-        room_id="room-1", message_id="msg-1", status="completed"
+        conversation_id="room-1", message_id="msg-1", status="completed"
     )
     redis.values["terminal:room-1:msg-1"] = "owner-2"
 
     await dedup.release(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         reservation=reservation,
@@ -299,21 +299,21 @@ async def test_multi_instance_loser_does_not_poison_l1_after_owner_release():
     )
 
     reservation = await owner.reserve(
-        room_id="room-1", message_id="msg-1", status="completed"
+        conversation_id="room-1", message_id="msg-1", status="completed"
     )
     assert not await _deliver_once(
-        loser, room_id="room-1", message_id="msg-1", status="completed"
+        loser, conversation_id="room-1", message_id="msg-1", status="completed"
     )
     assert "room-1:msg-1" not in loser.cache
 
     await owner.release(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         reservation=reservation,
     )
     assert await _deliver_once(
-        loser, room_id="room-1", message_id="msg-1", status="completed"
+        loser, conversation_id="room-1", message_id="msg-1", status="completed"
     )
 
 
@@ -326,13 +326,13 @@ async def test_l1_ttl_uses_custom_config():
 
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
     assert not await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
@@ -340,7 +340,7 @@ async def test_l1_ttl_uses_custom_config():
     timer.advance(8)
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
@@ -355,13 +355,13 @@ async def test_redis_failure_degrades_to_l1_only_without_escaping():
 
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
     assert not await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
     )
@@ -380,7 +380,7 @@ async def test_concurrent_redis_failures_create_only_one_l1_reservation_owner():
     reservations = await asyncio.gather(
         *(
             dedup.reserve(
-                room_id="room-1",
+                conversation_id="room-1",
                 message_id="msg-1",
                 status="failed",
                 delivery_id="terminal:event-1:processing",
@@ -409,7 +409,7 @@ async def test_redis_failed_l1_reservation_confirms_after_redis_recovers():
     dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
 
     reservation = await dedup.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:event-1:processing",
@@ -430,13 +430,13 @@ async def test_missing_redis_uses_l1_only():
 
     assert await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )
     assert not await _deliver_once(
         dedup,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
     )

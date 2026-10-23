@@ -42,7 +42,7 @@ class RoomEventStore(Protocol):
     async def append(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         kind: str,
         payload_public: dict[str, Any],
         event_id: str | None = None,
@@ -53,11 +53,11 @@ class RoomEventStore(Protocol):
         ts: datetime | None = None,
     ) -> RoomEventAppend: ...
 
-    async def latest_seq(self, room_id: str) -> int: ...
+    async def latest_seq(self, conversation_id: str) -> int: ...
 
     async def read_range(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         after: int = 0,
         limit: int = 500,
@@ -95,7 +95,7 @@ class MongoRoomEventStore:
     async def append(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         kind: str,
         payload_public: dict[str, Any],
         event_id: str | None = None,
@@ -105,10 +105,14 @@ class MongoRoomEventStore:
         persist_state: str = "settled",
         ts: datetime | None = None,
     ) -> RoomEventAppend:
-        _id = idempotency_key or event_id or f"{room_id}:{kind}:{uuid.uuid4().hex}"
+        _id = (
+            idempotency_key
+            or event_id
+            or f"{conversation_id}:{kind}:{uuid.uuid4().hex}"
+        )
         doc = _room_event_doc(
             _id=_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             kind=kind,
             payload_public=payload_public,
             event_id=event_id,
@@ -118,14 +122,14 @@ class MongoRoomEventStore:
             ts=ts,
         )
         try:
-            return await self._append_transactional(room_id, doc)
+            return await self._append_transactional(conversation_id, doc)
         except DuplicateKeyError:
-            return await self._read_back(room_id, _id)
+            return await self._read_back(conversation_id, _id)
         except _TransactionUnavailable:
-            return await self._append_fallback(room_id, doc)
+            return await self._append_fallback(conversation_id, doc)
 
     async def _append_transactional(
-        self, room_id: str, doc: dict[str, Any]
+        self, conversation_id: str, doc: dict[str, Any]
     ) -> RoomEventAppend:
         session_factory = getattr(self._mongo, "start_session", None)
         if not callable(session_factory):
@@ -139,7 +143,7 @@ class MongoRoomEventStore:
             try:
                 async with session.start_transaction():
                     counter = await self._seq.raw_collection.find_one_and_update(
-                        {"_id": room_id},
+                        {"_id": conversation_id},
                         {"$inc": {"seq": 1}},
                         upsert=True,
                         return_document=True,
@@ -155,7 +159,7 @@ class MongoRoomEventStore:
         return RoomEventAppend(room_seq=room_seq, room_event_id=str(doc["_id"]))
 
     async def _append_fallback(
-        self, room_id: str, doc: dict[str, Any]
+        self, conversation_id: str, doc: dict[str, Any]
     ) -> RoomEventAppend:
         """Counter-then-insert allocation for non-transactional deployments.
 
@@ -168,7 +172,7 @@ class MongoRoomEventStore:
         from pymongo.errors import DuplicateKeyError
 
         existing = await self._events.find_one(
-            {"_id": str(doc["_id"]), "room_id": room_id}
+            {"_id": str(doc["_id"]), "room_id": conversation_id}
         )
         if existing is not None:
             return RoomEventAppend(
@@ -178,7 +182,7 @@ class MongoRoomEventStore:
 
         for _attempt in range(_FALLBACK_INSERT_ATTEMPTS):
             counter = await self._seq.raw_collection.find_one_and_update(
-                {"_id": room_id},
+                {"_id": conversation_id},
                 {"$inc": {"seq": 1}},
                 upsert=True,
                 return_document=True,
@@ -189,10 +193,10 @@ class MongoRoomEventStore:
                 await self._events.raw_collection.insert_one(doc)
             except DuplicateKeyError:
                 existing = await self._events.find_one(
-                    {"_id": str(doc["_id"]), "room_id": room_id}
+                    {"_id": str(doc["_id"]), "room_id": conversation_id}
                 )
                 if existing is not None:
-                    await self._fill_skipped(room_id, room_seq)
+                    await self._fill_skipped(conversation_id, room_seq)
                     return RoomEventAppend(
                         room_seq=int(existing.get("room_seq") or 0),
                         room_event_id=str(doc["_id"]),
@@ -202,16 +206,16 @@ class MongoRoomEventStore:
                 # the same idempotency key at a fresh allocation rather than
                 # reporting a false persisted=false/seq=0 result.
                 continue
-            await self._heal_skipped(room_id, room_seq)
+            await self._heal_skipped(conversation_id, room_seq)
             return RoomEventAppend(room_seq=room_seq, room_event_id=str(doc["_id"]))
         raise DuplicateKeyError(
             "room event fallback allocation repeatedly collided before persistence"
         )
 
-    async def _fill_skipped(self, room_id: str, room_seq: int) -> None:
+    async def _fill_skipped(self, conversation_id: str, room_seq: int) -> None:
         tombstone = {
-            "_id": f"skip:{room_id}:{room_seq}",
-            "room_id": room_id,
+            "_id": f"skip:{conversation_id}:{room_seq}",
+            "room_id": conversation_id,
             "room_seq": room_seq,
             "kind": "skipped",
             "event_id": None,
@@ -226,8 +230,8 @@ class MongoRoomEventStore:
         except DuplicateKeyError:
             pass
 
-    async def _read_back(self, room_id: str, _id: str) -> RoomEventAppend:
-        existing = await self._events.find_one({"_id": _id, "room_id": room_id})
+    async def _read_back(self, conversation_id: str, _id: str) -> RoomEventAppend:
+        existing = await self._events.find_one({"_id": _id, "room_id": conversation_id})
         if existing is None:
             # Extremely unlikely: the deterministic key collided but the doc is
             # gone. Treat as a failed append with no sequence.
@@ -237,13 +241,13 @@ class MongoRoomEventStore:
             room_event_id=str(_id),
         )
 
-    async def _heal_skipped(self, room_id: str, allocated_seq: int) -> None:
+    async def _heal_skipped(self, conversation_id: str, allocated_seq: int) -> None:
         if self._skip_grace <= 0:
             return
         heal_through = allocated_seq - self._skip_grace
         if heal_through <= 0:
             return
-        counter = await self._seq.find_one({"_id": room_id})
+        counter = await self._seq.find_one({"_id": conversation_id})
         healed_through = int((counter or {}).get("healed_through") or 0)
         if heal_through <= healed_through:
             return
@@ -253,7 +257,7 @@ class MongoRoomEventStore:
                 int(doc.get("room_seq") or 0)
                 for doc in await self._events.find(
                     {
-                        "room_id": room_id,
+                        "room_id": conversation_id,
                         "room_seq": {"$gte": scan_from, "$lte": heal_through},
                     },
                     projection={"room_seq": 1},
@@ -266,8 +270,8 @@ class MongoRoomEventStore:
             if missing in existing_seqs:
                 continue
             tombstone = {
-                "_id": f"skip:{room_id}:{missing}",
-                "room_id": room_id,
+                "_id": f"skip:{conversation_id}:{missing}",
+                "room_id": conversation_id,
                 "room_seq": missing,
                 "kind": "skipped",
                 "event_id": None,
@@ -285,27 +289,27 @@ class MongoRoomEventStore:
         # contiguous scan cursor, bounding each allocation to newly confirmed
         # sequence positions rather than rescanning the full room prefix.
         await self._seq.raw_collection.find_one_and_update(
-            {"_id": room_id},
+            {"_id": conversation_id},
             {"$max": {"healed_through": heal_through}},
             upsert=True,
             return_document=True,
         )
 
-    async def latest_seq(self, room_id: str) -> int:
-        counter = await self._seq.find_one({"_id": room_id})
+    async def latest_seq(self, conversation_id: str) -> int:
+        counter = await self._seq.find_one({"_id": conversation_id})
         if not counter:
             return 0
         return int(counter.get("seq") or 0)
 
     async def read_range(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         after: int = 0,
         limit: int = 500,
         include_skipped: bool = False,
     ) -> list[dict[str, Any]]:
-        query: dict[str, Any] = {"room_id": room_id, "room_seq": {"$gt": after}}
+        query: dict[str, Any] = {"room_id": conversation_id, "room_seq": {"$gt": after}}
         if not include_skipped:
             query["kind"] = {"$ne": "skipped"}
         docs = await self._events.find(
@@ -349,7 +353,7 @@ class InMemoryRoomEventStore:
     async def append(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         kind: str,
         payload_public: dict[str, Any],
         event_id: str | None = None,
@@ -361,19 +365,23 @@ class InMemoryRoomEventStore:
     ) -> RoomEventAppend:
         lock = await self._ensure_lock()
         async with lock:
-            _id = idempotency_key or event_id or f"{room_id}:{kind}:{uuid.uuid4().hex}"
-            room = self._rooms.setdefault(room_id, {})
+            _id = (
+                idempotency_key
+                or event_id
+                or f"{conversation_id}:{kind}:{uuid.uuid4().hex}"
+            )
+            room = self._rooms.setdefault(conversation_id, {})
             for existing in room.values():
                 if str(existing.get("_id") or "") == str(_id):
                     return RoomEventAppend(
                         room_seq=int(existing["room_seq"]),
                         room_event_id=str(_id),
                     )
-            room_seq = self._counters.get(room_id, 0) + 1
-            self._counters[room_id] = room_seq
+            room_seq = self._counters.get(conversation_id, 0) + 1
+            self._counters[conversation_id] = room_seq
             doc = _room_event_doc(
                 _id=_id,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 kind=kind,
                 payload_public=payload_public,
                 event_id=event_id,
@@ -386,18 +394,18 @@ class InMemoryRoomEventStore:
             room[room_seq] = doc
             return RoomEventAppend(room_seq=room_seq, room_event_id=str(_id))
 
-    async def latest_seq(self, room_id: str) -> int:
-        return self._counters.get(room_id, 0)
+    async def latest_seq(self, conversation_id: str) -> int:
+        return self._counters.get(conversation_id, 0)
 
     async def read_range(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         after: int = 0,
         limit: int = 500,
         include_skipped: bool = False,
     ) -> list[dict[str, Any]]:
-        room = self._rooms.get(room_id, {})
+        room = self._rooms.get(conversation_id, {})
         records = []
         for room_seq in sorted(room):
             if room_seq <= after:
@@ -426,7 +434,7 @@ class InMemoryRoomEventStore:
 def _room_event_doc(
     *,
     _id: str,
-    room_id: str,
+    conversation_id: str,
     kind: str,
     payload_public: dict[str, Any],
     event_id: str | None,
@@ -437,7 +445,7 @@ def _room_event_doc(
 ) -> dict[str, Any]:
     return {
         "_id": _id,
-        "room_id": room_id,
+        "room_id": conversation_id,
         "kind": kind,
         "event_id": event_id,
         "parent_event_id": parent_event_id,

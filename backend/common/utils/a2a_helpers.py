@@ -19,7 +19,7 @@ class A2AArtifactFiles(Protocol):
     async def materialize_inline_file_parts(
         self,
         parts: list[dict],
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         *,
         converted_so_far: int = 0,
@@ -31,7 +31,7 @@ class A2AArtifactFiles(Protocol):
     async def materialize_artifacts(
         self,
         artifacts: list,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         *,
         converted_so_far: int = 0,
@@ -41,7 +41,7 @@ class A2AArtifactFiles(Protocol):
     async def delete_superseded_agent_artifacts(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         file_ids: set[str],
     ) -> int: ...
@@ -536,7 +536,7 @@ def append_artifact_to_task_dict(
 
 async def materialize_inline_file_parts(
     parts: list[dict],
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
@@ -550,7 +550,7 @@ async def materialize_inline_file_parts(
     storage = _require_a2a_artifact_storage()
     return await storage.materialize_inline_file_parts(
         parts,
-        room_id,
+        conversation_id,
         message_id,
         converted_so_far=converted_so_far,
         budget=budget,
@@ -561,14 +561,14 @@ async def materialize_inline_file_parts(
 
 async def delete_superseded_agent_artifacts(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     file_ids: set[str],
 ) -> int:
     if not file_ids:
         return 0
     return await _require_a2a_artifact_storage().delete_superseded_agent_artifacts(
-        room_id=room_id,
+        conversation_id=conversation_id,
         message_id=message_id,
         file_ids=file_ids,
     )
@@ -576,7 +576,7 @@ async def delete_superseded_agent_artifacts(
 
 async def materialize_artifacts(
     artifacts: list,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
@@ -588,7 +588,7 @@ async def materialize_artifacts(
     storage = _require_a2a_artifact_storage()
     return await storage.materialize_artifacts(
         artifacts,
-        room_id,
+        conversation_id,
         message_id,
         converted_so_far=converted_so_far,
         report=report,

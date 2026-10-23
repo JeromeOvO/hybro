@@ -70,7 +70,7 @@ class AuthReferenceVerificationPort(Protocol):
         call_record_id: str,
         binding_id: str,
         binding_digest: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         interaction_id: str,
         interaction_revision: int,
@@ -103,7 +103,7 @@ class InMemoryHITLApplicationPort:
             orchestration_run_id=call.run_id,
             call_record_id=call.call_record_id,
             invocation_id=call.invocation_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             binding_id=call.binding_id,
             agent_id=call.agent_id,
@@ -210,7 +210,7 @@ class InMemoryHITLApplicationPort:
         return self.read_interaction_for_test(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
         interactions = []
         for interaction_id, stored in self._interactions.items():
@@ -219,7 +219,7 @@ class InMemoryHITLApplicationPort:
             if interaction_id in self._abandoned_interactions:
                 continue
             spec, route, fingerprint = stored
-            if route.room_id != room_id:
+            if route.conversation_id != conversation_id:
                 continue
             interactions.append(
                 (
@@ -231,7 +231,7 @@ class InMemoryHITLApplicationPort:
         return interactions
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
         interactions = []
         for interaction_id, stored in self._interactions.items():
@@ -242,7 +242,7 @@ class InMemoryHITLApplicationPort:
             if interaction_id in self._abandoned_interactions:
                 continue
             spec, route, fingerprint = stored
-            if route.room_id != room_id:
+            if route.conversation_id != conversation_id:
                 continue
             if (interaction_id, route.interaction_revision) in self._answer_records:
                 continue
@@ -694,7 +694,7 @@ class A2AContinuationCoordinator:
                 call_record_id=call.call_record_id,
                 binding_id=call.binding_id,
                 binding_digest=call.binding_digest,
-                room_id=call.room_id,
+                conversation_id=call.conversation_id,
                 room_epoch=call.room_epoch,
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
@@ -870,7 +870,7 @@ class A2AContinuationCoordinator:
             )
             return current.state if current is not None else "delivery_uncertain"
         if not await self.room_epochs.verify_active(
-            claimed.room_id, claimed.room_epoch
+            claimed.conversation_id, claimed.room_epoch
         ):
             return await self._terminalize_authorization_failure(
                 claimed,
@@ -880,7 +880,7 @@ class A2AContinuationCoordinator:
         authorization = await self.authorization.authorize(
             binding=binding,
             requesting_subject_id=answer_record.authenticated_answerer_id,
-            room_id=claimed.room_id,
+            conversation_id=claimed.conversation_id,
             room_epoch=claimed.room_epoch,
             resource_refs=[ref.ref_id for ref in claimed.resource_manifest.refs],
         )
@@ -908,7 +908,7 @@ class A2AContinuationCoordinator:
             requesting_subject_digest=claimed.requesting_subject_digest,
             task_id=claimed.a2a_task_id,
             context_id=claimed.a2a_context_id,
-            room_id=claimed.room_id,
+            conversation_id=claimed.conversation_id,
             room_epoch=claimed.room_epoch,
             created_at=answer_record.applied_at,
         )
@@ -1566,7 +1566,7 @@ class A2AContinuationCoordinator:
         if renewed is None:
             return None
         if not await self.room_epochs.verify_active(
-            renewed.room_id, renewed.room_epoch
+            renewed.conversation_id, renewed.room_epoch
         ):
             return None
         return renewed

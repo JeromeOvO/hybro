@@ -55,7 +55,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should include use_supervisor: true in extendInfo when useSupervisor is true', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-1' },
+      room: { conversation_id: 'room-sv-1' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -86,7 +86,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should include use_supervisor: false in extendInfo when useSupervisor is false', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-2' },
+      room: { conversation_id: 'room-sv-2' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -104,7 +104,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should default use_supervisor to true when useSupervisor is not provided', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-3' },
+      room: { conversation_id: 'room-sv-3' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -122,7 +122,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should omit debateMode from extendInfo', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-4' },
+      room: { conversation_id: 'room-sv-4' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -144,7 +144,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should pass use_supervisor through createAndNavigate', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-5' },
+      room: { conversation_id: 'room-sv-5' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -163,7 +163,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should pass use_supervisor through createWithAgentsAndNavigate', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-6' },
+      room: { conversation_id: 'room-sv-6' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))

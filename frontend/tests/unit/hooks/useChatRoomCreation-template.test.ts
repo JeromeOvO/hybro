@@ -51,7 +51,7 @@ describe("useChatRoomCreation.createFromTemplate", () => {
     useRoomUiStore.setState({ pendingRoomData: {} })
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: "new-room-123" },
+      room: { conversation_id: "new-room-123" },
     })
   })
 

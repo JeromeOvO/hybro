@@ -80,7 +80,7 @@ class SessionConflict(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class RoomAgentSessionConfig:
     session_id: str
-    room_id: str
+    conversation_id: str
     profile: OrchestratorProfile
     candidate_scope: CandidateScopeSnapshot
     room_epoch: int
@@ -124,14 +124,14 @@ class DefaultRunFactory:
             raise ValueError("canonical Runs require a nonempty client_request_id")
         fingerprint = sha256(
             (
-                f"{config.room_id}:{config.room_epoch}:"
+                f"{config.conversation_id}:{config.room_epoch}:"
                 f"{config.requesting_subject_id}:{message.model_dump_json()}"
             ).encode()
         ).hexdigest()
         return OrchestratorRunState(
             run_id=run_id,
             session_id=config.session_id,
-            room_id=config.room_id,
+            conversation_id=config.conversation_id,
             client_request_id=client_request_id,
             request=RunRequestSnapshot(
                 request_fingerprint=fingerprint,
@@ -543,7 +543,7 @@ class RoomAgentSession:
                 sequence=self._sequence,
                 timestamp=self.clock.now(),
                 payload=payload or {"status": run.status},
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             )

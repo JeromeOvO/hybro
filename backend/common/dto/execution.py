@@ -46,7 +46,7 @@ AgentScopeInput = Annotated[
 
 
 class ExecutionRequest(FrozenDTO):
-    room_id: str
+    conversation_id: str
     sender_id: str
     sender_name: str | None = None
     message: dict[str, JsonValue] | None = None
@@ -62,7 +62,7 @@ class ExecutionRequest(FrozenDTO):
 
 
 class ExecutionAck(FrozenDTO):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     dispatch_root_message_id: str | None = None
     user_id: str | None = None
@@ -86,7 +86,7 @@ class CancellationAck(FrozenDTO):
 
 class RunInfo(FrozenDTO):
     run_id: str
-    room_id: str
+    conversation_id: str
     state: RunState | str
     trigger_message_id: str | None = None
     agent_id: str | None = None
@@ -100,7 +100,7 @@ class RunInfo(FrozenDTO):
 
 class HITLRequest(FrozenDTO):
     request_id: str
-    room_id: str
+    conversation_id: str
     user_message_id: str
     source: Literal["agent", "supervisor"]
     prompt: str

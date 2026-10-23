@@ -269,7 +269,7 @@ def assemble_supervisor_context_from_memory(
         summary=state.summary,
     )
     result, stable_prefix, dynamic_suffix = _finalize(
-        room_id=state.room_id,
+        conversation_id=state.conversation_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
         budget=budget,
@@ -287,7 +287,7 @@ def assemble_supervisor_context_from_memory(
     )
     final_turns = _included_turns(recent_turns, result.turns_included)
     return assemble_context_dto(
-        room_id=state.room_id,
+        conversation_id=state.conversation_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
         result=result,
@@ -345,7 +345,7 @@ def assemble_agent_execution_context_from_memory(
         task_budget=budget.current_task_tokens,
     )
     result, stable_prefix, dynamic_suffix = _finalize(
-        room_id=state.room_id,
+        conversation_id=state.conversation_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
         budget=budget,
@@ -368,7 +368,7 @@ def assemble_agent_execution_context_from_memory(
     )
     final_turns = _included_turns(selected_turns, result.turns_included)
     return assemble_context_dto(
-        room_id=state.room_id,
+        conversation_id=state.conversation_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
         result=result,
@@ -382,7 +382,7 @@ def assemble_agent_execution_context_from_memory(
 
 def _finalize(
     *,
-    room_id: str,
+    conversation_id: str,
     stable_prefix: str,
     dynamic_suffix: str,
     budget: TokenBudgetConfig,

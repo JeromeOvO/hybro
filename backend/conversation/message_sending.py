@@ -89,7 +89,7 @@ class RoomMessageSender:
     async def get_idempotent_user_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         client_request_id: str,
         idempotency_fingerprint: str,
         idempotency_fingerprint_version: int,
@@ -97,7 +97,7 @@ class RoomMessageSender:
         """Return a stable replay/conflict response without running side effects."""
 
         existing = await self._require_facade().get_user_message_by_idempotency_key(
-            room_id,
+            conversation_id,
             client_request_id,
         )
         if existing is None:
@@ -114,7 +114,7 @@ class RoomMessageSender:
             fingerprint_version=idempotency_fingerprint_version,
         ):
             return RoomCenterUserMessageResponse(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=None,
                 message=None,
                 success=False,
@@ -125,7 +125,7 @@ class RoomMessageSender:
             )
 
         return RoomCenterUserMessageResponse(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             dispatch_root_message_id=None,
             message=None,
@@ -156,7 +156,7 @@ class RoomMessageSender:
             and idempotency_fingerprint_version is not None
         ):
             replay = await self.get_idempotent_user_message(
-                room_id=request.room_id or "",
+                conversation_id=request.conversation_id or "",
                 client_request_id=client_request_id,
                 idempotency_fingerprint=idempotency_fingerprint,
                 idempotency_fingerprint_version=idempotency_fingerprint_version,
@@ -172,7 +172,7 @@ class RoomMessageSender:
         if user_message is not None:
             # The authenticated request boundary, not client-supplied message
             # metadata, owns room/sender identity and the canonical turn key.
-            user_message.room_id = request.room_id
+            user_message.conversation_id = request.conversation_id
             user_message.user_id = request.user_id
             user_message.client_request_id = client_request_id
             if idempotency_fingerprint is not None:
@@ -214,7 +214,7 @@ class RoomMessageSender:
 
         # ── Pre-persist scope validation ──────────────────────────────────
         # Fetch room early: needed for scope resolution and downstream flags.
-        room = await self._store.get_room_by_room_id(request.room_id)
+        room = await self._store.get_room_by_room_id(request.conversation_id)
         if not room:
             return (
                 RoomCenterUserMessageResponse(
@@ -279,11 +279,11 @@ class RoomMessageSender:
                 None,
             )
         logger.info(
-            "room_send_message_persist_started room_id=%s user_id=%s "
+            "room_send_message_persist_started conversation_id=%s user_id=%s "
             "client_request_id=%s target_group=%s "
             "candidate_scope_mode=%s "
             "selected_count=%d mentioned_count=%d message_len=%d",
-            request.room_id,
+            request.conversation_id,
             request.user_id,
             client_request_id,
             target_group,
@@ -380,7 +380,7 @@ class RoomMessageSender:
             await self._delete_uncommitted_quote(user_message)
             return (
                 RoomCenterUserMessageResponse(
-                    room_id=request.room_id,
+                    conversation_id=request.conversation_id,
                     message_id=None,
                     message=None,
                     success=False,
@@ -422,7 +422,7 @@ class RoomMessageSender:
             await self._delete_uncommitted_quote(user_message)
             return (
                 RoomCenterUserMessageResponse(
-                    room_id=request.room_id,
+                    conversation_id=request.conversation_id,
                     message_id=persistence.message_id,
                     dispatch_root_message_id=None,
                     message=None,
@@ -434,9 +434,9 @@ class RoomMessageSender:
             )
 
         logger.info(
-            "room_send_message_persisted room_id=%s message_id=%s "
+            "room_send_message_persisted conversation_id=%s message_id=%s "
             "client_request_id=%s target_group=%s",
-            request.room_id,
+            request.conversation_id,
             user_message.message_id,
             client_request_id,
             target_group,
@@ -444,7 +444,7 @@ class RoomMessageSender:
 
         return (
             RoomCenterUserMessageResponse(
-                room_id=request.room_id,
+                conversation_id=request.conversation_id,
                 message_id=user_message.message_id,
                 dispatch_root_message_id=user_message.message_id,
                 message=None,
@@ -489,7 +489,7 @@ class RoomMessageSender:
         self, request: RoomCenterUserMessageRequest
     ) -> RoomCenterUserMessageResponse | None:
         """Validate required fields for a user message send."""
-        if request.room_id is None:
+        if request.conversation_id is None:
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
@@ -539,7 +539,7 @@ class RoomMessageSender:
             logger.warning(
                 "Failed to remove uncommitted quoted snippet %s for room %s",
                 quote_id,
-                user_message.room_id,
+                user_message.conversation_id,
                 exc_info=True,
             )
 

@@ -29,11 +29,11 @@ async def test_mention_scope_validation(
         ),
     )
     assert room_resp.status_code == 200
-    room_id = room_resp.json().get("room_id")
+    conversation_id = room_resp.json().get("conversation_id")
 
     # 1. Test invalid scope source
     invalid_scope_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "message": "Hello",
             "mode": "supervisor",
@@ -48,11 +48,11 @@ async def test_mention_scope_validation(
 
     # 2. Test valid mention scope
     valid_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "user_input": "Hello",
             "message": {
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "message_id": "",
                 "message_type": "user",
                 "message_content": {"message_text": "Hello"},

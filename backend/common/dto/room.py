@@ -7,7 +7,7 @@ from common.dto.base import FrozenDTO
 
 
 class MessageRecord(FrozenDTO):
-    room_id: str
+    conversation_id: str
     message_id: str
     message_type: str
     content: dict[str, Any]
@@ -32,7 +32,7 @@ class MembershipUpdateRequest(FrozenDTO):
 
 
 class RoomInfo(FrozenDTO):
-    room_id: str
+    conversation_id: str
     room_name: str
     owner_id: str
     owner_name: str | None = None
@@ -67,7 +67,7 @@ class CreateRoomRequest(FrozenDTO):
 
 
 class UserMessageInput(FrozenDTO):
-    room_id: str
+    conversation_id: str
     message_text: str
     sender_id: str
     sender_name: str | None = None
@@ -76,7 +76,7 @@ class UserMessageInput(FrozenDTO):
 
 
 class AgentMessageInput(FrozenDTO):
-    room_id: str
+    conversation_id: str
     agent_id: str
     content: dict[str, Any] = Field(default_factory=dict)
     parent_message_id: str | None = None
@@ -84,7 +84,7 @@ class AgentMessageInput(FrozenDTO):
 
 
 class SavedUserMessage(FrozenDTO):
-    room_id: str
+    conversation_id: str
     message_id: str
     dispatch_root_message_id: str | None = None
     user_id: str

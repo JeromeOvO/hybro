@@ -20,19 +20,19 @@ def _payload(marker: str) -> dict:
 async def test_append_allocates_contiguous_per_room_sequences():
     store = InMemoryRoomEventStore()
     first = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="task_update",
         payload_public=_payload("a"),
         event_id="evt-a",
     )
     second = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="task_update",
         payload_public=_payload("b"),
         event_id="evt-b",
     )
     other_room = await store.append(
-        room_id="room-2",
+        conversation_id="room-2",
         kind="task_update",
         payload_public=_payload("c"),
         event_id="evt-c",
@@ -49,7 +49,7 @@ async def test_append_allocates_contiguous_per_room_sequences():
 async def test_duplicate_idempotency_key_reuses_persisted_sequence():
     store = InMemoryRoomEventStore()
     first = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="processing_status",
         payload_public=_payload("a"),
         event_id="logical-1",
@@ -57,7 +57,7 @@ async def test_duplicate_idempotency_key_reuses_persisted_sequence():
     )
     # A delivery retry re-appends with the same deterministic key.
     retry = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="processing_status",
         payload_public=_payload("a"),
         event_id="logical-1",
@@ -75,7 +75,7 @@ async def test_read_range_orders_by_seq_and_respects_after_and_limit():
     store = InMemoryRoomEventStore()
     for marker in ("a", "b", "c", "d"):
         await store.append(
-            room_id="room-1",
+            conversation_id="room-1",
             kind="run_event",
             payload_public=_payload(marker),
             event_id=f"evt-{marker}",
@@ -92,14 +92,14 @@ async def test_read_range_orders_by_seq_and_respects_after_and_limit():
 async def test_append_records_parent_and_run_links():
     store = InMemoryRoomEventStore()
     appended = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_payload("decision"),
         event_id="public:run-1:orchestrator_decision:1",
         run_id="run-1",
     )
     child = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="task_submitted",
         payload_public=_payload("dispatch"),
         event_id="task-1",
@@ -117,19 +117,19 @@ async def test_append_records_parent_and_run_links():
 async def test_skipped_tombstones_are_hidden_from_replay_but_foldable():
     store = InMemoryRoomEventStore()
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_payload("a"),
         event_id="evt-a",
     )
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_payload("b"),
         event_id="evt-b",
     )
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="skipped",
         payload_public={},
         event_id=None,
@@ -211,26 +211,28 @@ class _FakeSeqCollection:
         self._counters: dict[str, int] = {}
 
     async def find_one(self, query):
-        room_id = query.get("_id")
+        conversation_id = query.get("_id")
         return {
-            "seq": self._counters.get(room_id, 0),
-            "healed_through": getattr(self, "_healed", {}).get(room_id, 0),
+            "seq": self._counters.get(conversation_id, 0),
+            "healed_through": getattr(self, "_healed", {}).get(conversation_id, 0),
         }
 
     async def find_one_and_update(self, filter_, update, **kwargs):
-        room_id = filter_["_id"]
-        current = self._counters.get(room_id, 0) + update.get("$inc", {}).get("seq", 0)
-        self._counters[room_id] = current
+        conversation_id = filter_["_id"]
+        current = self._counters.get(conversation_id, 0) + update.get("$inc", {}).get(
+            "seq", 0
+        )
+        self._counters[conversation_id] = current
         if "$max" in update:
             if not hasattr(self, "_healed"):
                 self._healed = {}
-            self._healed[room_id] = max(
-                self._healed.get(room_id, 0),
+            self._healed[conversation_id] = max(
+                self._healed.get(conversation_id, 0),
                 update["$max"].get("healed_through", 0),
             )
         return {
             "seq": current,
-            "healed_through": getattr(self, "_healed", {}).get(room_id, 0),
+            "healed_through": getattr(self, "_healed", {}).get(conversation_id, 0),
         }
 
 
@@ -320,13 +322,13 @@ async def test_mongo_store_transactional_append_with_real_session_contract():
     store = MongoRoomEventStore(mongo=_FakeMongoDAL())
 
     first = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="processing_status",
         payload_public=_payload("a"),
         event_id="evt-a",
     )
     second = await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_payload("b"),
         event_id="evt-b",
@@ -348,13 +350,13 @@ async def test_mongo_fallback_idempotent_retry_does_not_burn_sequence():
     store = MongoRoomEventStore(mongo=mongo, skip_grace=5)
 
     first = await store.append(
-        room_id="room-retry",
+        conversation_id="room-retry",
         kind="processing_status",
         payload_public={"message_id": "message-1", "status": "processing"},
         idempotency_key="same-event",
     )
     replay = await store.append(
-        room_id="room-retry",
+        conversation_id="room-retry",
         kind="processing_status",
         payload_public={"message_id": "message-1", "status": "processing"},
         idempotency_key="same-event",
@@ -380,7 +382,7 @@ async def test_mongo_fallback_reallocates_after_slow_writer_is_tombstoned():
 
     slow_task = asyncio.create_task(
         store.append(
-            room_id="room-race",
+            conversation_id="room-race",
             kind="agent_response",
             payload_public={"message_id": "slow"},
             idempotency_key="slow-event",
@@ -389,7 +391,7 @@ async def test_mongo_fallback_reallocates_after_slow_writer_is_tombstoned():
     await delayed.slow_insert_entered.wait()
 
     fast = await store.append(
-        room_id="room-race",
+        conversation_id="room-race",
         kind="agent_response",
         payload_public={"message_id": "fast"},
         idempotency_key="fast-event",
@@ -428,7 +430,7 @@ async def test_mongo_fallback_heals_genuine_burned_counter_for_forced_snapshot()
     store = MongoRoomEventStore(mongo=mongo, skip_grace=2)
 
     first = await store.append(
-        room_id="room-gap",
+        conversation_id="room-gap",
         kind="agent_response",
         payload_public={"message_id": "m1", "content": "one"},
         event_id="m1-final",
@@ -441,7 +443,7 @@ async def test_mongo_fallback_heals_genuine_burned_counter_for_forced_snapshot()
     )
     for index in range(3, 6):
         appended = await store.append(
-            room_id="room-gap",
+            conversation_id="room-gap",
             kind="agent_response",
             payload_public={"message_id": f"m{index}", "content": str(index)},
             event_id=f"m{index}-final",

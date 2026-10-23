@@ -85,7 +85,7 @@ def test_dynamic_authorization_accepts_mid_run_artifact_without_frozen_allowlist
         arguments={"task": "summarize", "artifact_refs": ["artifact-1"]},
         run_manifest=manifest,
         binding=bound,
-        source_room_id="room-1",
+        source_conversation_id="room-1",
         source_room_epoch=1,
     )
     assert [ref.ref_id for ref in frozen.refs] == ["artifact-1"]
@@ -115,6 +115,6 @@ def test_dynamic_authorization_denies_incompatible_ref():
             arguments={"task": "review", "attachment_refs": ["attachment-1"]},
             run_manifest=manifest,
             binding=bound,
-            source_room_id="room-1",
+            source_conversation_id="room-1",
             source_room_epoch=1,
         )

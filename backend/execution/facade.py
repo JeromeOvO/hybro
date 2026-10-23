@@ -53,7 +53,7 @@ class RoomCenterPort(Protocol):
     async def get_idempotent_user_message(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         client_request_id: str,
         idempotency_fingerprint: str,
         idempotency_fingerprint_version: int,
@@ -79,19 +79,19 @@ class HITLServicePort(Protocol):
 
     async def handle_batch_response(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         answers: list[dict[str, str]],
         user_id: str,
         client_request_id: str | None = None,
     ) -> dict[str, Any]: ...
 
-    async def get_pending_requests(self, room_id: str) -> list[Any]: ...
+    async def get_pending_requests(self, conversation_id: str) -> list[Any]: ...
 
     async def cancel_request(
         self,
         request_id: str,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Any: ...
 
 
@@ -157,7 +157,7 @@ class ExecutionFacade:
         ):
             return None
         response = await self._room_center.get_idempotent_user_message(
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             client_request_id=idempotency.client_request_id,
             idempotency_fingerprint=idempotency.fingerprint,
             idempotency_fingerprint_version=idempotency.fingerprint_version,
@@ -185,7 +185,7 @@ class ExecutionFacade:
     ) -> ExecutionAck | None:
         try:
             pending_requests = await self._hitl_manager.get_pending_requests(
-                request.room_id
+                request.conversation_id
             )
         except Exception:
             logger.warning("pending HITL lookup failed before execute", exc_info=True)
@@ -193,7 +193,7 @@ class ExecutionFacade:
         if not pending_requests:
             return None
         return ExecutionAck(
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             success=False,
             error="Room is waiting for your input before it can process another message.",
             status_code=409,
@@ -206,7 +206,7 @@ class ExecutionFacade:
     ) -> ExecutionAck | None:
         try:
             active_runs = await self._require_active_run_reader().get_runs_for_room(
-                request.room_id
+                request.conversation_id
             )
         except Exception:
             logger.warning(
@@ -216,7 +216,7 @@ class ExecutionFacade:
         if not active_runs:
             return None
         return ExecutionAck(
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             success=False,
             error="Room is already processing another message.",
             status_code=409,
@@ -232,7 +232,7 @@ class ExecutionFacade:
             return
         lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
         await emit_room_processing_status(
-            room_id=ack.room_id or request.room_id,
+            conversation_id=ack.conversation_id or request.conversation_id,
             status=SSEProcessingStatus.PROCESSING,
             message_id=ack.message_id,
             lifecycle_message_id=lifecycle_message_id,
@@ -268,7 +268,7 @@ class ExecutionFacade:
             return
         lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
         await emit_room_processing_status(
-            room_id=ack.room_id or request.room_id,
+            conversation_id=ack.conversation_id or request.conversation_id,
             status=status,
             message_id=ack.message_id,
             lifecycle_message_id=lifecycle_message_id,
@@ -313,7 +313,7 @@ class ExecutionFacade:
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
         request, idempotency = self._prepare_request_idempotency(request)
         room_request = RoomCenterUserMessageRequest(
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             user_id=request.sender_id,
             user_name=request.sender_name,
             message=request.message,
@@ -410,7 +410,7 @@ class ExecutionFacade:
             return
         with bind_log_context(
             client_request_id=request.client_request_id,
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             user_message_id=ack.message_id,
             message_id=ack.message_id,
         ):
@@ -429,7 +429,7 @@ class ExecutionFacade:
             return
         with bind_log_context(
             client_request_id=request.client_request_id,
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             user_message_id=ack.message_id,
             message_id=ack.message_id,
         ):
@@ -463,7 +463,7 @@ class ExecutionFacade:
 
     async def cancel(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         *,
         requested_by_user_id: str,
@@ -484,8 +484,10 @@ class ExecutionFacade:
             raise RuntimeError("Execution active-run reader is not bound")
         return self._active_run_reader
 
-    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
-        return await self._require_active_run_reader().get_runs_for_room(room_id)
+    async def get_runs_for_room(self, conversation_id: str) -> list[RunInfo]:
+        return await self._require_active_run_reader().get_runs_for_room(
+            conversation_id
+        )
 
     async def get_latest_runs_for_rooms(
         self, room_ids: list[str]
@@ -511,7 +513,7 @@ class ExecutionFacade:
 
     async def resolve_hitl_batch(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         answers: list[dict[str, str]],
         responder_id: str,
@@ -524,7 +526,7 @@ class ExecutionFacade:
                     interaction_id=interaction_id,
                     answers=answers,
                     responder_id=responder_id,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                 )
             except OrchestratorHITLNotOwnedError:
                 # Supervisor ask_user interactions live in the unified HITL
@@ -543,7 +545,7 @@ class ExecutionFacade:
                     client_request_id=client_request_id,
                 )
         result = await self._hitl_manager.handle_batch_response(
-            room_id=room_id,
+            conversation_id=conversation_id,
             interaction_id=interaction_id,
             answers=answers,
             user_id=responder_id,
@@ -557,15 +559,15 @@ class ExecutionFacade:
             result.setdefault("client_request_id", client_request_id)
         return hitl_response_dict_to_common(result)
 
-    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
-        requests = await self._hitl_manager.get_pending_requests(room_id)
+    async def get_pending_hitl(self, conversation_id: str) -> list[HITLRequest]:
+        requests = await self._hitl_manager.get_pending_requests(conversation_id)
         public_requests = [
             model_hitl_request_to_common(request) for request in requests
         ]
 
         if self._orchestrator_router is not None:
             orchestrator_requests = await self._orchestrator_router.get_pending_hitl(
-                room_id
+                conversation_id
             )
             # Prefer orchestrator rows when the Execution HITL manager and the
             # orchestrator both surface the same question.
@@ -581,7 +583,7 @@ class ExecutionFacade:
 
     async def cancel_hitl_interaction(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         expected_version: int,
     ) -> int:
@@ -589,7 +591,7 @@ class ExecutionFacade:
         if router is not None:
             try:
                 return await router.cancel_hitl_interaction(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     interaction_id=interaction_id,
                     expected_version=expected_version,
                 )
@@ -598,7 +600,7 @@ class ExecutionFacade:
                     raise
         return await self._hitl_manager.cancel_interaction_by_user(
             interaction_id,
-            room_id,
+            conversation_id,
             expected_version=expected_version,
         )
 

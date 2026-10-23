@@ -186,8 +186,8 @@ export function OverviewPage() {
           <ListCard loading={history.isLoading} empty="Start a chat to try several agents at once.">
             {recentRooms(rooms, RECENT).map(room => (
               <ActivityRow
-                key={room.room_id}
-                href={routes.room(room.room_id)}
+                key={room.conversation_id}
+                href={routes.room(room.conversation_id)}
                 title={room.title}
                 meta={formatSessionTime(room.last_activity_at)}
                 status={roomStatusView(room.status)}

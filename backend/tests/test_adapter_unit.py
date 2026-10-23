@@ -421,7 +421,7 @@ async def test_pydantic_artifact_files_persist_internal_mime_type():
 
     converted = await materialize_artifacts(
         [artifact],
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
     )
 
@@ -476,7 +476,7 @@ async def test_artifact_materialization_enforces_raw_budget_across_artifacts(
 
     converted = await storage_module.materialize_artifacts(
         artifacts,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
     )
 

@@ -40,7 +40,7 @@ async def test_runtime_delegates_idempotent_replay(monkeypatch):
     monkeypatch.setattr(RoomMessageSender, "get_idempotent_user_message", replay)
 
     result = await ConversationRuntime().get_idempotent_user_message(
-        room_id="r1",
+        conversation_id="r1",
         client_request_id="c1",
         idempotency_fingerprint="fp",
         idempotency_fingerprint_version=1,
@@ -48,7 +48,7 @@ async def test_runtime_delegates_idempotent_replay(monkeypatch):
 
     assert result is sentinel
     replay.assert_awaited_once_with(
-        room_id="r1",
+        conversation_id="r1",
         client_request_id="c1",
         idempotency_fingerprint="fp",
         idempotency_fingerprint_version=1,

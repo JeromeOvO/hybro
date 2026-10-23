@@ -47,7 +47,7 @@ class SessionEvent(ContractModel):
     payload: dict[str, object]
     # Correlation fields carried from the Run so delivery listeners (SSE)
     # can address the right room/user-message without a store round trip.
-    room_id: str | None = None
+    conversation_id: str | None = None
     user_message_id: str | None = None
     client_request_id: str | None = None
 

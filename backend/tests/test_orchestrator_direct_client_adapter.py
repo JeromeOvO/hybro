@@ -139,7 +139,7 @@ def _continuation_command() -> A2AContinuationCommand:
         requesting_subject_digest=sha256(b"user-1").hexdigest(),
         task_id="task-1",
         context_id="context-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         created_at=NOW,
     )
@@ -155,7 +155,7 @@ def _model_reply_command() -> A2AModelReplyCommand:
         requesting_subject_digest=sha256(b"user-1").hexdigest(),
         task_id="task-1",
         context_id="context-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         message_text="continue",
         created_at=NOW,

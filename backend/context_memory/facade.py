@@ -55,15 +55,15 @@ class ContextMemoryFacade:
 
     async def assemble_context(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         token_budget: int,
         agent_id: str | None = None,
     ) -> AssembledContext:
-        doc = await self.memory_repository.get_room_memory(room_id)
+        doc = await self.memory_repository.get_room_memory(conversation_id)
         if not doc:
             doc = projection.new_room_memory_doc(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 memory_id=self.id_factory(),
                 now=self.now(),
             )
@@ -81,12 +81,14 @@ class ContextMemoryFacade:
                     item
                     for item in messages
                     if getattr(item, "message_id", None) == message_id
-                    and getattr(item, "room_id", None) == room_id
+                    and getattr(item, "conversation_id", None) == conversation_id
                 ),
                 None,
             )
             if message is None:
-                raise ValueError(f"Message {message_id} not found in room {room_id}")
+                raise ValueError(
+                    f"Message {message_id} not found in room {conversation_id}"
+                )
             current_task = projection.extract_message_text(
                 getattr(message, "content", None)
             )
@@ -110,10 +112,10 @@ class ContextMemoryFacade:
         return result.model_copy(update={"metadata": metadata})
 
     async def search_memory(
-        self, room_id: str, query: str, limit: int = 10
+        self, conversation_id: str, query: str, limit: int = 10
     ) -> list[MemorySearchResult]:
         results = await search.search_memory(
-            room_id=room_id,
+            conversation_id=conversation_id,
             query=query,
             limit=limit,
             content_repository=self.content_repository,
@@ -121,29 +123,31 @@ class ContextMemoryFacade:
         )
         return results
 
-    async def delete_room_memory(self, room_id: str) -> bool:
-        existed = await self.memory_repository.get_room_memory(room_id)
+    async def delete_room_memory(self, conversation_id: str) -> bool:
+        existed = await self.memory_repository.get_room_memory(conversation_id)
         if existed:
-            memory_deleted = await self.memory_repository.delete_room_memory(room_id)
+            memory_deleted = await self.memory_repository.delete_room_memory(
+                conversation_id
+            )
             if not memory_deleted:
                 return False
         cleanup_ok = True
         try:
-            await self.content_repository.delete_content_by_room_id(room_id)
+            await self.content_repository.delete_content_by_room_id(conversation_id)
         except Exception:
             logger.exception(
                 "Failed to clean up context memory content",
-                extra={"room_id": room_id},
+                extra={"conversation_id": conversation_id},
             )
             cleanup_ok = False
         return cleanup_ok
 
-    async def project_message(self, room_id: str, message_id: str) -> None:
-        await self.project_message_for_event(room_id, message_id)
+    async def project_message(self, conversation_id: str, message_id: str) -> None:
+        await self.project_message_for_event(conversation_id, message_id)
 
     async def project_message_for_event(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         *,
         room_agent_set: dict[str, str] | None = None,
@@ -151,7 +155,7 @@ class ContextMemoryFacade:
         was_successful: bool | None = None,
     ) -> dict:
         return await projection.project_message_from_history(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             repository=self.memory_repository,
             room_history_reader=self.room_history_reader,
@@ -165,11 +169,11 @@ class ContextMemoryFacade:
             background_task_runner=self.background_task_runner,
         )
 
-    async def run_compaction(self, room_id: str) -> CompactionResult:
+    async def run_compaction(self, conversation_id: str) -> CompactionResult:
         return await compaction.run_compaction(
             repository=self.memory_repository,
             content_repository=self.content_repository,
-            room_id=room_id,
+            conversation_id=conversation_id,
             config=self.compaction_config,
             now=self.now,
         )
@@ -220,11 +224,11 @@ class ContextMemoryFacade:
         return self.token_budget.get_budget_summary()
 
     async def add_synthesis_to_history(
-        self, room_id: str, synthesis_text: str, trajectory: Any | None = None
+        self, conversation_id: str, synthesis_text: str, trajectory: Any | None = None
     ) -> str | None:
         return await projection.add_synthesis_to_history(
             repository=self.memory_repository,
-            room_id=room_id,
+            conversation_id=conversation_id,
             synthesis_text=synthesis_text,
             trajectory=trajectory,
             id_factory=self.id_factory,
@@ -236,7 +240,7 @@ class ContextMemoryFacade:
 
     async def update_room_summary(
         self,
-        room_id: str,
+        conversation_id: str,
         synthesis_text: str,
         synthesis_turn_id: str | None = None,
     ) -> bool:
@@ -244,30 +248,30 @@ class ContextMemoryFacade:
             repository=self.memory_repository,
             llm_provider=self.llm_provider,
             llm_config=self.llm_config,
-            room_id=room_id,
+            conversation_id=conversation_id,
             synthesis_text=synthesis_text,
             synthesis_turn_id=synthesis_turn_id,
             id_factory=self.id_factory,
             now=self.now,
         )
 
-    async def should_compact(self, room_id: str) -> bool:
+    async def should_compact(self, conversation_id: str) -> bool:
         return await compaction.should_compact(
-            self.memory_repository, room_id, self.compaction_config
+            self.memory_repository, conversation_id, self.compaction_config
         )
 
-    async def compact_if_needed(self, room_id: str):
+    async def compact_if_needed(self, conversation_id: str):
         return await compaction.compact_if_needed(
             repository=self.memory_repository,
             content_repository=self.content_repository,
-            room_id=room_id,
+            conversation_id=conversation_id,
             config=self.compaction_config,
             now=self.now,
         )
 
     async def compact_room_memory(
         self,
-        room_id: str,
+        conversation_id: str,
         room_memory_doc: object | None = None,
         *,
         room_memory: object | None = None,
@@ -282,17 +286,19 @@ class ContextMemoryFacade:
         return await compaction.compact_room_memory(
             repository=self.memory_repository,
             content_repository=self.content_repository,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_memory_doc=room_memory_doc,
             config=self.compaction_config,
             now=self.now,
         )
 
-    async def expand_turn_content(self, room_id: str, turn_id: str) -> str | None:
+    async def expand_turn_content(
+        self, conversation_id: str, turn_id: str
+    ) -> str | None:
         return await compaction.expand_turn_content(
             self.memory_repository,
             self.content_repository,
-            room_id,
+            conversation_id,
             turn_id,
             now=self.now(),
         )
@@ -304,19 +310,19 @@ class ContextMemoryFacade:
             now=self.now(),
         )
 
-    async def fetch_turn_content(self, turn_id: str, room_id: str) -> str:
+    async def fetch_turn_content(self, turn_id: str, conversation_id: str) -> str:
         return await compaction.fetch_turn_content(
             self.memory_repository,
             self.content_repository,
             turn_id=turn_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
         )
 
-    async def get_compaction_stats(self, room_id: str) -> dict:
+    async def get_compaction_stats(self, conversation_id: str) -> dict:
         return await compaction.get_compaction_stats(
             self.memory_repository,
             self.content_repository,
-            room_id,
+            conversation_id,
         )
 
 

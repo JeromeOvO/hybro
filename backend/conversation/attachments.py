@@ -11,7 +11,9 @@ from models.room import RoomUserMessage, UserAttachment
 
 @runtime_checkable
 class AttachmentMetadataReader(Protocol):
-    async def get_for_room_file(self, room_id: str, file_id: str) -> dict | None: ...
+    async def get_for_room_file(
+        self, conversation_id: str, file_id: str
+    ) -> dict | None: ...
 
 
 @dataclass
@@ -23,7 +25,7 @@ class ResolvedAttachments:
 async def resolve_room_attachments(
     *,
     file_ids: list[str],
-    room_id: str,
+    conversation_id: str,
     attachment_reader: AttachmentMetadataReader | None,
 ) -> ResolvedAttachments | RoomCenterUserMessageResponse:
     if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
@@ -45,7 +47,7 @@ async def resolve_room_attachments(
 
     attachments: list[UserAttachment] = []
     for file_id in file_ids:
-        file_meta = await attachment_reader.get_for_room_file(room_id, file_id)
+        file_meta = await attachment_reader.get_for_room_file(conversation_id, file_id)
         if not file_meta:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -112,7 +114,7 @@ async def resolve_and_apply_room_attachments(
 
     resolved = await resolve_room_attachments(
         file_ids=file_ids,
-        room_id=request.room_id,
+        conversation_id=request.conversation_id,
         attachment_reader=attachment_reader,
     )
     if isinstance(resolved, RoomCenterUserMessageResponse):

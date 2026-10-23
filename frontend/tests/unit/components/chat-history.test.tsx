@@ -46,7 +46,7 @@ import { ChatHistory } from '@/components/portal/chat-history'
 const history: RoomHistoryResponse = {
   items: [
     {
-      room_id: 'recent-old',
+      conversation_id: 'recent-old',
       title: 'Recent old',
       last_activity_at: '2026-08-01T00:00:00Z',
       is_pinned: false,
@@ -54,7 +54,7 @@ const history: RoomHistoryResponse = {
       status: 'idle',
     },
     {
-      room_id: 'pinned-two',
+      conversation_id: 'pinned-two',
       title: 'Pinned two',
       last_activity_at: '2026-08-02T00:00:00Z',
       is_pinned: true,
@@ -62,7 +62,7 @@ const history: RoomHistoryResponse = {
       status: 'queued',
     },
     {
-      room_id: 'active-room',
+      conversation_id: 'active-room',
       title: 'Recent new',
       last_activity_at: '2026-08-03T00:00:00Z',
       is_pinned: false,
@@ -70,7 +70,7 @@ const history: RoomHistoryResponse = {
       status: 'processing',
     },
     {
-      room_id: 'pinned-one',
+      conversation_id: 'pinned-one',
       title: 'Pinned one',
       last_activity_at: '2026-08-01T00:00:00Z',
       is_pinned: true,
@@ -103,14 +103,14 @@ beforeEach(() => {
   currentHistory = structuredClone(history)
   mocks.list.mockImplementation(async () => currentHistory)
   mocks.update.mockImplementation(async (roomId: string, update: { title?: string; is_pinned?: boolean }) => {
-    const current = currentHistory.items.find((item) => item.room_id === roomId)!
+    const current = currentHistory.items.find((item) => item.conversation_id === roomId)!
     const next = {
       ...current,
       ...update,
       pin_order: update.is_pinned === true ? 3 : update.is_pinned === false ? null : current.pin_order,
     }
     currentHistory = {
-      items: currentHistory.items.map((item) => item.room_id === roomId ? next : item),
+      items: currentHistory.items.map((item) => item.conversation_id === roomId ? next : item),
     }
     return next
   })

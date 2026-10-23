@@ -76,7 +76,7 @@ def _human_size(size_bytes: int) -> str:
 
 async def project_message_from_history(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     repository: MemoryRepository,
     room_history_reader: RoomHistoryReader,
@@ -95,7 +95,7 @@ async def project_message_from_history(
     )
     if message is None:
         return {"projected": False, "reason": "missing_message"}
-    if message.room_id != room_id:
+    if message.conversation_id != conversation_id:
         return {"projected": False, "reason": "room_mismatch"}
 
     message_type = getattr(message, "message_type", "user")
@@ -112,11 +112,11 @@ async def project_message_from_history(
             extract_message_attachments(message_content),
         )
         defaults = new_room_memory_doc(
-            room_id=room_id,
+            conversation_id=conversation_id,
             memory_id=id_factory(),
             now=now(),
         )
-        await repository.ensure_room_memory(room_id, defaults)
+        await repository.ensure_room_memory(conversation_id, defaults)
         turn = user_turn(
             message_id=message_id,
             content=content_text,
@@ -124,7 +124,7 @@ async def project_message_from_history(
             timestamp=getattr(message, "created_at", None) or now(),
         )
     else:
-        if not await repository.get_room_memory(room_id):
+        if not await repository.get_room_memory(conversation_id):
             return {"projected": False, "reason": "missing_room_memory"}
         turn = agent_turn_from_projected_message(
             message=message,
@@ -140,7 +140,7 @@ async def project_message_from_history(
         matched,
         already_exists,
     ) = await repository.push_and_trim_conversation_turn_if_absent(
-        room_id,
+        conversation_id,
         turn,
         turn_id=turn["turn_id"],
         max_turns=MAX_HISTORY_TURNS,
@@ -164,7 +164,7 @@ async def project_message_from_history(
                 repository=repository,
                 llm_provider=llm_provider,
                 llm_config=llm_config,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 turn_id=turn["turn_id"],
                 heuristic_notes=turn.get("turn_notes"),
                 content=content_text,
@@ -224,9 +224,9 @@ def agent_turn_from_projected_message(
     )
 
 
-def new_room_memory_doc(*, room_id: str, memory_id: str, now) -> dict:
+def new_room_memory_doc(*, conversation_id: str, memory_id: str, now) -> dict:
     return {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "memory_id": memory_id,
         "memory_content": {"summary": None},
         "conversation_history": [],
@@ -305,7 +305,7 @@ def supervisor_turn(*, turn_id: str, content: str, timestamp) -> dict:
 async def add_synthesis_to_history(
     *,
     repository: MemoryRepository,
-    room_id: str,
+    conversation_id: str,
     synthesis_text: str,
     trajectory: Any | None,
     id_factory: Callable[[], str],
@@ -318,7 +318,7 @@ async def add_synthesis_to_history(
     turn_id = id_factory()
     turn = supervisor_turn(turn_id=turn_id, content=content, timestamp=now())
     modified, matched = await repository.push_and_trim_conversation_turn(
-        room_id,
+        conversation_id,
         turn,
         max_turns=MAX_HISTORY_TURNS,
         summary_stub=f"[Supervisor synthesis ({turn_id[:8]})] {content[:200]}...",
@@ -332,7 +332,7 @@ async def add_synthesis_to_history(
                 repository=repository,
                 llm_provider=llm_provider,
                 llm_config=llm_config,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 turn_id=turn_id,
                 heuristic_notes=turn.get("turn_notes"),
                 content=content,
@@ -346,7 +346,7 @@ async def enrich_turn_notes(
     repository: MemoryRepository,
     llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
-    room_id: str,
+    conversation_id: str,
     turn_id: str,
     heuristic_notes: dict | None,
     content: str,
@@ -356,11 +356,11 @@ async def enrich_turn_notes(
             content, llm_provider=llm_provider, llm_config=llm_config
         )
         if enriched and enriched != heuristic_notes:
-            await repository.update_turn_notes(room_id, turn_id, enriched)
+            await repository.update_turn_notes(conversation_id, turn_id, enriched)
     except Exception:
         logger.exception(
             "Failed to enrich turn notes",
-            extra={"room_id": room_id, "turn_id": turn_id},
+            extra={"conversation_id": conversation_id, "turn_id": turn_id},
         )
 
 

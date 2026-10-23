@@ -76,14 +76,14 @@ class MongoFinalMessageProjector:
             delivered = await self.delivery(run, final, _assistant_text(final))
             if not delivered:
                 return "error"
-        if not await self._project_memory(run.room_id, final.message_id):
+        if not await self._project_memory(run.conversation_id, final.message_id):
             return "error"
         return outcome
 
-    async def _project_memory(self, room_id: str, message_id: str) -> bool:
+    async def _project_memory(self, conversation_id: str, message_id: str) -> bool:
         if self.memory_projection is None:
             return True
-        projected = await self.memory_projection(room_id, message_id)
+        projected = await self.memory_projection(conversation_id, message_id)
         return not isinstance(projected, dict) or bool(
             projected.get("projected") or projected.get("reason") == "duplicate"
         )
@@ -116,7 +116,7 @@ def _final_message_document(
     run: OrchestratorRunState, final: AssistantMessage
 ) -> dict[str, Any]:
     return {
-        "room_id": run.room_id,
+        "room_id": run.conversation_id,
         "message_id": final.message_id,
         "message_type": "agent",
         "agent_id": CoordinatorAgentId.SYSTEM_HYBRO.value,

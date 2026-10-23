@@ -528,7 +528,7 @@ async def test_call_recovery_defers_continuation_owned_delivery_uncertain():
         requesting_subject_digest=record.requesting_subject_digest,
         task_id="task-1",
         context_id="context-1",
-        room_id=record.room_id,
+        conversation_id=record.conversation_id,
         room_epoch=record.room_epoch,
         created_at=NOW,
     )

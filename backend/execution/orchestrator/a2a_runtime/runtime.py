@@ -162,7 +162,7 @@ class A2AAgentToolRuntime:
         ):
             raise A2AAcceptanceConflict("frozen binding does not correlate")
         if not await self.room_epochs.verify_active(
-            prepared.room_id, prepared.room_epoch
+            prepared.conversation_id, prepared.room_epoch
         ):
             raise A2AAcceptanceDenied("Room epoch is not active")
         await self._require_run_accepts_new_call(invocation.run_id)
@@ -171,7 +171,7 @@ class A2AAgentToolRuntime:
         decision = await self.authorization.authorize(
             binding=binding,
             requesting_subject_id=prepared.requesting_subject_id,
-            room_id=prepared.room_id,
+            conversation_id=prepared.conversation_id,
             room_epoch=prepared.room_epoch,
             resource_refs=resource_refs,
         )
@@ -203,7 +203,7 @@ class A2AAgentToolRuntime:
             "transport_kind": binding.transport_kind,
             "direct_mode": _select_direct_mode(binding),
             "requesting_subject_digest": _digest(prepared.requesting_subject_id),
-            "room_id": prepared.room_id,
+            "conversation_id": prepared.conversation_id,
             "room_epoch": prepared.room_epoch,
             "deadline_at": invocation.deadline_at,
             "resource_manifest": prepared.resource_manifest,
@@ -214,7 +214,7 @@ class A2AAgentToolRuntime:
             acceptance_id=acceptance_id,
             idempotency_key=invocation.idempotency_key,
             run_id=invocation.run_id,
-            room_id=prepared.room_id,
+            conversation_id=prepared.conversation_id,
             room_epoch=prepared.room_epoch,
             assistant_message_id=invocation.assistant_message_id,
             source_index=invocation.source_index,
@@ -377,7 +377,7 @@ class A2AAgentToolRuntime:
 
         try:
             if not await self.room_epochs.verify_active(
-                record.room_id, record.room_epoch
+                record.conversation_id, record.room_epoch
             ):
                 return await self._terminal(
                     record, invocation, "expired", "room_epoch_gone"
@@ -395,7 +395,7 @@ class A2AAgentToolRuntime:
             decision = await self.authorization.authorize(
                 binding=prepared.binding,
                 requesting_subject_id=prepared.requesting_subject_id,
-                room_id=record.room_id,
+                conversation_id=record.conversation_id,
                 room_epoch=record.room_epoch,
                 resource_refs=[ref.ref_id for ref in record.resource_manifest.refs],
             )
@@ -411,7 +411,7 @@ class A2AAgentToolRuntime:
                 return _suspension(invocation)
             materialized = await self.resources.materialize(
                 record.resource_manifest,
-                room_id=record.room_id,
+                conversation_id=record.conversation_id,
                 room_epoch=record.room_epoch,
                 allowed_input_modes=prepared.binding.input_modes,
                 deadline_at=record.dispatch_snapshot.deadline_at,
@@ -867,7 +867,7 @@ class A2AAgentToolRuntime:
             requesting_subject_digest=call.requesting_subject_digest,
             task_id=call.a2a_task_id,
             context_id=call.a2a_context_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             message_text=parsed.task,
             interaction_fingerprint=fingerprint or None,
@@ -1305,7 +1305,7 @@ class A2AAgentToolRuntime:
         if renewed is None:
             return None
         if not await self.room_epochs.verify_active(
-            renewed.room_id, renewed.room_epoch
+            renewed.conversation_id, renewed.room_epoch
         ):
             return None
         return renewed
@@ -1403,7 +1403,7 @@ def _dispatch_command(
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
         materialized_resources=materialized_resources,
-        room_id=record.room_id,
+        conversation_id=record.conversation_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,
         push_notification=push_notification,

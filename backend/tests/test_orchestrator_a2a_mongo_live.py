@@ -149,7 +149,7 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
         assert (
             await collection.count_documents(
                 {
-                    "room_id": race_base.room_id,
+                    "room_id": race_base.conversation_id,
                     "client_request_id": race_base.client_request_id,
                 }
             )
@@ -182,7 +182,7 @@ async def test_live_mongo_concurrent_exact_replays_are_classified():
         conflict_store = MongoObservationConflictStore(conflicts)
         conflict = A2AObservationConflictRecord(
             conflict_id="conflict-1",
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             source_identity="source-1",
             accepted_observation_id="observation-1",

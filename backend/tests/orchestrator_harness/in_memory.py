@@ -59,7 +59,7 @@ class InMemoryOrchestratorRunStore:
             (
                 item
                 for item in self.runs.values()
-                if item.room_id == run.room_id
+                if item.conversation_id == run.conversation_id
                 and item.client_request_id == run.client_request_id
                 and run.client_request_id is not None
             ),
@@ -507,13 +507,16 @@ class InMemoryOrchestratorEventStore:
             if event.sequence > after_sequence
         ]
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         deleted = 0
         for run_id, events in list(self.events.items()):
             kept = [
                 event
                 for event in events
-                if not (event.room_id == room_id and event.room_epoch == room_epoch)
+                if not (
+                    event.conversation_id == conversation_id
+                    and event.room_epoch == room_epoch
+                )
             ]
             deleted += len(events) - len(kept)
             if kept:

@@ -214,7 +214,7 @@ def test_assemble_supervisor_context_basic():
         agent_registry=[{"agent_id": "a", "name": "Agent", "description": "helps"}],
     )
 
-    assert result.room_id == "r1"
+    assert result.conversation_id == "r1"
     assert result.metadata["mode"] == "supervisor"
     assert "Finish tests" in result.metadata["context"]
     assert "current task" in result.metadata["context"]

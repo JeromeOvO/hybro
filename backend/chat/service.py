@@ -80,7 +80,7 @@ class ChatService:
     @staticmethod
     def _room_from_info(info: RoomInfo) -> Room:
         return Room(
-            room_id=info.room_id,
+            conversation_id=info.conversation_id,
             room_name=info.room_name,
             room_owner_id=info.owner_id,
             room_owner_name=info.owner_name or "",
@@ -106,7 +106,7 @@ class ChatService:
     ) -> RoomCenterRoomSettingResponse:
         room = self._room_from_info(info)
         return RoomCenterRoomSettingResponse(
-            room_id=room.room_id,
+            conversation_id=room.conversation_id,
             room=room,
             active_runs=active_runs,
             success=True,
@@ -150,7 +150,7 @@ class ChatService:
     @staticmethod
     def _room_error_response(
         *,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
         error: str,
         status_code: int | None = None,
     ) -> RoomCenterRoomSettingResponse:
@@ -163,7 +163,7 @@ class ChatService:
             else:
                 status_code = 400
         return RoomCenterRoomSettingResponse(
-            room_id=room_id,
+            conversation_id=conversation_id,
             room=None,
             success=False,
             error=error,
@@ -186,14 +186,14 @@ class ChatService:
         facade = self._require_facade()
         if room_name is None:
             return RoomCenterRoomSettingResponse(
-                room_id=None,
+                conversation_id=None,
                 success=False,
                 error="Room name is required",
                 status_code=400,
             )
         if owner_name is None:
             return RoomCenterRoomSettingResponse(
-                room_id=None,
+                conversation_id=None,
                 success=False,
                 error="Room owner name is required",
                 status_code=400,
@@ -219,11 +219,11 @@ class ChatService:
             return self._room_error_response(error=str(exc))
         return self._room_setting_response_from_info(info)
 
-    async def get_room(self, room_id: str) -> RoomCenterRoomSettingResponse:
-        info = await self._require_facade().get_room(room_id)
+    async def get_room(self, conversation_id: str) -> RoomCenterRoomSettingResponse:
+        info = await self._require_facade().get_room(conversation_id)
         if info is None:
             return RoomCenterRoomSettingResponse(
-                room_id=None,
+                conversation_id=None,
                 room=None,
                 success=False,
                 error="Room not found",
@@ -245,16 +245,18 @@ class ChatService:
         return self._room_list_response(infos)
 
     async def rename_room(
-        self, room_id: str, room_name: str
+        self, conversation_id: str, room_name: str
     ) -> RoomCenterRoomSettingResponse:
         facade = self._require_facade()
         try:
-            info = await facade.update_room(room_id, {"room_name": room_name})
+            info = await facade.update_room(conversation_id, {"room_name": room_name})
         except ValueError as exc:
-            return self._room_error_response(room_id=room_id, error=str(exc))
+            return self._room_error_response(
+                conversation_id=conversation_id, error=str(exc)
+            )
         if info is None:
             return self._room_error_response(
-                room_id=None,
+                conversation_id=None,
                 error="Room not found",
                 status_code=404,
             )
@@ -262,7 +264,7 @@ class ChatService:
 
     async def update_history_fields(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         is_pinned: bool | None,
         pin_order: float | None,
@@ -277,49 +279,53 @@ class ChatService:
             updates["pin_order"] = pin_order
         if not updates:
             return self._room_error_response(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 error="No history fields supplied",
                 status_code=400,
             )
         try:
-            info = await facade.update_room(room_id, updates)
+            info = await facade.update_room(conversation_id, updates)
         except ValueError as exc:
-            return self._room_error_response(room_id=room_id, error=str(exc))
+            return self._room_error_response(
+                conversation_id=conversation_id, error=str(exc)
+            )
         if info is None:
             return self._room_error_response(
-                room_id=room_id, error="Room not found", status_code=404
+                conversation_id=conversation_id, error="Room not found", status_code=404
             )
         return self._room_setting_response_from_info(info)
 
     async def update_room_default_mode(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         use_supervisor: bool,
     ) -> bool:
         return bool(
             await self._require_facade().update_room_default_mode(
-                room_id,
+                conversation_id,
                 use_supervisor=use_supervisor,
             )
         )
 
     async def delete_room(
-        self, room_id: str, *, requesting_user_id: str
+        self, conversation_id: str, *, requesting_user_id: str
     ) -> RoomCenterRoomSettingResponse:
         return await self._require_room_deletion().delete_room_by_room_id(
-            room_id, requesting_user_id=requesting_user_id
+            conversation_id, requesting_user_id=requesting_user_id
         )
 
     async def read_messages(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         limit: int | None,
         cursor: str | None,
     ) -> RoomCenterRoomMessageResponse:
         return await self._require_message_reader()(
-            RoomCenterRoomMessageRequest(room_id=room_id, limit=limit, cursor=cursor)
+            RoomCenterRoomMessageRequest(
+                conversation_id=conversation_id, limit=limit, cursor=cursor
+            )
         )
 
 

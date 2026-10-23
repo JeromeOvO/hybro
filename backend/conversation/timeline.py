@@ -85,10 +85,10 @@ def timeline_key(
     return timeline_sort_us, rank, message_id
 
 
-def encode_timeline_cursor(room_id: str, position: TimelinePosition) -> str:
+def encode_timeline_cursor(conversation_id: str, position: TimelinePosition) -> str:
     payload = {
         "v": CURSOR_VERSION,
-        "room_id": room_id,
+        "room_id": conversation_id,
         "direction": "before",
         "timeline_sort_us": position.timeline_sort_us,
         "source": position.source,
@@ -100,7 +100,7 @@ def encode_timeline_cursor(room_id: str, position: TimelinePosition) -> str:
     return encoded.rstrip("=")
 
 
-def decode_timeline_cursor(cursor: Any, *, room_id: str) -> TimelinePosition:
+def decode_timeline_cursor(cursor: Any, *, conversation_id: str) -> TimelinePosition:
     if not isinstance(cursor, str) or not cursor or len(cursor) > MAX_CURSOR_LENGTH:
         raise TimelineCursorError("Invalid timeline cursor")
     try:
@@ -138,7 +138,7 @@ def decode_timeline_cursor(cursor: Any, *, room_id: str) -> TimelinePosition:
         isinstance(version, bool)
         or version != CURSOR_VERSION
         or payload.get("direction") != "before"
-        or payload.get("room_id") != room_id
+        or payload.get("room_id") != conversation_id
         or payload.get("source") not in SOURCE_RANK
         or isinstance(sort_us, bool)
         or not isinstance(sort_us, int)

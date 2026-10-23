@@ -25,12 +25,12 @@ class ExecutionEngine(Protocol):
     ) -> None: ...
     async def cancel(
         self,
-        room_id: str,
+        conversation_id: str,
         message_id: str,
         *,
         requested_by_user_id: str,
     ) -> bool | CancellationAck: ...
-    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
+    async def get_runs_for_room(self, conversation_id: str) -> list[RunInfo]: ...
     async def get_latest_runs_for_rooms(
         self, room_ids: list[str]
     ) -> dict[str, RunInfo]: ...
@@ -41,17 +41,17 @@ class ExecutionEngine(Protocol):
 class HITLManager(Protocol):
     async def resolve_hitl_batch(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         answers: list[dict[str, str]],
         responder_id: str,
         client_request_id: str | None = None,
     ) -> HITLResponse: ...
 
-    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]: ...
+    async def get_pending_hitl(self, conversation_id: str) -> list[HITLRequest]: ...
     async def cancel_hitl_interaction(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         expected_version: int,
     ) -> int: ...
@@ -59,9 +59,13 @@ class HITLManager(Protocol):
 
 @runtime_checkable
 class RoomDistributedLock(Protocol):
-    async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
-    async def renew(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
-    async def release(self, room_id: str, owner: str) -> None: ...
+    async def acquire(
+        self, conversation_id: str, owner: str, ttl: int
+    ) -> bool | None: ...
+    async def renew(
+        self, conversation_id: str, owner: str, ttl: int
+    ) -> bool | None: ...
+    async def release(self, conversation_id: str, owner: str) -> None: ...
 
 
 __all__ = [

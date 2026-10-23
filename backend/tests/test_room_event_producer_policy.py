@@ -29,7 +29,7 @@ def test_every_top_level_room_event_producer_and_field_is_classified():
 
 def test_canonical_processing_status_adapter_has_exact_content_free_wire_shape():
     event = canonical_processing_status_adapter(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-1",
         client_request_id="request-1",
         status="processing",
@@ -51,14 +51,14 @@ def test_canonical_processing_status_adapter_rejects_missing_roots_and_status():
 
     with pytest.raises(ValueError, match="nonempty roots"):
         canonical_processing_status_adapter(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="",
             client_request_id="request-1",
             status="processing",
         )
     with pytest.raises(ValueError, match="allowlisted"):
         canonical_processing_status_adapter(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="user-1",
             client_request_id="request-1",
             status="error prose",

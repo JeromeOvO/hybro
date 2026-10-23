@@ -31,7 +31,7 @@ _V2_ROUTE_FIELDS = {
     "orchestration_run_id": "run-1",
     "call_record_id": "record-1",
     "invocation_id": "call-1",
-    "room_id": "room-1",
+    "conversation_id": "room-1",
     "room_epoch": 3,
     "binding_id": "binding-1",
     "agent_id": "agent-1",
@@ -58,7 +58,7 @@ _V2_ROUTE_STORED_KEYS = {
     "orchestration_run_id": "orchestration_run_id",
     "call_record_id": "call_record_id",
     "invocation_id": "invocation_id",
-    "room_id": "room_id",
+    "conversation_id": "room_id",
     "room_epoch": "room_epoch",
     "binding_id": "binding_id",
     "agent_id": "agent_id",
@@ -70,7 +70,7 @@ _V2_ROUTE_STORED_KEYS = {
 _FROZEN_REF_STORED_KEYS = {
     "ref_id": "ref_id",
     "kind": "kind",
-    "room_id": "room_id",
+    "conversation_id": "room_id",
     "room_epoch": "room_epoch",
     "source_message_id": "source_message_id",
     "source_agent_id": "source_agent_id",
@@ -116,7 +116,7 @@ def test_frozen_ref_payload_covers_every_model_field() -> None:
     ref = FrozenCallResourceRef(
         ref_id="ref-1",
         kind="attachment",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_message_id="message-1",
         source_agent_id="agent-1",
@@ -134,7 +134,7 @@ def test_frozen_ref_payload_covers_every_model_field() -> None:
 
 def test_execution_request_fingerprint_is_pinned() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         sender_name="Display Name",
         message={
@@ -204,7 +204,7 @@ def test_frozen_call_resource_manifest_digest_is_pinned() -> None:
         arguments={"task": "review", "attachment_refs": ["attachment-1"]},
         run_manifest=run_manifest,
         binding=binding().model_copy(update={"input_modes": ["application/pdf"]}),
-        source_room_id="room-1",
+        source_conversation_id="room-1",
         source_room_epoch=4,
     )
 

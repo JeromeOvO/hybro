@@ -103,11 +103,11 @@ describe('ComposerShell', () => {
       requestSnapshotRef: { current: requestSnapshot },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         turn_lifecycle_schema: 1,
@@ -143,7 +143,7 @@ describe('ComposerShell', () => {
     } as AnySSEFrame)
 
     await dispatcher({
-      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      type: 'processing_status', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 3, room_event_id: 'compat-1', trace_id: 'trace-1', status: 'awaiting_input',
         message_id: 'user-1', related_message_id: 'user-1',
@@ -152,7 +152,7 @@ describe('ComposerShell', () => {
     } as AnySSEFrame)
     expect(requestSnapshot).not.toHaveBeenCalled()
     await dispatcher({
-      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      type: 'processing_status', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 4, room_event_id: 'compat-2', status: 'awaiting_input',
         message_id: 'user-1', related_message_id: 'user-1',
@@ -191,18 +191,18 @@ describe('ComposerShell', () => {
       requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'client-1',
@@ -216,11 +216,11 @@ describe('ComposerShell', () => {
     lifecycle.markSseDisconnection()
 
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-2', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
@@ -261,18 +261,18 @@ describe('ComposerShell', () => {
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     const runStarted = {
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'client-1',
@@ -285,7 +285,7 @@ describe('ComposerShell', () => {
     await dispatcher(runStarted as AnySSEFrame)
     expect(lifecycle.isSendGuardActive()).toBe(true)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
         type: 'run_settled', correlation_id: 'client-1',
@@ -317,18 +317,18 @@ describe('ComposerShell', () => {
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'canonical-client',
@@ -339,7 +339,7 @@ describe('ComposerShell', () => {
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
         type: 'run_settled', correlation_id: 'canonical-client',
@@ -367,11 +367,11 @@ describe('ComposerShell', () => {
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,

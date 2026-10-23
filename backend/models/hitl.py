@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from common.dto.base import stored_conversation_id
 from common.dto.hitl import (
     HITLApplicationRoute,
     HITLEvidenceOrigin,
@@ -128,14 +129,14 @@ _HITLUserInput = Annotated[
 class HITLRequest(BaseModel):
     """One immutable ordered member of a persisted HITL interaction."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
 
     schema_version: Literal[3]
     request_id: str = Field(default_factory=lambda: uuid4().hex)
     interaction_id: str
     question_index: int = Field(ge=0, le=99)
     question_count: int = Field(ge=1, le=100)
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     user_message_id: str
 
     # Independent classifications. Routing is owned only by the interaction snapshot.
@@ -201,11 +202,11 @@ class HITLRequest(BaseModel):
 class HITLInteraction(BaseModel):
     """Durable aggregate that owns answer collection and application."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
 
     schema_version: Literal[3]
     interaction_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     user_message_id: str
     orchestration_run_id: str | None = None
     application_route: HITLApplicationRoute

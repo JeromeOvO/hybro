@@ -219,15 +219,15 @@ class ActivationEpochStore(InMemoryRoomEpochStore):
         super().__init__()
         self.deactivate_on_verify = False
 
-    async def verify_active(self, room_id, epoch):
+    async def verify_active(self, conversation_id, epoch):
         if self.deactivate_on_verify:
             self.deactivate_on_verify = False
             assert (
                 await self.deactivate(
-                    room_id, epoch, "delete-activation", deactivated_at=NOW
+                    conversation_id, epoch, "delete-activation", deactivated_at=NOW
                 )
             )[0] == "accepted"
-        return await super().verify_active(room_id, epoch)
+        return await super().verify_active(conversation_id, epoch)
 
 
 class ActivationEpochHITL(InMemoryHITLApplicationPort):
@@ -409,7 +409,7 @@ async def test_ingress_rows_are_deletable_before_processing_by_room_epoch(source
         call_record_id=ledger_record().call_record_id,
     )
     _, persisted = await ingress.record(item)
-    assert persisted.room_id == "room-1" and persisted.room_epoch == 1
+    assert persisted.conversation_id == "room-1" and persisted.room_epoch == 1
     assert await inbox.delete_by_epoch("room-1", 1) == 1
     assert await inbox.load(item.observation_id) is None
 
@@ -430,7 +430,7 @@ async def test_conflict_rows_are_deletable_before_processing_by_room_epoch():
         "conflict"
     )
     row = (await conflicts.list_for_source(first.source_identity))[0]
-    assert row.room_id == "room-1" and row.room_epoch == 1
+    assert row.conversation_id == "room-1" and row.room_epoch == 1
     assert await conflicts.delete_by_epoch("room-1", 1) == 1
     assert await inbox.delete_by_epoch("room-1", 1) == 1
 
@@ -924,7 +924,7 @@ async def test_executor_observation_reroutes_to_sink_after_late_suspension():
         payload_digest="digest",
         received_at=NOW,
         binding_scope="endpoint",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         event_kind=obs.event_kind,
         observation=obs,
@@ -998,7 +998,7 @@ async def test_executor_observation_reroutes_to_sink_after_late_hitl_suspension(
         payload_digest="digest",
         received_at=NOW,
         binding_scope="endpoint",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         event_kind=obs.event_kind,
         observation=obs,

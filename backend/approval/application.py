@@ -258,7 +258,7 @@ class HITLApplicationCoordinator:
         # snapshot, never from a mutable member row.
         projection_result.update(
             {
-                "room_id": claimed.get("room_id"),
+                "conversation_id": claimed.get("room_id"),
                 "user_message_id": claimed.get("user_message_id"),
                 "orchestration_run_id": claimed.get("orchestration_run_id"),
                 "interaction_id": claimed.get("interaction_id"),
@@ -303,7 +303,7 @@ class HITLApplicationCoordinator:
         self,
         service,
         *,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         answers: list[dict[str, str]],
         user_id: str,
@@ -318,7 +318,7 @@ class HITLApplicationCoordinator:
         interaction = await self._lifecycle.get_interaction_strict(interaction_id)
         if interaction is None:
             raise HITLNotFoundError("HITL interaction not found")
-        if interaction.get("room_id") != room_id:
+        if interaction.get("room_id") != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
 
         expected_ids = list(interaction.get("request_ids") or [])
@@ -340,7 +340,7 @@ class HITLApplicationCoordinator:
             row = await service.persistence.get_hitl_request(request_id)
             if row is None:
                 raise HITLRoutingFailedError("Interaction request is missing")
-            if row.get("room_id") != room_id:
+            if row.get("room_id") != conversation_id:
                 raise HITLRoomMismatchError("Room mismatch")
             if row.get("interaction_id") != interaction_id:
                 raise HITLRoutingFailedError("Interaction request identity mismatch")
@@ -871,11 +871,11 @@ class HITLApplicationCoordinator:
                     display_message_id=request.display_message_id,
                     user_input=request.user_input,
                     request_id=request.request_id,
-                    room_id=request.room_id,
+                    conversation_id=request.conversation_id,
                 )
             try:
                 await service._emit_hitl_event(
-                    room_id=request.room_id,
+                    conversation_id=request.conversation_id,
                     event_type=HITLEventType.INPUT_RECEIVED,
                     request=request,
                 )
@@ -968,7 +968,7 @@ class HITLApplicationCoordinator:
         return {
             "status": status,
             "request_id": request["request_id"],
-            "room_id": request.get("room_id"),
+            "conversation_id": request.get("room_id"),
             "user_message_id": request.get("user_message_id"),
             "orchestration_run_id": request.get("orchestration_run_id"),
             "source": request.get("public_source"),

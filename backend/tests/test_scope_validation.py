@@ -59,9 +59,11 @@ def _make_agent(
     return agent
 
 
-def _make_room(room_id="room-1", owner_id="user-1", agent_set=None, extend_info=None):
+def _make_room(
+    conversation_id="room-1", owner_id="user-1", agent_set=None, extend_info=None
+):
     room = MagicMock(spec=Room)
-    room.room_id = room_id
+    room.conversation_id = conversation_id
     room.room_owner_id = owner_id
     room.room_agent_set = agent_set or {}
     room.extend_info = extend_info or {"debateMode": False, "use_supervisor": False}
@@ -392,7 +394,7 @@ class TestPrePersistScopeValidation:
         room_center.database_service.get_agent_by_agent_id.return_value = None
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.message = MagicMock()
         request.message.message_content = MagicMock()
@@ -430,7 +432,7 @@ class TestPrePersistScopeValidation:
         room_center.database_service.get_room_by_room_id.return_value = room
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.message = MagicMock()
         request.message.message_content = MagicMock()
@@ -469,7 +471,7 @@ class TestPrePersistScopeValidation:
         room_center.database_service.get_agent_group_by_id.return_value = None
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.message = MagicMock()
         request.message.message_content = MagicMock()
@@ -549,7 +551,7 @@ class TestInlineMentionBehavior:
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.client_request_id = None
         request.extend_info = {
@@ -557,7 +559,7 @@ class TestInlineMentionBehavior:
             "agent_scope": {"source": "room_default"},
         }
         request.message = RoomUserMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-inline-1",
             user_id="user-1",
             message_content=MessageContent(
@@ -632,7 +634,7 @@ class TestAllAgentsPostPersistMessageId:
         room_center.database_service.get_room_by_room_id.return_value = room
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.message = MagicMock()
         request.message.message_id = "msg-real-123"
@@ -717,7 +719,7 @@ class TestClientRequestIdPropagation:
         room_center.database_service.get_room_by_room_id.return_value = room
 
         request = MagicMock()
-        request.room_id = "room-1"
+        request.conversation_id = "room-1"
         request.user_id = "user-1"
         request.client_request_id = "cr-123"
         request.message = MagicMock()

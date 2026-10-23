@@ -336,7 +336,7 @@ def _inbox_record():
         payload_digest="digest",
         received_at=NOW,
         binding_scope=observation.binding_scope,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         event_kind=observation.event_kind,
         observation=observation,
@@ -543,7 +543,7 @@ async def test_mongo_recovery_dedicated_backoff_is_authoritative_and_starvation_
         run = make_run().model_copy(
             update={
                 "run_id": run_id,
-                "room_id": f"room-{run_id}",
+                "conversation_id": f"room-{run_id}",
                 "session_id": f"room-{run_id}",
                 "status": "running",
                 "updated_at": NOW - timedelta(minutes=10),
@@ -1170,11 +1170,11 @@ async def test_inbox_and_conflict_retention_is_directly_room_epoch_queryable():
         ),
     ]:
         inbox = _inbox_record().model_copy(
-            update={"room_id": "room-1", "room_epoch": 1}
+            update={"conversation_id": "room-1", "room_epoch": 1}
         )
         conflict = A2AObservationConflictRecord(
             conflict_id="conflict-retention",
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             source_identity="source-retention",
             accepted_observation_id=inbox.observation_id,
@@ -1196,7 +1196,7 @@ async def test_mongo_duplicate_key_races_classify_exact_winners_as_replay():
     conflict_store = MongoObservationConflictStore(conflict_collection)
     conflict = A2AObservationConflictRecord(
         conflict_id="conflict-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_identity="source-1",
         accepted_observation_id="observation-1",
@@ -1495,7 +1495,7 @@ async def test_mongo_release_projection_intent_backs_off_durably():
 
 
 def _published_interaction_doc(
-    room_id: str,
+    conversation_id: str,
     interaction_id: str,
     *,
     published: bool,
@@ -1518,7 +1518,7 @@ def _published_interaction_doc(
         orchestration_run_id="run-1",
         call_record_id="call-1",
         invocation_id="inv-1",
-        room_id=room_id,
+        conversation_id=conversation_id,
         room_epoch=1,
         binding_id="binding-1",
         agent_id="agent-1",

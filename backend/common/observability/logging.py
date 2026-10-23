@@ -30,7 +30,7 @@ _CONTEXT_FIELDS = frozenset(
         "trace_id",
         "request_id",
         "client_request_id",
-        "room_id",
+        "conversation_id",
         "run_id",
         "user_message_id",
         "message_id",

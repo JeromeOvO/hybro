@@ -115,7 +115,7 @@ class TestRoomCenterHTTPIntegration:
         mock_rc = MagicMock()
         mock_rc.create_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
-                success=True, room_id="room-http-001"
+                success=True, conversation_id="room-http-001"
             )
         )
 
@@ -137,7 +137,7 @@ class TestRoomCenterHTTPIntegration:
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        assert body["room_id"] == "room-http-001"
+        assert body["conversation_id"] == "room-http-001"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -164,7 +164,7 @@ class TestRoomCenterHTTPIntegration:
         )
 
         mock_room = Room(
-            room_id="room-http-invalid-page",
+            conversation_id="room-http-invalid-page",
             room_name="Test",
             room_owner_id=integration_user.user_id,
             room_owner_name="Tester",
@@ -181,7 +181,7 @@ class TestRoomCenterHTTPIntegration:
         )
         try:
             resp = await http_client.get(
-                f"/api/v1/rooms/{mock_room.room_id}/messages",
+                f"/api/v1/rooms/{mock_room.conversation_id}/messages",
                 params=pagination,
             )
         finally:
@@ -200,11 +200,11 @@ class TestRoomCenterHTTPIntegration:
         integration_app,
         integration_user,
     ):
-        """GET /rooms/{room_id}/messages via HTTP."""
+        """GET /rooms/{conversation_id}/messages via HTTP."""
         from models.room import Room
 
         mock_room = Room(
-            room_id="room-http-002",
+            conversation_id="room-http-002",
             room_name="Test",
             room_owner_id=integration_user.user_id,
             room_owner_name="Tester",
@@ -322,7 +322,7 @@ class TestHITLHTTPIntegration:
     async def test_get_pending_through_http(
         self, http_client, integration_app, integration_user
     ):
-        """GET /rooms/{room_id}/hitl/pending should return JSON array."""
+        """GET /rooms/{conversation_id}/hitl/pending should return JSON array."""
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(
             return_value=integration_user.user_id

@@ -84,7 +84,7 @@ async def test_active_direct_agent_produces_candidate():
     )
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["agent-1"],
@@ -113,7 +113,7 @@ async def test_inactive_or_private_or_excluded_flags_are_surface():
     )
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["inactive", "private", "excluded"],
@@ -131,7 +131,7 @@ async def test_hub_agent_uses_relay_transport_and_hub_scope():
     )
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["hub-agent"],
@@ -160,7 +160,7 @@ async def test_skills_produce_only_per_skill_candidates():
     )
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["agent-1"],
@@ -198,7 +198,7 @@ async def test_malformed_and_duplicate_skills_keep_only_usable_unique_tools():
 
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["agent-1"],
@@ -257,7 +257,7 @@ async def test_skill_less_and_legacy_cards_keep_whole_agent_fallback(skills):
 
     candidates = await source.list_candidates(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_agent_ids=["agent-1"],
@@ -292,14 +292,14 @@ async def test_multiskill_card_freezes_only_skill_bindings_and_model_tools():
 
     prepared = await assembler.prepare(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             revision=1,
             source="test",
-            room_id="room-1",
+            conversation_id="room-1",
             agent_ids=["broker-agent"],
             authorization_basis=AuthorizationBasis(kind="room_member"),
         ),

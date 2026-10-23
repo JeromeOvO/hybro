@@ -260,7 +260,7 @@ def commit_terminal_decision(
             event_type="run_completed",
             session_id=run.session_id,
             run_id=run.run_id,
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             room_epoch=run.request.room_epoch,
             sequence=request.event_sequence,
             state_version=next_version,
@@ -294,7 +294,7 @@ def commit_terminal_decision(
             required=True,
             payload={
                 "run_id": run.run_id,
-                "room_id": run.room_id,
+                "room_id": run.conversation_id,
                 "message_id": facts.final_message_id,
             },
             **common,
@@ -403,7 +403,7 @@ def commit_terminal_status(
             event_type=f"run_{request.status}",  # type: ignore[arg-type]
             session_id=run.session_id,
             run_id=run.run_id,
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             room_epoch=run.request.room_epoch,
             sequence=request.event_sequence,
             state_version=next_version,

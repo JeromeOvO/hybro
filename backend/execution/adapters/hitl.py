@@ -47,11 +47,11 @@ class HITLApplicationStore(Protocol):
     ) -> StoredHITLInteraction | None: ...
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]: ...
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]: ...
 
     async def mark_eligible(self, interaction_id: str) -> str: ...
@@ -124,21 +124,23 @@ class InMemoryHITLApplicationStore:
         return self._interactions.get(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         return [
             i
             for i in self._interactions.values()
-            if i.route.room_id == room_id and i.eligible and i.abandoned is None
+            if i.route.conversation_id == conversation_id
+            and i.eligible
+            and i.abandoned is None
         ]
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         return [
             i
             for i in self._interactions.values()
-            if i.route.room_id == room_id
+            if i.route.conversation_id == conversation_id
             and i.eligible
             and i.abandoned is None
             and i.published
@@ -261,7 +263,7 @@ class DurableHITLApplicationPort:
             orchestration_run_id=call.run_id,
             call_record_id=call.call_record_id,
             invocation_id=call.invocation_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             binding_id=call.binding_id,
             agent_id=call.agent_id,
@@ -306,9 +308,9 @@ class DurableHITLApplicationPort:
         return await self._hitl_store.mark_eligible(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
-        docs = await self._hitl_store.get_eligible_interactions(room_id)
+        docs = await self._hitl_store.get_eligible_interactions(conversation_id)
         return [
             (
                 A2AInteractionSpec.model_validate(doc.spec.model_dump(mode="python")),
@@ -319,9 +321,9 @@ class DurableHITLApplicationPort:
         ]
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
-        docs = await self._hitl_store.get_published_interactions(room_id)
+        docs = await self._hitl_store.get_published_interactions(conversation_id)
         actionable: list[StoredHITLInteraction] = []
         for doc in docs:
             answer = await self._hitl_store.load_answer(

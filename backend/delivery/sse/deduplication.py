@@ -121,21 +121,25 @@ class TerminalStatusDeduplicator:
 
     @staticmethod
     def _dedup_key(
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         delivery_id: str | None,
     ) -> str:
-        return f"delivery:{delivery_id}" if delivery_id else f"{room_id}:{message_id}"
+        return (
+            f"delivery:{delivery_id}"
+            if delivery_id
+            else f"{conversation_id}:{message_id}"
+        )
 
     async def reserve(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         status: str,
         delivery_id: str | None = None,
     ) -> DeliveryReservation:
-        dedup_key = self._dedup_key(room_id, message_id, delivery_id)
+        dedup_key = self._dedup_key(conversation_id, message_id, delivery_id)
         # Lock creation and acquisition happen without an intervening await.
         # Keeping the Redis call inside the per-key critical section also makes
         # the L1 fallback a real provisional owner when Redis raises.
@@ -312,7 +316,7 @@ class TerminalStatusDeduplicator:
     async def release(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         status: str,
         delivery_id: str | None = None,
@@ -320,7 +324,7 @@ class TerminalStatusDeduplicator:
     ) -> None:
         """Release only the caller's unconfirmed reservation."""
         normalized_status = status.strip().lower()
-        dedup_key = self._dedup_key(room_id, message_id, delivery_id)
+        dedup_key = self._dedup_key(conversation_id, message_id, delivery_id)
         claim = self.reservations.get(dedup_key)
         claim_id = reservation.claim_id if reservation is not None else None
         if (

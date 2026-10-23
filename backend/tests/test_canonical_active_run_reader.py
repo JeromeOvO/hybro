@@ -117,7 +117,9 @@ async def test_sweep_skips_rooms_with_an_active_canonical_run():
     )
     compaction = AsyncMock()
     compaction.compact_if_needed = AsyncMock(
-        return_value=CompactionResult(room_id="x", compacted_count=0, tokens_saved=0)
+        return_value=CompactionResult(
+            conversation_id="x", compacted_count=0, tokens_saved=0
+        )
     )
     sweep = CompactionSweep(interval_minutes=60)
     sweep.set_sweep_deps(

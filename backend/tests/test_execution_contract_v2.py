@@ -15,7 +15,7 @@ from execution.idempotency import (
 
 def test_request_uses_canonical_mode_and_mention_scope() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="supervisor",
         agent_scope={"source": "mention", "agent_ids": ["b", "a"]},
@@ -35,7 +35,7 @@ def test_request_uses_canonical_mode_and_mention_scope() -> None:
 
 def test_saved_group_scope_contains_only_server_resolved_group_id() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="direct",
         agent_scope={"source": "saved_group", "group_id": "group-1"},
@@ -58,7 +58,7 @@ def test_saved_group_scope_contains_only_server_resolved_group_id() -> None:
 def test_every_agent_scope_variant_forbids_extra_fields(agent_scope) -> None:
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="direct",
             agent_scope=agent_scope,
@@ -180,14 +180,14 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
 def test_mention_scope_must_be_non_empty_and_debate_is_not_a_mode() -> None:
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="supervisor",
             agent_scope={"source": "mention", "agent_ids": []},
         )
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="debate",
             agent_scope={"source": "room_default"},

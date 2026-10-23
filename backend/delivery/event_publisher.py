@@ -171,7 +171,7 @@ class EventPublisherImpl:
             return frame, None, None
         frame_data = dict(frame["data"])
         append = await self.room_events.append(
-            room_id=event.room_id,
+            conversation_id=event.conversation_id,
             kind=frame["type"],
             payload_public=frame_data,
             event_id=self._persisted_event_id(event),
@@ -212,7 +212,7 @@ class EventPublisherImpl:
         )
         try:
             delivered = await self._deliver_frontend(
-                event.room_id,
+                event.conversation_id,
                 frame,
                 event,
                 "sse_fanout",
@@ -241,7 +241,7 @@ class EventPublisherImpl:
 
     async def _deliver_frontend(
         self,
-        room_id: str,
+        conversation_id: str,
         frame: dict[str, Any],
         payload: Any,
         failure_stage: str,
@@ -251,7 +251,7 @@ class EventPublisherImpl:
         local_delivered = False
         try:
             local_count = await self.sse_transport.broadcast_frame_to_room(
-                room_id, frame
+                conversation_id, frame
             )
             local_delivered = isinstance(local_count, int) and local_count > 0
         except Exception:
@@ -261,7 +261,7 @@ class EventPublisherImpl:
         with trace_id_context(trace_id):
             try:
                 remote_delivered = (
-                    await self.event_bus.publish_sse(room_id, frame)
+                    await self.event_bus.publish_sse(conversation_id, frame)
                 ) is True
             except Exception as exc:
                 await self._dead_letter(failure_stage, payload, exc)
@@ -273,7 +273,7 @@ class EventPublisherImpl:
         if not self._is_terminal_typed(event):
             return None, None
         reservation = await self.deduplicator.reserve(
-            room_id=event.room_id,
+            conversation_id=event.conversation_id,
             message_id=self._dedup_message_id(event),
             status=self._dedup_status(event),
             delivery_id=getattr(event, "delivery_id", None),
@@ -288,7 +288,7 @@ class EventPublisherImpl:
         if not self._is_terminal_typed(event):
             return
         await self.deduplicator.release(
-            room_id=event.room_id,
+            conversation_id=event.conversation_id,
             message_id=self._dedup_message_id(event),
             status=self._dedup_status(event),
             delivery_id=getattr(event, "delivery_id", None),
@@ -358,19 +358,19 @@ class EventPublisherImpl:
         if self._is_terminal_typed(event):
             return (
                 getattr(event, "delivery_id", None)
-                or f"terminal:{event.room_id}:{self._dedup_message_id(event)}:"
+                or f"terminal:{event.conversation_id}:{self._dedup_message_id(event)}:"
                 f"{self._dedup_status(event)}"
             )
         if isinstance(event, HITLRequestEvent):
             interaction = event.interaction_id or event.message_id
             return (
-                f"hitl_request:{event.room_id}:{interaction}:"
+                f"hitl_request:{event.conversation_id}:{interaction}:"
                 f"{event.request_id}:{event.question_index}"
             )
         if isinstance(event, HITLResolvedEvent):
             interaction = event.interaction_id or event.message_id
             return (
-                f"hitl_response:{event.room_id}:{interaction}:"
+                f"hitl_response:{event.conversation_id}:{interaction}:"
                 f"{event.request_id}:{event.status}"
             )
         stable = self._persisted_event_id(event)

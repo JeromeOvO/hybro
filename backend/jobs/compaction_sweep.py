@@ -32,11 +32,13 @@ MAX_CONCURRENT_COMPACTIONS = 5
 
 @runtime_checkable
 class CompactionPort(Protocol):
-    async def should_compact(self, room_id: str) -> bool: ...
-    async def compact_if_needed(self, room_id: str) -> CompactionResult | None: ...
+    async def should_compact(self, conversation_id: str) -> bool: ...
+    async def compact_if_needed(
+        self, conversation_id: str
+    ) -> CompactionResult | None: ...
     async def compact_room_memory(
         self,
-        room_id: str,
+        conversation_id: str,
         room_memory_doc: Any | None = None,
     ) -> CompactionResult: ...
 
@@ -145,16 +147,16 @@ class CompactionSweep:
         active_room_ids = {rid for rid in ids if rid}
 
         eligible_room_ids: list[str] = []
-        for room_id in await deps.list_room_ids_with_memory():
-            if not room_id:
+        for conversation_id in await deps.list_room_ids_with_memory():
+            if not conversation_id:
                 continue
             stats["scanned"] += 1
 
-            if room_id in active_room_ids:
+            if conversation_id in active_room_ids:
                 stats["skipped"] += 1
                 continue
 
-            eligible_room_ids.append(room_id)
+            eligible_room_ids.append(conversation_id)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -192,8 +194,8 @@ class CompactionSweep:
                     traced_create_task(_worker(), name=f"compaction-worker-{index}")
                 )
 
-            for room_id in eligible_room_ids:
-                await queue.put(room_id)
+            for conversation_id in eligible_room_ids:
+                await queue.put(conversation_id)
 
             # Signal workers to stop after all eligible rooms are processed.
             for _ in workers:

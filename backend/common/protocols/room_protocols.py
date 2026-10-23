@@ -11,7 +11,7 @@ from common.dto import (
 @runtime_checkable
 class RoomHistoryReader(Protocol):
     async def get_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[RoomMessageInfo]: ...
 
     async def get_messages_by_ids(
@@ -24,9 +24,9 @@ class RoomHistoryReader(Protocol):
 
 @runtime_checkable
 class RoomOwnershipReader(Protocol):
-    async def get_room_owner(self, room_id: str) -> str | None: ...
+    async def get_room_owner(self, conversation_id: str) -> str | None: ...
     async def verify_room_agent_membership(
-        self, room_id: str, agent_id: str
+        self, conversation_id: str, agent_id: str
     ) -> bool: ...
 
 

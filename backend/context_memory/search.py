@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 async def search_memory(  # noqa: C901
     *,
-    room_id: str,
+    conversation_id: str,
     query: str,
     limit: int,
     content_repository: ContentStorageRepository,
@@ -31,19 +31,19 @@ async def search_memory(  # noqa: C901
 
     try:
         docs = await content_repository.scan_text_search(
-            room_id,
+            conversation_id,
             query,
             max(1, config.max_candidates),
         )
     except Exception:
         logger.warning(
             "Keyword memory search failed for room %s",
-            room_id,
+            conversation_id,
             exc_info=True,
         )
         docs = []
 
-    raw_records = _records_from_keyword_docs(room_id, docs)
+    raw_records = _records_from_keyword_docs(conversation_id, docs)
     ranked = rank_keyword_results(
         raw_records,
         temporal_decay_enabled=config.temporal_decay_enabled,
@@ -62,13 +62,13 @@ async def search_memory(  # noqa: C901
         attempted_hydration_ids.update(pending_ids)
         try:
             hydrated_docs = await content_repository.hydrate_turn_content(
-                room_id,
+                conversation_id,
                 pending_ids,
             )
         except Exception:
             logger.warning(
                 "Memory content hydration failed for room %s",
-                room_id,
+                conversation_id,
                 exc_info=True,
             )
             hydrated_docs = []
@@ -98,7 +98,7 @@ async def search_memory(  # noqa: C901
 
     dto_results = [
         search_result_from_record(
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             content=record.content,
             keyword_score=record.keyword_score,
             relevance_score=record.relevance_score,
@@ -148,7 +148,7 @@ def rank_keyword_results(
 
 
 def _records_from_keyword_docs(
-    room_id: str,
+    conversation_id: str,
     docs: list[dict],
 ) -> list[SearchRankingRecord]:
     records: list[SearchRankingRecord] = []
@@ -161,7 +161,7 @@ def _records_from_keyword_docs(
         records.append(
             SearchRankingRecord(
                 turn_id=str(doc.get("turn_id") or ""),
-                room_id=room_id,
+                conversation_id=conversation_id,
                 keyword_score=float(doc.get("score", 0.0) or 0.0),
                 raw_keyword_score=float(doc.get("score", 0.0) or 0.0),
                 timestamp=timestamp,

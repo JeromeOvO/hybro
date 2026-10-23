@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
-from common.dto.base import FrozenDTO
+from common.dto.base import FrozenDTO, stored_conversation_id
 from common.dto.hitl import HITLQuestionAnswer, HITLRouteSnapshot
 
 from ..models import (
@@ -102,7 +102,7 @@ class AgentToolBindingRecord(A2ADurableModel):
     binding_id: str
     binding_digest: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     tool_name: str
     definition: ToolDefinition
@@ -142,7 +142,7 @@ class AgentToolBindingRecord(A2ADurableModel):
 class FrozenCallResourceRef(A2ADurableModel):
     ref_id: str
     kind: Literal["context", "artifact", "attachment"]
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     source_message_id: str
     source_agent_id: str | None = None
@@ -178,7 +178,7 @@ class ImmutableA2ADispatchSnapshot(A2ADurableModel):
     transport_kind: Literal["direct", "relay"]
     direct_mode: Literal["sync", "stream", "poll"] | None = None
     requesting_subject_digest: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     deadline_at: datetime
     resource_manifest: FrozenCallResourceManifest
@@ -199,7 +199,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
     acceptance_id: str
     idempotency_key: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     assistant_message_id: str
     source_index: int = Field(ge=0)
@@ -299,7 +299,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
             if self.terminal_result_digest != digest:
                 raise ValueError("terminal result digest does not correlate")
         if (
-            self.dispatch_snapshot.room_id != self.room_id
+            self.dispatch_snapshot.conversation_id != self.conversation_id
             or self.dispatch_snapshot.room_epoch != self.room_epoch
             or self.dispatch_snapshot.agent_id != self.agent_id
             or self.dispatch_snapshot.requesting_subject_digest
@@ -334,7 +334,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
                 or command.binding_id != self.binding_id
                 or command.binding_digest != self.binding_digest
                 or command.requesting_subject_digest != self.requesting_subject_digest
-                or command.room_id != self.room_id
+                or command.conversation_id != self.conversation_id
                 or command.room_epoch != self.room_epoch
             ):
                 raise ValueError("continuation command does not correlate")
@@ -404,7 +404,7 @@ class A2ADispatchCommand(ContractModel):
     direct_mode: Literal["sync", "stream", "poll"] | None = None
     task: str
     materialized_resources: list[MaterializedResourcePart]
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     deadline_at: datetime
     push_notification: A2APushNotificationConfig | None = None
@@ -541,7 +541,7 @@ class A2AObservationInboxRecord(A2ADurableModel):
     payload_digest: str
     received_at: datetime
     binding_scope: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     call_record_id: str | None = None
     task_id: str | None = None
@@ -566,7 +566,7 @@ class A2AObservationInboxRecord(A2ADurableModel):
 class A2AObservationConflictRecord(A2ADurableModel):
     schema_version: Literal[1] = 1
     conflict_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     source_identity: str
     accepted_observation_id: str
@@ -581,7 +581,7 @@ class PreparedInvocationSnapshot(A2ADurableModel):
     schema_version: Literal[1] = 1
     run_id: str
     invocation_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     requesting_subject_id: str
     binding: AgentToolBindingRecord
@@ -640,7 +640,7 @@ class A2AContinuationCommand(A2ADurableModel):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     created_at: datetime
 
@@ -661,7 +661,7 @@ class A2AModelReplyCommand(A2ADurableModel):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     message_text: str
     interaction_fingerprint: str | None = None
@@ -693,7 +693,7 @@ class A2ACancellationCommand(A2ADurableModel):
 
 class RoomEpoch(A2ADurableModel):
     schema_version: Literal[1] = 1
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     epoch: int = Field(ge=1)
     high_water_mark: int = Field(ge=1)
     active: bool
@@ -712,14 +712,16 @@ _StrictVersion = Annotated[int, Field(strict=True, ge=1)]
 class HITLRouteSnapshotV2(FrozenDTO):
     """Invocation-owned route added for the orchestrator runtime."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    model_config = ConfigDict(
+        frozen=True, extra="forbid", strict=True, serialize_by_alias=True
+    )
 
     schema_version: Literal[2] = 2
     route: Literal["orchestrator_tool"] = "orchestrator_tool"
     orchestration_run_id: _NonBlankId
     call_record_id: _NonBlankId
     invocation_id: _NonBlankId
-    room_id: _NonBlankId
+    conversation_id: _NonBlankId = stored_conversation_id()
     room_epoch: _StrictVersion
     binding_id: _NonBlankId
     agent_id: _NonBlankId
@@ -744,7 +746,7 @@ class HITLRouteSnapshotV2(FrozenDTO):
             "orchestration_run_id": self.orchestration_run_id,
             "call_record_id": self.call_record_id,
             "invocation_id": self.invocation_id,
-            "room_id": self.room_id,
+            "room_id": self.conversation_id,
             "room_epoch": self.room_epoch,
             "binding_id": self.binding_id,
             "agent_id": self.agent_id,

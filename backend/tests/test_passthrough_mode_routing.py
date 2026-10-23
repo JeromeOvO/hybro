@@ -40,7 +40,7 @@ from tests.test_orchestrator_passthrough import passthrough_profile
 
 def _passthrough_request(**overrides) -> ExecutionRequest:
     values = {
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "sender_id": "owner-1",
         "client_request_id": "cr-1",
         "message": {"message_content": {"message_text": "plan a trip"}},
@@ -94,7 +94,7 @@ async def test_schedule_orchestration_carries_passthrough_mode():
     facade._route_orchestration = AsyncMock()
     request = _passthrough_request()
     ack = ExecutionAck(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         should_start_orchestration=True,
@@ -115,7 +115,7 @@ async def test_schedule_orchestration_carries_passthrough_mode():
 
 def _user_message(extend_info: dict) -> RoomUserMessage:
     return RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         user_id="owner-1",
         message_content=MessageContent(message_text="plan a trip"),
@@ -144,7 +144,7 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
 
     envelope, resolved = await router._resolve_envelope_and_profile(
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="owner-1",
             client_request_id="cr-1",
             mode="passthrough",
@@ -168,7 +168,7 @@ def _runtime_for_persist(monkeypatch) -> tuple[ConversationRuntime, list[dict]]:
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="room-1",
+            conversation_id="room-1",
             room_name="Room",
             room_owner_id="owner-1",
             room_owner_name="Owner",
@@ -217,11 +217,11 @@ def _runtime_for_persist(monkeypatch) -> tuple[ConversationRuntime, list[dict]]:
 async def test_persist_message_stores_request_mode(requested, stored, monkeypatch):
     svc, persisted = _runtime_for_persist(monkeypatch)
     request = RoomCenterUserMessageRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         user_id="owner-1",
         client_request_id="cr-1",
         message=RoomUserMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="",
             user_id="owner-1",
             message_content=MessageContent(message_text="plan a trip"),
@@ -260,7 +260,7 @@ async def test_orchestration_envelope_persists_request_mode(requested, stored):
     if requested is not None:
         extend_info["execution_mode"] = requested
     request = RoomCenterUserMessageRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         user_id="owner-1",
         client_request_id="cr-1",
         message=_user_message({}),

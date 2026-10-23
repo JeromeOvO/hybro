@@ -42,7 +42,7 @@ test.describe('Chat Page with local identity', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room: { room_id: 'e2e-created-room' },
+          room: { conversation_id: 'e2e-created-room' },
         }),
       })
     })

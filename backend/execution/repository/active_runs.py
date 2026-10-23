@@ -22,4 +22,4 @@ class CanonicalActiveRunRoomReader:
             "room_id",
             {"status": {"$in": list(NON_TERMINAL_RUN_STATUSES)}},
         )
-        return [str(room_id) for room_id in ids if room_id]
+        return [str(conversation_id) for conversation_id in ids if conversation_id]

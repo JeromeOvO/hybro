@@ -20,7 +20,7 @@ export type TaskState = A2ATaskState | 'policy-required' | 'expired'
 export type SSEFrame<T extends string, D> = {
   type: T
   timestamp: string
-  room_id: string
+  conversation_id: string
   data: D
 }
 
@@ -384,19 +384,19 @@ export function hasSSEFrameEnvelope(value: unknown): value is AnySSEFrame {
   const keys = Object.keys(frame).sort()
   return (
     keys.length === 4 &&
-    keys[0] === 'data' &&
-    keys[1] === 'room_id' &&
+    keys[0] === 'conversation_id' &&
+    keys[1] === 'data' &&
     keys[2] === 'timestamp' &&
     keys[3] === 'type' &&
     typeof frame.type === 'string' &&
     typeof frame.timestamp === 'string' &&
-    typeof frame.room_id === 'string' &&
+    typeof frame.conversation_id === 'string' &&
     Object.prototype.hasOwnProperty.call(frame, 'data')
   )
 }
 
 export interface SSEConnectionStatus {
-  room_id: string
+  conversation_id: string
   active_connections: number
   status: 'active' | 'no_connections'
 }

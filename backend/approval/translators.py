@@ -22,7 +22,7 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
     )
     return CommonHITLRequest(
         request_id=request.request_id,
-        room_id=request.room_id,
+        conversation_id=request.conversation_id,
         user_message_id=request.user_message_id,
         message_id=message_id,
         source=_enum_value(request.public_source),

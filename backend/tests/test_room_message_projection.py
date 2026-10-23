@@ -67,7 +67,7 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
         history=[_text_message(progress_text, message_id="history-message")],
     )
     agent_message = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="agent-1",
         related_message_id="user-1",
@@ -88,7 +88,7 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
     _bind_projector(runtime)
 
     response = await runtime.inquiry_room_messages_by_room_id(
-        RoomCenterRoomMessageRequest(room_id="room-1")
+        RoomCenterRoomMessageRequest(conversation_id="room-1")
     )
 
     assert response.success is True
@@ -128,7 +128,7 @@ async def test_room_message_projection_drops_inline_file_without_uri() -> None:
         ],
     )
     agent_message = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="agent-1",
         related_message_id="user-1",
@@ -146,7 +146,7 @@ async def test_room_message_projection_drops_inline_file_without_uri() -> None:
     _bind_projector(runtime)
 
     response = await runtime.inquiry_room_messages_by_room_id(
-        RoomCenterRoomMessageRequest(room_id="room-1")
+        RoomCenterRoomMessageRequest(conversation_id="room-1")
     )
 
     assert response.success is True

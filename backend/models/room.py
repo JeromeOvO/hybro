@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from common.dto.base import accepts_stored_conversation_id
 from common.types import Task
 from common.utils.time import utcnow
 from models.quote import UserQuoteCreatePayload
@@ -36,7 +37,9 @@ class MembershipOriginStatus(StrEnum):
 
 
 class Room(BaseModel):
-    room_id: str = Field(default_factory=lambda: uuid4().hex)
+    conversation_id: str = accepts_stored_conversation_id(
+        default_factory=lambda: uuid4().hex
+    )
     room_name: str
     room_owner_id: str
     room_owner_name: str
@@ -75,7 +78,7 @@ class Room(BaseModel):
 
 
 class Message(BaseModel):
-    room_id: str
+    conversation_id: str = accepts_stored_conversation_id()
     message_id: str
     message_created_at: datetime = Field(default_factory=utcnow)
 

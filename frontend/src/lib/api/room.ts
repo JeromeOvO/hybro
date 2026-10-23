@@ -26,7 +26,7 @@ function roomUrl(roomId: string, suffix = ''): string {
 export type RoomHistoryStatus = 'idle' | 'queued' | 'processing' | 'awaiting_input'
 
 export interface RoomHistoryItem {
-  room_id: string
+  conversation_id: string
   title: string
   last_activity_at: string
   is_pinned: boolean
@@ -66,7 +66,7 @@ export function reorderPinnedRooms(
 ): Promise<{ success: boolean }> {
   return apiClient<{ success: boolean }>(`${ROOMS_URL}/pinned-order`, {
     method: 'PUT',
-    body: { room_ids: roomIds },
+    body: { conversation_ids: roomIds },
     getToken,
   })
 }
@@ -100,20 +100,20 @@ export async function createNewRoom(
 
 // Inquiry room setting
 export async function inquiryRoomSetting(
-  room_id: string,
+  conversation_id: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal
 ): Promise<RoomCenterRoomSettingResponse> {
-  return apiGet<RoomCenterRoomSettingResponse>(roomUrl(room_id), getToken, signal)
+  return apiGet<RoomCenterRoomSettingResponse>(roomUrl(conversation_id), getToken, signal)
 }
 
 export async function inquiryActiveRuns(
-  room_id: string,
+  conversation_id: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<RoomCenterActiveRunsResponse> {
   return apiGet<RoomCenterActiveRunsResponse>(
-    roomUrl(room_id, '/active-runs'),
+    roomUrl(conversation_id, '/active-runs'),
     getToken,
     signal
   )
@@ -126,7 +126,7 @@ export interface RoomTimelinePagination {
 }
 
 export async function inquiryRoomMessagesByRoomId(
-  room_id: string,
+  conversation_id: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
   pagination?: RoomTimelinePagination
@@ -137,7 +137,7 @@ export async function inquiryRoomMessagesByRoomId(
   const search = query.toString()
 
   return apiGet<RoomCenterRoomMessageResponse>(
-    roomUrl(room_id, `/messages${search ? `?${search}` : ''}`),
+    roomUrl(conversation_id, `/messages${search ? `?${search}` : ''}`),
     getToken,
     signal
   )
@@ -185,7 +185,7 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
   } = params
 
   const message: Record<string, unknown> = {
-    room_id: roomId,
+    conversation_id: roomId,
     message_id: "",
     message_type: "user",
     related_message_id: relatedMessageId || null,

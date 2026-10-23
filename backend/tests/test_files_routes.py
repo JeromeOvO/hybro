@@ -23,13 +23,13 @@ class UploadStub:
 
 
 class OwnershipStub:
-    async def get_room_owner(self, room_id):
-        return "user-1" if room_id == "room-1" else None
+    async def get_room_owner(self, conversation_id):
+        return "user-1" if conversation_id == "room-1" else None
 
 
 class ChatRoomStoreStub:
-    async def get_room_by_room_id(self, room_id):
-        return SimpleNamespace(room_id=room_id, owner_product="chat")
+    async def get_room_by_room_id(self, conversation_id):
+        return SimpleNamespace(conversation_id=conversation_id, owner_product="chat")
 
 
 class FilesStub:
@@ -110,7 +110,7 @@ async def test_upload_route_reads_only_one_byte_past_limit():
 
     response = await upload_file(
         file=upload,
-        room_id="room-1",
+        conversation_id="room-1",
         user=_user(),
         storage=storage,
         room_ownership=OwnershipStub(),
@@ -128,7 +128,7 @@ async def test_upload_route_rejects_oversize_before_storage():
     with pytest.raises(HTTPException) as exc_info:
         await upload_file(
             file=upload,
-            room_id="room-1",
+            conversation_id="room-1",
             user=_user(),
             storage=storage,
             room_ownership=OwnershipStub(),

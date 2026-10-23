@@ -76,19 +76,19 @@ class MongoHITLApplicationStore:
         return _interaction_from_doc(doc)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         cursor = self._collection.find(
-            {"route.room_id": room_id, "eligible": True, "abandoned": None}
+            {"route.room_id": conversation_id, "eligible": True, "abandoned": None}
         )
         return [_interaction_from_doc(doc) for doc in await cursor.to_list(None)]
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         cursor = self._collection.find(
             {
-                "route.room_id": room_id,
+                "route.room_id": conversation_id,
                 "eligible": True,
                 "abandoned": None,
                 "published": True,

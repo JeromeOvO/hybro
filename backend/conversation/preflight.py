@@ -84,7 +84,7 @@ class MessagePreflight:
             else None
         )
         candidate_scope = normalize_candidate_scope(
-            room_id=request.room_id,
+            conversation_id=request.conversation_id,
             source=candidate_scope_mode,
             group_id=sanitized_group_id,
             selected_agent_set=selected_agent_set,
@@ -257,9 +257,9 @@ class MessagePreflight:
             agents = []
 
         logger.info(
-            "room_send_message_preflight_ready room_id=%s message_id=%s "
+            "room_send_message_preflight_ready conversation_id=%s message_id=%s "
             "client_request_id=%s target_group=%s candidate_count=%d auto_assign=%s",
-            request.room_id,
+            request.conversation_id,
             user_message.message_id,
             client_request_id,
             target_group,
@@ -278,9 +278,9 @@ class MessagePreflight:
 
         if not parse_result.success:
             logger.warning(
-                "room_send_message_preflight_failed room_id=%s message_id=%s "
+                "room_send_message_preflight_failed conversation_id=%s message_id=%s "
                 "client_request_id=%s canceled=%s",
-                request.room_id,
+                request.conversation_id,
                 user_message.message_id,
                 client_request_id,
                 parse_result.canceled,
@@ -300,9 +300,9 @@ class MessagePreflight:
             )
 
         logger.info(
-            "room_send_message_preflight_completed room_id=%s message_id=%s "
+            "room_send_message_preflight_completed conversation_id=%s message_id=%s "
             "client_request_id=%s preflight_outcome=ready",
-            request.room_id,
+            request.conversation_id,
             user_message.message_id,
             client_request_id,
         )

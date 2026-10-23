@@ -150,7 +150,7 @@ class A2AObservationIngress(NormalizedObservationRecorder):
             payload_digest=payload_digest,
             received_at=datetime.now(UTC),
             binding_scope=observation.binding_scope,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             call_record_id=call.call_record_id,
             task_id=observation.task_id,
@@ -175,7 +175,7 @@ class A2AObservationIngress(NormalizedObservationRecorder):
                     existing.payload_digest,
                     payload_digest,
                 ),
-                room_id=existing.room_id,
+                conversation_id=existing.conversation_id,
                 room_epoch=existing.room_epoch,
                 source_identity=observation.source_identity,
                 accepted_observation_id=existing.observation_id,
@@ -355,7 +355,7 @@ class A2AObservationProcessor:
         if record is None:
             return await self._release_inbox(claimed, state="pending")
         if (
-            claimed.room_id != record.room_id
+            claimed.conversation_id != record.conversation_id
             or claimed.room_epoch != record.room_epoch
             or claimed.call_record_id != record.call_record_id
         ):
@@ -925,7 +925,9 @@ class A2AObservationProcessor:
         )
         if renewed is None:
             return None
-        if not await self.room_epochs.verify_active(record.room_id, record.room_epoch):
+        if not await self.room_epochs.verify_active(
+            record.conversation_id, record.room_epoch
+        ):
             try:
                 if interaction_id is not None:
                     await self.terminal_interactions.finalize_interaction(
@@ -956,7 +958,7 @@ class A2AObservationProcessor:
                 conflict.persisted_digest,
                 conflict.conflicting_digest,
             ),
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             room_epoch=record.room_epoch,
             source_identity=claimed.source_identity,
             accepted_observation_id=(

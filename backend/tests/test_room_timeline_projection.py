@@ -101,7 +101,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
         file_url="PRIVATE_OLD_URL",
     )
     first = RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="user-1",
         message_content=MessageContent(
             message_text="first",
@@ -109,7 +109,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
         ),
     )
     second = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="agent-1",
         message_content=MessageContent(message_text="second"),
@@ -140,7 +140,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
 
 async def test_agent_projection_carries_durable_public_agent_name():
     agent = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="private-agent-id",
         message_content=MessageContent(message_text="done"),
@@ -167,7 +167,7 @@ async def test_missing_room_attachment_drops_existing_untrusted_url_without_fall
         file_url="PRIVATE_UNTRUSTED_URL",
     )
     user = RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="user-1",
         message_content=MessageContent(attachments=[attachment]),
     )
@@ -187,7 +187,7 @@ def _hitl_message() -> tuple[RoomAgentMessage, Task]:
     )
     return (
         RoomAgentMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="agent-1",
             agent_id="agent-1",
             message_content=MessageContent(message_task=task),

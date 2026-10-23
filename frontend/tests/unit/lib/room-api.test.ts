@@ -31,9 +31,9 @@ describe('Room API', () => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({
             success: true,
-            room_id: 'test-room-id',
+            conversation_id: 'test-room-id',
             room: {
-              room_id: 'test-room-id',
+              conversation_id: 'test-room-id',
               room_name: capturedBody.room_name,
               room_owner_name: capturedBody.room_owner_name,
               room_created_at: new Date().toISOString(),
@@ -60,7 +60,7 @@ describe('Room API', () => {
       server.use(
         http.post(rooms, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, room_id: 'test-room-id' })
+          return HttpResponse.json({ success: true, conversation_id: 'test-room-id' })
         })
       )
 
@@ -87,8 +87,8 @@ describe('Room API', () => {
           capturedRoomId = params.roomId as string
           return HttpResponse.json({
             success: true,
-            room_id: params.roomId,
-            room: { room_id: params.roomId, room_name: 'Test Room' },
+            conversation_id: params.roomId,
+            room: { conversation_id: params.roomId, room_name: 'Test Room' },
           })
         })
       )
@@ -108,7 +108,7 @@ describe('Room API', () => {
           capturedRoomId = params.roomId as string
           return HttpResponse.json({
             success: true,
-            room_id: params.roomId,
+            conversation_id: params.roomId,
             active_runs: [{ state: 'processing', trigger_message_id: 'm1' }],
           })
         })
@@ -127,7 +127,7 @@ describe('Room API', () => {
       server.use(
         http.get(rooms, () => HttpResponse.json({
           items: [{
-            room_id: 'room-1',
+            conversation_id: 'room-1',
             title: 'Room 1',
             last_activity_at: '2026-08-10T00:00:00Z',
             is_pinned: false,
@@ -138,7 +138,7 @@ describe('Room API', () => {
       )
 
       const result = await listRoomHistory()
-      expect(result.items[0]).toMatchObject({ room_id: 'room-1', status: 'processing' })
+      expect(result.items[0]).toMatchObject({ conversation_id: 'room-1', status: 'processing' })
     })
 
     it('updates, reorders, and deletes history items with REST methods', async () => {
@@ -147,7 +147,7 @@ describe('Room API', () => {
         http.patch(`${rooms}/room-1`, async ({ request }) => {
           requests.push({ method: request.method, body: await request.json() })
           return HttpResponse.json({
-            room_id: 'room-1', title: 'Renamed', last_activity_at: '2026-08-10T00:00:00Z',
+            conversation_id: 'room-1', title: 'Renamed', last_activity_at: '2026-08-10T00:00:00Z',
             is_pinned: true, pin_order: 1, status: 'idle',
           })
         }),
@@ -167,7 +167,7 @@ describe('Room API', () => {
 
       expect(requests).toEqual([
         { method: 'PATCH', body: { title: 'Renamed', is_pinned: true } },
-        { method: 'PUT', body: { room_ids: ['room-1', 'room-2'] } },
+        { method: 'PUT', body: { conversation_ids: ['room-1', 'room-2'] } },
         { method: 'DELETE' },
       ])
     })
@@ -191,7 +191,7 @@ describe('Room API', () => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({
             success: true,
-            room_id: 'room-1',
+            conversation_id: 'room-1',
             message_id: 'msg-new',
           })
         })
@@ -201,8 +201,8 @@ describe('Room API', () => {
 
       expect(result.success).toBe(true)
       expect(result.message_id).toBe('msg-new')
-      expect(capturedBody).not.toHaveProperty('room_id')
-      expect((capturedBody as unknown as { message: { room_id: string } }).message.room_id).toBe('room-1')
+      expect(capturedBody).not.toHaveProperty('conversation_id')
+      expect((capturedBody as unknown as { message: { conversation_id: string } }).message.conversation_id).toBe('room-1')
       expect(capturedBody).toMatchObject({
         user_input: 'Hello',
         user_id: 'user-1',
@@ -430,7 +430,7 @@ describe('Room API', () => {
       server.use(
         http.get(`${rooms}/:roomId/messages`, ({ request }) => {
           capturedUrl = new URL(request.url)
-          return HttpResponse.json({ success: true, room_id: 'room-1', message_list: [] })
+          return HttpResponse.json({ success: true, conversation_id: 'room-1', message_list: [] })
         })
       )
 
@@ -450,7 +450,7 @@ describe('Room API', () => {
           capturedUrl = new URL(request.url)
           return HttpResponse.json({
             success: true,
-            room_id: 'room-1',
+            conversation_id: 'room-1',
             message_list: [],
             has_more: true,
             next_cursor: 'next-token'
@@ -476,7 +476,7 @@ describe('Room API', () => {
       server.use(
         http.get(`${rooms}/:roomId/messages`, ({ request }) => {
           capturedUrl = new URL(request.url)
-          return HttpResponse.json({ success: true, room_id: 'room-1', message_list: [] })
+          return HttpResponse.json({ success: true, conversation_id: 'room-1', message_list: [] })
         })
       )
 

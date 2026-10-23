@@ -166,7 +166,7 @@ def test_production_translator_selects_summary_builder_from_run_catalog():
             "tool_name": "weather",
             "arguments": {"task": "Forecast", "city": "private-city"},
         },
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-1",
         client_request_id="client-1",
     )

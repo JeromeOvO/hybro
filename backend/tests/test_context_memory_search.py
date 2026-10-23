@@ -15,24 +15,24 @@ class ContentRepository:
         self.search_exclusions: list[set[str]] = []
         self.hydration_calls: list[list[str]] = []
 
-    async def scan_text_search(self, room_id, query, limit):
-        del room_id, query
+    async def scan_text_search(self, conversation_id, query, limit):
+        del conversation_id, query
         self.search_calls.append((0, limit))
         return list(self.rows[:limit])
 
     async def text_search(
         self,
-        room_id,
+        conversation_id,
         query,
         limit=50,
         skip=0,
     ):
-        del room_id, query
+        del conversation_id, query
         self.search_calls.append((skip, limit))
         return self.rows[skip : skip + limit]
 
-    async def hydrate_turn_content(self, room_id, turn_ids):
-        del room_id
+    async def hydrate_turn_content(self, conversation_id, turn_ids):
+        del conversation_id
         self.hydration_calls.append(list(turn_ids))
         return [
             self.hydrated[turn_id] for turn_id in turn_ids if turn_id in self.hydrated
@@ -65,7 +65,7 @@ async def test_keyword_search_hydrates_content_and_prefers_one_liner():
         {"t1": _content("t1", "full content", one_liner="short summary")},
     )
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="summary",
         limit=5,
         content_repository=repository,
@@ -89,7 +89,7 @@ async def test_keyword_search_caps_candidates_and_stops_hydration_after_limit():
     )
 
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="content",
         limit=1,
         content_repository=repository,
@@ -111,7 +111,7 @@ async def test_missing_hydration_is_dropped_and_later_pages_backfill():
         {"valid": _content("valid", "backfilled content")},
     )
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="content",
         limit=1,
         content_repository=repository,
@@ -141,7 +141,7 @@ async def test_empty_hydrated_content_does_not_prevent_later_backfill():
     )
 
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="content",
         limit=1,
         content_repository=repository,
@@ -156,8 +156,8 @@ async def test_ttl_deletion_during_hydration_does_not_shift_away_backfill():
     now = datetime.now(UTC)
 
     class TtlRaceRepository(ContentRepository):
-        async def hydrate_turn_content(self, room_id, turn_ids):
-            del room_id
+        async def hydrate_turn_content(self, conversation_id, turn_ids):
+            del conversation_id
             if not self.hydration_calls:
                 self.hydration_calls.append(list(turn_ids))
                 self.rows = self.rows[50:]
@@ -177,7 +177,7 @@ async def test_ttl_deletion_during_hydration_does_not_shift_away_backfill():
     )
 
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="content",
         limit=1,
         content_repository=repository,
@@ -203,7 +203,7 @@ async def test_temporal_ranking_scans_all_keyword_candidates_before_top_k():
     )
 
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="content",
         limit=1,
         content_repository=repository,
@@ -222,7 +222,7 @@ async def test_content_prefix_is_used_without_placeholder_text():
         {"t1": _content("t1", "x" * 500)},
     )
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="x",
         limit=1,
         content_repository=repository,
@@ -288,11 +288,11 @@ def test_memory_search_config_defaults_to_300_character_snippets():
 @pytest.mark.asyncio
 async def test_keyword_failure_returns_empty_relevant_memory():
     class BrokenRepository(ContentRepository):
-        async def scan_text_search(self, room_id, query, limit):
+        async def scan_text_search(self, conversation_id, query, limit):
             raise RuntimeError("text index missing")
 
     results = await search_memory(
-        room_id="r1",
+        conversation_id="r1",
         query="anything",
         limit=5,
         content_repository=BrokenRepository([], {}),

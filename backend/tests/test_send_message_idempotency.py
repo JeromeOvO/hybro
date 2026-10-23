@@ -77,13 +77,13 @@ class _RoomFiles:
         self.releases: list[str] = []
 
     @asynccontextmanager
-    async def write_lease(self, _room_id: str, _owner: str):
+    async def write_lease(self, _conversation_id: str, _owner: str):
         yield "lease-1"
 
     async def claim_references(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         owner_id: str,
         message_id: str,
         file_ids: list[str],
@@ -131,7 +131,7 @@ class _DeliveryEventPublisher:
 
 def _execution_request(message_text: str = "hello") -> ExecutionRequest:
     return ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         sender_name="User",
         client_request_id="request-1",
@@ -168,7 +168,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         SimpleNamespace(
             get_room_by_room_id=AsyncMock(
                 return_value=Room(
-                    room_id="room-1",
+                    conversation_id="room-1",
                     room_name="Room",
                     room_owner_id="user-1",
                     room_owner_name="User",
@@ -211,7 +211,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         preflight_count += 1
         message_id = context.user_message.message_id
         return RoomCenterUserMessageResponse(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id=message_id,
             dispatch_root_message_id=message_id,
             success=True,

@@ -2,7 +2,7 @@
 
 Verifies:
 - Single and multi-round questionnaire triggering
-- Batch response submission via /rooms/{room_id}/hitl/respond-batch
+- Batch response submission via /rooms/{conversation_id}/hitl/respond-batch
 - Automatic answer dispatch when human input is requested (no manual waiting)
 - Agent resumption and state transition across follow-up rounds
 - Final synthesis completion after automated questionnaire resolution
@@ -34,18 +34,18 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
         ),
     )
     assert room_resp.status_code == 200, f"Room creation failed: {room_resp.text}"
-    room_id = room_resp.json().get("room_id")
-    assert room_id is not None
+    conversation_id = room_resp.json().get("conversation_id")
+    assert conversation_id is not None
 
     # 2. Send prompt requiring clarification
     client_req_id = str(uuid.uuid4())
     user_prompt = "Generate a travel plan"
     send_resp = await functional_client.post(
-        f"/rooms/{room_id}/messages",
+        f"/rooms/{conversation_id}/messages",
         json={
             "user_input": user_prompt,
             "message": {
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "message_id": "",
                 "message_type": "user",
                 "message_content": {"message_text": user_prompt},
@@ -68,7 +68,7 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
     ]
     completed_itinerary, hitls_answered = await wait_for_completion_with_auto_hitl(
         client=functional_client,
-        room_id=room_id,
+        conversation_id=conversation_id,
         answers=automated_answers,
         client_request_id=client_req_id,
         timeout_seconds=65.0,

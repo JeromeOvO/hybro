@@ -50,9 +50,9 @@ class SSETransportImpl:
         self._draining = False
         self._record_connection_gauge()
 
-    def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]:
+    def connect(self, conversation_id: str, connection_id: str) -> AsyncIterator[dict]:
         async def iterator() -> AsyncIterator[dict]:
-            connection = await self._admit_connection(room_id, connection_id)
+            connection = await self._admit_connection(conversation_id, connection_id)
             try:
                 while connection.is_active:
                     yield await connection.next_frame(
@@ -64,24 +64,26 @@ class SSETransportImpl:
         return iterator()
 
     async def disconnect(self, connection_id: str) -> None:
-        room_id = self.connection_rooms.get(connection_id)
-        if room_id is None:
+        conversation_id = self.connection_rooms.get(connection_id)
+        if conversation_id is None:
             return
-        await self.remove_connection(room_id, connection_id)
+        await self.remove_connection(conversation_id, connection_id)
 
-    async def open_connection(self, room_id: str) -> SSEConnection:
-        return await self._admit_connection(room_id, self._id_factory())
+    async def open_connection(self, conversation_id: str) -> SSEConnection:
+        return await self._admit_connection(conversation_id, self._id_factory())
 
-    async def remove_connection(self, room_id: str, connection_id: str) -> None:
+    async def remove_connection(self, conversation_id: str, connection_id: str) -> None:
         room_became_empty = await self._remove_connections_local(
-            room_id, [connection_id]
+            conversation_id, [connection_id]
         )
         if room_became_empty:
-            self._schedule_room_cleanup(room_id)
+            self._schedule_room_cleanup(conversation_id)
 
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict[str, Any]) -> int:
+    async def broadcast_frame_to_room(
+        self, conversation_id: str, frame: dict[str, Any]
+    ) -> int:
         async with self._lock:
-            snapshot = list(self.room_connections.get(room_id, {}).items())
+            snapshot = list(self.room_connections.get(conversation_id, {}).items())
 
         disconnected: list[str] = []
         delivered = 0
@@ -93,10 +95,10 @@ class SSETransportImpl:
 
         if disconnected:
             room_became_empty = await self._remove_connections_local(
-                room_id, disconnected
+                conversation_id, disconnected
             )
             if room_became_empty:
-                self._schedule_room_cleanup(room_id)
+                self._schedule_room_cleanup(conversation_id)
 
         # Boundary checkpoint (Room Stream Snapshot plan §7): a settled
         # terminal frame forces an immediate snapshot so slow/reconnecting
@@ -104,14 +106,14 @@ class SSETransportImpl:
         # their own gap recovery.
         if self._snapshot_provider is not None and self._is_terminal_frame(frame):
             self._task_runner(
-                self._enqueue_room_snapshot(room_id),
-                name=f"delivery-snapshot-boundary-{room_id}",
+                self._enqueue_room_snapshot(conversation_id),
+                name=f"delivery-snapshot-boundary-{conversation_id}",
             )
         return delivered
 
-    async def _enqueue_room_snapshot(self, room_id: str) -> None:
+    async def _enqueue_room_snapshot(self, conversation_id: str) -> None:
         try:
-            data = await self._snapshot_provider(room_id)
+            data = await self._snapshot_provider(conversation_id)
         except Exception:
             return
         if data is None:
@@ -119,10 +121,10 @@ class SSETransportImpl:
         frame = {
             "type": "snapshot",
             "timestamp": self._now().isoformat(),
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "data": data,
         }
-        await self.broadcast_frame_to_room(room_id, frame)
+        await self.broadcast_frame_to_room(conversation_id, frame)
 
     def _is_terminal_frame(self, frame: dict[str, Any]) -> bool:
         frame_type = frame.get("type")
@@ -149,15 +151,15 @@ class SSETransportImpl:
 
         for connection in connections:
             connection.close()
-        for room_id in rooms:
-            self._schedule_room_cleanup(room_id)
+        for conversation_id in rooms:
+            self._schedule_room_cleanup(conversation_id)
         await self._drain_room_cleanup_tasks()
         self._record_connection_gauge()
 
-    def get_room_status(self, room_id: str) -> dict[str, Any]:
-        room_connections = self.room_connections.get(room_id, {})
+    def get_room_status(self, conversation_id: str) -> dict[str, Any]:
+        room_connections = self.room_connections.get(conversation_id, {})
         return {
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "connection_count": len(room_connections),
             "connections": list(room_connections),
         }
@@ -167,7 +169,7 @@ class SSETransportImpl:
 
     async def _admit_connection(
         self,
-        room_id: str,
+        conversation_id: str,
         connection_id: str,
     ) -> SSEConnection:
         if self._draining:
@@ -178,26 +180,26 @@ class SSETransportImpl:
         first_admission_started = False
         connection_admitted = False
         try:
-            async with self._admission(room_id):
+            async with self._admission(conversation_id):
                 if self._draining:
                     raise ConnectionRefusedError(
                         "Server is draining - rejecting new SSE connections"
                     )
 
                 async with self._lock:
-                    first_for_room = not self.room_connections.get(room_id)
+                    first_for_room = not self.room_connections.get(conversation_id)
 
                 if first_for_room:
                     first_admission_started = True
                     try:
-                        await self.event_bus.subscribe_room(room_id)
+                        await self.event_bus.subscribe_room(conversation_id)
                     except Exception as exc:
                         raise ConnectionRefusedError(
-                            f"Unable to subscribe room {room_id}"
+                            f"Unable to subscribe room {conversation_id}"
                         ) from exc
 
                 connection = SSEConnection(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     connection_id=connection_id,
                     heartbeat_interval=self.config.heartbeat_interval_seconds,
                     queue_maxsize=self.config.sse_connection_queue_maxsize,
@@ -206,24 +208,26 @@ class SSETransportImpl:
                     snapshot_provider=self._snapshot_provider,
                 )
                 async with self._lock:
-                    room_connections = self.room_connections.setdefault(room_id, {})
+                    room_connections = self.room_connections.setdefault(
+                        conversation_id, {}
+                    )
                     room_connections[connection_id] = connection
-                    self.connection_rooms[connection_id] = room_id
+                    self.connection_rooms[connection_id] = conversation_id
                     connection_admitted = True
                     self._record_connection_gauge()
                 return connection
         except BaseException:
             if first_admission_started and not connection_admitted:
-                self._schedule_room_cleanup(room_id)
+                self._schedule_room_cleanup(conversation_id)
             raise
 
     @asynccontextmanager
-    async def _admission(self, room_id: str):
+    async def _admission(self, conversation_id: str):
         async with self._admission_locks_lock:
-            state = self._admission_locks.get(room_id)
+            state = self._admission_locks.get(conversation_id)
             if state is None:
                 state = _AdmissionLockState()
-                self._admission_locks[room_id] = state
+                self._admission_locks[conversation_id] = state
             state.users += 1
         try:
             async with state.lock:
@@ -231,65 +235,65 @@ class SSETransportImpl:
         finally:
             async with self._admission_locks_lock:
                 state.users -= 1
-                cleanup = self._room_cleanup_tasks.get(room_id)
+                cleanup = self._room_cleanup_tasks.get(conversation_id)
                 cleanup_active = cleanup is not None and not cleanup.done()
                 cleanup_is_current = cleanup is asyncio.current_task()
                 if (
                     state.users == 0
-                    and not self.room_connections.get(room_id)
+                    and not self.room_connections.get(conversation_id)
                     and (not cleanup_active or cleanup_is_current)
-                    and self._admission_locks.get(room_id) is state
+                    and self._admission_locks.get(conversation_id) is state
                 ):
-                    self._admission_locks.pop(room_id, None)
+                    self._admission_locks.pop(conversation_id, None)
 
     async def _remove_connections_local(
         self,
-        room_id: str,
+        conversation_id: str,
         connection_ids: list[str],
     ) -> bool:
         room_empty = False
         async with self._lock:
-            room_connections = self.room_connections.get(room_id)
+            room_connections = self.room_connections.get(conversation_id)
             if not room_connections:
                 return False
 
             for connection_id in connection_ids:
                 connection = room_connections.pop(connection_id, None)
-                if self.connection_rooms.get(connection_id) == room_id:
+                if self.connection_rooms.get(connection_id) == conversation_id:
                     self.connection_rooms.pop(connection_id, None)
                 if connection is not None:
                     connection.close()
 
             if not room_connections:
-                self.room_connections.pop(room_id, None)
+                self.room_connections.pop(conversation_id, None)
                 room_empty = True
 
             self._record_connection_gauge()
 
         return room_empty
 
-    def _schedule_room_cleanup(self, room_id: str) -> None:
-        existing = self._room_cleanup_tasks.get(room_id)
+    def _schedule_room_cleanup(self, conversation_id: str) -> None:
+        existing = self._room_cleanup_tasks.get(conversation_id)
         if existing is not None and not existing.done():
             return
         task = self._task_runner(
-            self._unsubscribe_if_room_still_empty(room_id),
-            name=f"delivery-sse-room-cleanup-{room_id}",
+            self._unsubscribe_if_room_still_empty(conversation_id),
+            name=f"delivery-sse-room-cleanup-{conversation_id}",
         )
-        self._room_cleanup_tasks[room_id] = task
+        self._room_cleanup_tasks[conversation_id] = task
         task.add_done_callback(
-            lambda completed, cleanup_room_id=room_id: self._finish_room_cleanup(
-                cleanup_room_id, completed
+            lambda completed, cleanup_conversation_id=conversation_id: (
+                self._finish_room_cleanup(cleanup_conversation_id, completed)
             )
         )
 
     def _finish_room_cleanup(
         self,
-        room_id: str,
+        conversation_id: str,
         task: asyncio.Task,
     ) -> None:
-        if self._room_cleanup_tasks.get(room_id) is task:
-            self._room_cleanup_tasks.pop(room_id, None)
+        if self._room_cleanup_tasks.get(conversation_id) is task:
+            self._room_cleanup_tasks.pop(conversation_id, None)
         try:
             task.result()
         except asyncio.CancelledError:
@@ -301,16 +305,16 @@ class SSETransportImpl:
         while self._room_cleanup_tasks:
             tasks = tuple(self._room_cleanup_tasks.values())
             await asyncio.gather(*tasks, return_exceptions=True)
-            for room_id, task in tuple(self._room_cleanup_tasks.items()):
+            for conversation_id, task in tuple(self._room_cleanup_tasks.items()):
                 if task.done():
-                    self._finish_room_cleanup(room_id, task)
+                    self._finish_room_cleanup(conversation_id, task)
 
-    async def _unsubscribe_if_room_still_empty(self, room_id: str) -> None:
-        async with self._admission(room_id):
+    async def _unsubscribe_if_room_still_empty(self, conversation_id: str) -> None:
+        async with self._admission(conversation_id):
             async with self._lock:
-                if self.room_connections.get(room_id):
+                if self.room_connections.get(conversation_id):
                     return
-            await self.event_bus.unsubscribe_room(room_id)
+            await self.event_bus.unsubscribe_room(conversation_id)
 
     def _active_connection_count(self) -> int:
         return sum(len(connections) for connections in self.room_connections.values())

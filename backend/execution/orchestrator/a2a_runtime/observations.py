@@ -98,7 +98,7 @@ class RunAddressedToolObservationSink:
                         sequence=sequence,
                         timestamp=datetime.now(UTC),
                         payload=payload or {"status": current_run.status},
-                        room_id=current_run.room_id,
+                        conversation_id=current_run.conversation_id,
                         user_message_id=current_run.request.user_message_id,
                         client_request_id=current_run.client_request_id,
                     )

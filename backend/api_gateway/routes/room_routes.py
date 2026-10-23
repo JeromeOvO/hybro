@@ -41,7 +41,7 @@ class RoomHistoryUpdate(BaseModel):
 
 
 class PinnedRoomOrderUpdate(BaseModel):
-    room_ids: list[str] = Field(max_length=100)
+    conversation_ids: list[str] = Field(max_length=100)
 
 
 class CreateRoomBody(BaseModel):
@@ -93,14 +93,16 @@ def _raise_room_error(response) -> None:
 
 
 async def _active_run_refs_for_room(
-    room_id: str,
+    conversation_id: str,
     engine: ExecutionEngine,
 ) -> list[ActiveRunRef]:
     try:
-        runs = await engine.get_runs_for_room(room_id)
+        runs = await engine.get_runs_for_room(conversation_id)
     except Exception:
         logger.warning(
-            "active-run lookup failed for room_id=%s", room_id, exc_info=True
+            "active-run lookup failed for conversation_id=%s",
+            conversation_id,
+            exc_info=True,
         )
         return []
     return [_run_info_to_active_run_ref(run) for run in runs]
@@ -149,7 +151,7 @@ def _extract_attachments(request_data: dict, message: dict | None):
 
 
 async def verify_room_ownership(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser,
     store: RoomRouteReader,
 ) -> None:
@@ -157,18 +159,18 @@ async def verify_room_ownership(
     Verify that the current user owns the specified room.
     Raises HTTPException if the room doesn't exist or user is not the owner.
     """
-    await _get_verified_room(room_id, user, store)
+    await _get_verified_room(conversation_id, user, store)
 
 
 async def _get_verified_room(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser,
     store: RoomRouteReader,
 ):
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id is required")
 
-    room = await store.get_room_by_room_id(room_id)
+    room = await store.get_room_by_room_id(conversation_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -183,7 +185,7 @@ async def _get_verified_room(
 
 async def _persist_room_mode_if_changed(
     *,
-    room_id: str,
+    conversation_id: str,
     room,
     mode: str,
     rooms: ChatRooms,
@@ -196,7 +198,7 @@ async def _persist_room_mode_if_changed(
         return
 
     updated = await rooms.update_room_default_mode(
-        room_id,
+        conversation_id,
         use_supervisor=requested_uses_supervisor,
     )
     if not updated:
@@ -224,9 +226,9 @@ async def create_new_room(
     )
 
 
-@router.get("/rooms/{room_id}")
+@router.get("/rooms/{conversation_id}")
 async def inquiry_room_setting(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
@@ -234,27 +236,27 @@ async def inquiry_room_setting(
 ):
     """Get room settings - PROTECTED (requires room ownership)"""
     # Verify user owns the room
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
 
-    response = await rooms.get_room(room_id)
-    if response.success and room_id:
-        response.active_runs = await _active_run_refs_for_room(room_id, engine)
+    response = await rooms.get_room(conversation_id)
+    if response.success and conversation_id:
+        response.active_runs = await _active_run_refs_for_room(conversation_id, engine)
     return response
 
 
-@router.get("/rooms/{room_id}/active-runs")
+@router.get("/rooms/{conversation_id}/active-runs")
 async def inquiry_active_runs(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
 ):
     """List non-terminal orchestration runs for a room — same auth as room settings."""
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
 
     return RoomCenterActiveRunsResponse(
-        room_id=room_id,
-        active_runs=await _active_run_refs_for_room(room_id, engine),
+        conversation_id=conversation_id,
+        active_runs=await _active_run_refs_for_room(conversation_id, engine),
         success=True,
         error=None,
         status_code=200,
@@ -271,21 +273,21 @@ async def get_room_history(
     _raise_room_error(response)
     history = list(response.room_list or [])
     latest_runs = await engine.get_latest_runs_for_rooms(
-        [room.room_id for room in history if room.room_id]
+        [room.conversation_id for room in history if room.conversation_id]
     )
     allowed_statuses = {"queued", "processing", "awaiting_input"}
     items = []
     for room in history:
-        if not room.room_id:
+        if not room.conversation_id:
             continue
-        run = latest_runs.get(room.room_id)
+        run = latest_runs.get(room.conversation_id)
         state = str(
             getattr(getattr(run, "state", None), "value", getattr(run, "state", ""))
         )
         status = state if state in allowed_statuses else "idle"
         items.append(
             RoomHistoryItem(
-                room_id=room.room_id,
+                conversation_id=room.conversation_id,
                 title=room.room_name or "Unnamed Room",
                 last_activity_at=room.last_activity_at or room.room_created_at,
                 is_pinned=room.is_pinned,
@@ -296,15 +298,15 @@ async def get_room_history(
     return RoomHistoryResponse(items=items)
 
 
-@router.patch("/rooms/{room_id}", response_model=RoomHistoryItem)
+@router.patch("/rooms/{conversation_id}", response_model=RoomHistoryItem)
 async def update_room_history_item(
-    room_id: str,
+    conversation_id: str,
     payload: RoomHistoryUpdate,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
     if payload.title is None and payload.is_pinned is None:
         raise HTTPException(status_code=400, detail="No history fields supplied")
@@ -312,7 +314,7 @@ async def update_room_history_item(
         title = payload.title.strip()
         if not title:
             raise HTTPException(status_code=400, detail="Room title cannot be empty")
-        response = await rooms.rename_room(room_id, title)
+        response = await rooms.rename_room(conversation_id, title)
         _raise_room_error(response)
         room = response.room or room
     if payload.is_pinned is not None:
@@ -328,14 +330,14 @@ async def update_room_history_item(
                 )
             pin_order = float(1 + max([r.pin_order or 0 for r in pinned_rooms] or [0]))
         response = await rooms.update_history_fields(
-            room_id,
+            conversation_id,
             is_pinned=payload.is_pinned,
             pin_order=pin_order,
         )
         _raise_room_error(response)
         room = response.room or room
     return RoomHistoryItem(
-        room_id=room_id,
+        conversation_id=conversation_id,
         title=room.room_name or "Unnamed Room",
         last_activity_at=room.last_activity_at or room.room_created_at,
         is_pinned=room.is_pinned,
@@ -351,7 +353,7 @@ async def reorder_pinned_rooms(
     store: RoomRouteReader = Depends(get_room_store),
     rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    if len(payload.room_ids) != len(set(payload.room_ids)):
+    if len(payload.conversation_ids) != len(set(payload.conversation_ids)):
         raise HTTPException(
             status_code=400, detail="Duplicate room ids are not allowed"
         )
@@ -359,26 +361,26 @@ async def reorder_pinned_rooms(
     listed = await rooms.list_rooms_for_owner(user.user_id)
     _raise_room_error(listed)
     pinned_room_ids = {
-        room.room_id
+        room.conversation_id
         for room in listed.room_list or []
-        if room.is_pinned and room.room_id
+        if room.is_pinned and room.conversation_id
     }
-    if set(payload.room_ids) != pinned_room_ids:
+    if set(payload.conversation_ids) != pinned_room_ids:
         raise HTTPException(
             status_code=409,
             detail="Pinned order must include every pinned room exactly once",
         )
 
-    for room_id in payload.room_ids:
-        room = await _get_verified_room(room_id, user, store)
+    for conversation_id in payload.conversation_ids:
+        room = await _get_verified_room(conversation_id, user, store)
         require_chat_room(room)
         if not room.is_pinned:
             raise HTTPException(
                 status_code=409, detail="Only pinned rooms can be reordered"
             )
-    for index, room_id in enumerate(payload.room_ids):
+    for index, conversation_id in enumerate(payload.conversation_ids):
         response = await rooms.update_history_fields(
-            room_id,
+            conversation_id,
             is_pinned=True,
             pin_order=float(index + 1),
         )
@@ -386,26 +388,26 @@ async def reorder_pinned_rooms(
     return {"success": True}
 
 
-@router.delete("/rooms/{room_id}")
+@router.delete("/rooms/{conversation_id}")
 async def delete_room_history_item(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
-    response = await rooms.delete_room(room_id, requesting_user_id=user.user_id)
+    response = await rooms.delete_room(conversation_id, requesting_user_id=user.user_id)
     _raise_room_error(response)
     return {"success": True}
 
 
 @router.get(
-    "/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail",
     response_model=None,
 )
 async def get_canonical_agent_call_detail(
-    room_id: str,
+    conversation_id: str,
     run_id: str,
     public_call_id: str,
     request: Request,
@@ -414,14 +416,14 @@ async def get_canonical_agent_call_detail(
 ):
     """Return authenticated private Tool output by opaque canonical identity."""
 
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
     if not public_call_id.startswith("inv_"):
         raise HTTPException(status_code=404, detail="Agent call output not found")
     reader = getattr(request.app.state, "canonical_agent_call_detail_reader", None)
     if reader is None:
         raise HTTPException(status_code=503, detail="Agent call detail is unavailable")
     detail = await reader.get(
-        room_id=room_id,
+        conversation_id=conversation_id,
         run_id=run_id,
         public_call_id=public_call_id,
     )
@@ -430,9 +432,9 @@ async def get_canonical_agent_call_detail(
     return detail
 
 
-@router.get("/rooms/{room_id}/messages")
+@router.get("/rooms/{conversation_id}/messages")
 async def inquiry_room_messages(
-    room_id: str,
+    conversation_id: str,
     limit: int | None = None,
     cursor: str | None = None,
     user: ClerkUser = Depends(get_current_user),
@@ -444,14 +446,14 @@ async def inquiry_room_messages(
     # Authorization precedes cursor and limit-range validation so an invalid
     # cursor cannot reveal whether another user's room has timeline data. A
     # non-integer limit is rejected by FastAPI first; that reveals nothing.
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
 
-    return await rooms.read_messages(room_id, limit=limit, cursor=cursor)
+    return await rooms.read_messages(conversation_id, limit=limit, cursor=cursor)
 
 
-@router.post("/rooms/{room_id}/messages")
+@router.post("/rooms/{conversation_id}/messages")
 async def send_message(
-    room_id: str,
+    conversation_id: str,
     request: Request,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
@@ -591,7 +593,7 @@ async def send_message(
             status_code=400,
         )
 
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
     mentioned_agent_ids = normalized_scope.get("agent_ids")
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
@@ -601,7 +603,7 @@ async def send_message(
     logger.info(
         "gateway_send_message_received",
         extra={
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "client_request_id": client_request_id,
             "mode": mode,
             "scope_source": source,
@@ -617,7 +619,7 @@ async def send_message(
         related_message_id = message.get("related_message_id") or ""
 
     execution_request = ExecutionRequest(
-        room_id=room_id,
+        conversation_id=conversation_id,
         sender_id=user.user_id,
         sender_name=getattr(user, "username", None) or getattr(user, "email", None),
         message=jsonable_encoder(message),
@@ -629,7 +631,7 @@ async def send_message(
         agent_scope=normalized_scope,
     )
     await _persist_room_mode_if_changed(
-        room_id=room_id,
+        conversation_id=conversation_id,
         room=room,
         mode=mode,
         rooms=rooms,
@@ -638,7 +640,7 @@ async def send_message(
     logger.info(
         "gateway_send_message_completed",
         extra={
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "message_id": ack.message_id,
             "user_message_id": ack.message_id,
             "client_request_id": client_request_id,
@@ -654,7 +656,7 @@ async def send_message(
         logger.info(
             "gateway_send_message_background_scheduled",
             extra={
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "message_id": ack.message_id,
                 "user_message_id": ack.message_id,
                 "client_request_id": client_request_id,

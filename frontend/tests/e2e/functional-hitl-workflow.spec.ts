@@ -173,7 +173,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     })
     expect(createResp.ok()).toBeTruthy()
     const roomData = await createResp.json()
-    const roomId = roomData.room_id
+    const roomId = roomData.conversation_id
     expect(roomId).toBeTruthy()
 
     const promptText = `Generate a travel plan e2e-${Date.now()}`
@@ -183,7 +183,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
       data: {
         user_input: promptText,
         message: {
-          room_id: roomId,
+          conversation_id: roomId,
           message_id: '',
           message_type: 'user',
           message_content: {

@@ -49,7 +49,7 @@ def _formatter(output_format: str = "json") -> StructuredFormatter:
 
 
 def test_json_formatter_includes_context_extra_and_fixed_fields():
-    with bind_log_context(trace_id="trace-1", room_id="room-1"):
+    with bind_log_context(trace_id="trace-1", conversation_id="room-1"):
         output = json.loads(
             _formatter().format(
                 _record(
@@ -65,7 +65,7 @@ def test_json_formatter_includes_context_extra_and_fixed_fields():
     assert output["version"] == "test-version"
     assert len(output["instance_id"]) == 8
     assert output["trace_id"] == "trace-1"
-    assert output["room_id"] == "room-1"
+    assert output["conversation_id"] == "room-1"
     assert output["nested.answer"] == 42
     assert output["nested.outcome"] == "ok"
     assert output["happened_at"] == "2026-01-02T00:00:00+00:00"
@@ -223,8 +223,8 @@ def test_logfmt_is_parseable_and_preserves_extra():
 
 def test_nested_bind_restores_outer_context_and_rejects_unknown_fields():
     with bind_log_context(trace_id="outer"):
-        with bind_log_context(room_id="room"):
-            assert get_log_context() == {"trace_id": "outer", "room_id": "room"}
+        with bind_log_context(conversation_id="room"):
+            assert get_log_context() == {"trace_id": "outer", "conversation_id": "room"}
         with bind_log_context(trace_id=None):
             assert get_log_context() == {}
         with bind_log_context(trace_id={"PRIVATE_TRACE": "payload"}):
@@ -247,16 +247,16 @@ async def test_traced_tasks_copy_context_without_cross_task_leaks():
         await release.wait()
         return get_log_context()
 
-    with bind_log_context(trace_id="trace-a", room_id="room-a"):
+    with bind_log_context(trace_id="trace-a", conversation_id="room-a"):
         first = traced_create_task(observe(), name="trace-a")
-    with bind_log_context(trace_id="trace-b", room_id="room-b"):
+    with bind_log_context(trace_id="trace-b", conversation_id="room-b"):
         second = traced_create_task(observe(), name="trace-b")
 
     release.set()
     first_context, second_context = await asyncio.gather(first, second)
 
-    assert first_context == {"trace_id": "trace-a", "room_id": "room-a"}
-    assert second_context == {"trace_id": "trace-b", "room_id": "room-b"}
+    assert first_context == {"trace_id": "trace-a", "conversation_id": "room-a"}
+    assert second_context == {"trace_id": "trace-b", "conversation_id": "room-b"}
     assert get_log_context() == {}
 
 

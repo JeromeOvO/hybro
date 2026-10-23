@@ -43,7 +43,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -66,7 +66,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -89,7 +89,7 @@ class TestStreamRoomMessages:
 
         with pytest.raises(HTTPException) as exc_info:
             await stream_room_messages(
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 user=mock_user_2,
                 transport=deps["sse_transport"],
                 db=deps["db_service"],
@@ -110,7 +110,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -121,7 +121,7 @@ class TestStreamRoomMessages:
 
         assert frame == {
             "type": "connected",
-            "room_id": sample_room.room_id,
+            "conversation_id": sample_room.conversation_id,
             "timestamp": frame["timestamp"],
             "data": {"connection_id": "conn-123"},
         }
@@ -143,20 +143,22 @@ class TestGetRoomSseStatus:
         """Should return SSE connection status for room."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
         mock_sse_transport.get_room_status.return_value = {
-            "room_id": sample_room.room_id,
+            "conversation_id": sample_room.conversation_id,
             "connections": 2,
             "active": True,
         }
 
         result = await get_room_sse_status(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
         )
 
         assert result["connections"] == 2
-        mock_sse_transport.get_room_status.assert_called_once_with(sample_room.room_id)
+        mock_sse_transport.get_room_status.assert_called_once_with(
+            sample_room.conversation_id
+        )
 
     @pytest.mark.asyncio
     async def test_raises_403_when_status_user_does_not_own_room(
@@ -168,7 +170,7 @@ class TestGetRoomSseStatus:
 
         with pytest.raises(HTTPException) as exc_info:
             await get_room_sse_status(
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 user=mock_user_2,
                 transport=deps["sse_transport"],
                 db=deps["db_service"],
@@ -209,7 +211,7 @@ class TestCancelMessage:
         assert result["status"] == "canceled"
         assert result["outcome"] == "canceled"
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -263,7 +265,7 @@ class TestCancelMessage:
 
         assert result["outcome"] == "canceled"
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=canceled_message.room_id,
+            conversation_id=canceled_message.conversation_id,
             message_id=canceled_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -430,7 +432,7 @@ class TestCancelMessage:
         )
 
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -509,7 +511,7 @@ class TestCancelMessage:
 
         assert result["success"] is True
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )

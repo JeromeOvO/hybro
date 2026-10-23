@@ -240,7 +240,7 @@ class MongoOrchestratorRunStore:
         if run.client_request_id is None:
             return None
         value = await self.collection.find_one(
-            {"room_id": run.room_id, "client_request_id": run.client_request_id}
+            {"room_id": run.conversation_id, "client_request_id": run.client_request_id}
         )
         return _run_from_document(value) if value else None
 

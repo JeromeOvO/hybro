@@ -77,7 +77,7 @@ def execution_request_fingerprint_payload(
     # literals (the stored name is "room_id") so attribute renames on
     # ExecutionRequest cannot change existing fingerprints.
     return {
-        "room_id": request.room_id,
+        "room_id": request.conversation_id,
         "sender_id": request.sender_id,
         "message_content": semantic_content,
         "related_message_id": _optional_plain(message.get("related_message_id")),

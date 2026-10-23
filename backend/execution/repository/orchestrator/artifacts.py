@@ -24,13 +24,13 @@ GuardedRemoteFetcher = Callable[[str], Awaitable[tuple[bytes, str]]]
 
 class RoomFileArtifactOwner(Protocol):
     def write_lease(
-        self, room_id: str, owner: str
+        self, conversation_id: str, owner: str
     ) -> AbstractAsyncContextManager[str | None]: ...
 
     async def store_agent_artifact(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         source_message_id: str,
         origin_key: str,
         content: bytes,
@@ -47,7 +47,7 @@ class EpochFencedRoomArtifactOwner(Protocol):
     async def commit(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         source_message_id: str,
         origin_key: str,
@@ -71,7 +71,7 @@ class RoomFilesEpochFencedArtifactOwner:
     async def commit(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         source_message_id: str,
         origin_key: str,
@@ -87,12 +87,14 @@ class RoomFilesEpochFencedArtifactOwner:
             # so old and new backend replicas contend on the same Room lease
             # instead of fencing each other out.
             async with self.room_files.write_lease(
-                room_id, "orchestrator-v3-a2a-artifact"
+                conversation_id, "orchestrator-v3-a2a-artifact"
             ):
-                if not await self.room_epochs.verify_active(room_id, room_epoch):
+                if not await self.room_epochs.verify_active(
+                    conversation_id, room_epoch
+                ):
                     raise StaleRoomEpochError("artifact Room epoch is no longer active")
                 stored = await self.room_files.store_agent_artifact(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     source_message_id=source_message_id,
                     origin_key=origin_key,
                     content=content,
@@ -164,7 +166,7 @@ class GuardedRoomFileArtifactWriter:
         ).hexdigest()
         name = urlparse(artifact_ref).path.rsplit("/", 1)[-1] or "agent-artifact"
         return await self.epoch_owner.commit(
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             source_message_id=observation_id,
             origin_key=origin_key,

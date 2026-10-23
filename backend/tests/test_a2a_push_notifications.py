@@ -367,7 +367,7 @@ def _command(*, push: bool, mode: str = "sync"):
         direct_mode=mode,
         task="do work",
         materialized_resources=[],
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         deadline_at=NOW + timedelta(seconds=30),
         push_notification=(

@@ -48,7 +48,7 @@ describe('handleTaskUpdate terminal recovery', () => {
       },
       {
         type: 'task_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-1',
@@ -123,7 +123,7 @@ describe('handleTaskUpdate terminal recovery', () => {
       },
       {
         type: 'task_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-2',

@@ -112,7 +112,7 @@ PAYLOADS = {
 @pytest.mark.parametrize("kind", sorted(CANONICAL_RUN_EVENT_PAYLOADS))
 def test_every_canonical_payload_is_typed(kind: str):
     event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id=f"event-{kind}",
         run_id="run-1",
         seq=1,
@@ -139,7 +139,7 @@ def test_canonical_payload_rejects_private_or_contradictory_fields(
     payload = {**PAYLOADS[kind], **mutation}
     with pytest.raises(ValidationError):
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id="event-1",
             run_id="run-1",
             seq=1,
@@ -151,7 +151,7 @@ def test_canonical_payload_rejects_private_or_contradictory_fields(
 
 def test_canonical_hitl_dto_forbids_private_ids_and_raw_errors():
     request = HITLRequestEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         request_id="request-1",
         message_id="hitl-message-1",
@@ -172,7 +172,7 @@ def test_canonical_hitl_dto_forbids_private_ids_and_raw_errors():
         )
     with pytest.raises(ValidationError):
         HITLResolvedEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             run_id="run-1",
             request_id="request-1",
             message_id="hitl-message-1",
@@ -187,7 +187,7 @@ def test_canonical_hitl_dto_forbids_private_ids_and_raw_errors():
 
 def test_canonical_card_dto_rejects_private_ids_and_raw_content():
     submitted = TaskSubmittedEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         opaque_public_call_id="inv_abcdefgh",
         message_id="orchestrator:run-1:inv_abcdefgh",
@@ -203,7 +203,7 @@ def test_canonical_card_dto_rejects_private_ids_and_raw_content():
         )
     with pytest.raises(ValidationError):
         TaskUpdateEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             run_id="run-1",
             opaque_public_call_id="inv_abcdefgh",
             message_id="orchestrator:run-1:inv_abcdefgh",
@@ -217,7 +217,7 @@ def test_canonical_card_dto_rejects_private_ids_and_raw_content():
 def test_canonical_root_requires_exact_run_and_correlation():
     with pytest.raises(ValidationError):
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id="event-1",
             run_id="different-run",
             seq=1,

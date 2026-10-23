@@ -73,7 +73,7 @@ class PublicHistory:
         self.translator = PublicProjectionTranslator()
         self.sequence = 0
 
-    async def read(self, _room_id, _run_id):
+    async def read(self, _conversation_id, _run_id):
         return list(self.records.values())
 
     async def lifecycle(self, event_type, run, payload):
@@ -87,7 +87,7 @@ class PublicHistory:
                 sequence=self.sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
             ),
@@ -96,7 +96,7 @@ class PublicHistory:
         if projected is None or projected.event_id in self.records:
             return
         self.records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": len(self.records) + 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -363,7 +363,7 @@ async def _composed(monkeypatch, model):
     seed = make_run()
     tool = StaticFakeToolCatalog().resolve(seed, "fake_agent_pause")
     await runtime.session_host.create_session(
-        room_id=seed.room_id,
+        conversation_id=seed.conversation_id,
         profile=seed.profile,
         candidate_scope=seed.candidate_scope,
         requesting_subject_id="user-1",

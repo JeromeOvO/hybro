@@ -128,24 +128,24 @@ async def update_room_summary(
     repository: MemoryRepository,
     llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
-    room_id: str,
+    conversation_id: str,
     synthesis_text: str,
     synthesis_turn_id: str | None,
     id_factory,
     now,
 ) -> bool:
     try:
-        doc = await repository.get_room_summary_projection(room_id)
+        doc = await repository.get_room_summary_projection(conversation_id)
     except Exception:
         logger.exception(
             "Failed to load room summary projection",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
         )
         return False
     if not doc:
         logger.warning(
             "Room summary projection missing",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
         )
         return False
 
@@ -174,13 +174,16 @@ async def update_room_summary(
     except Exception:
         logger.exception(
             "Failed to extract room summary",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
         )
         return False
     if not isinstance(extracted, dict) or not _valid_extraction(extracted):
         logger.warning(
             "Room summary extraction returned invalid payload",
-            extra={"room_id": room_id, "payload_type": type(extracted).__name__},
+            extra={
+                "conversation_id": conversation_id,
+                "payload_type": type(extracted).__name__,
+            },
         )
         return False
 
@@ -236,7 +239,7 @@ async def update_room_summary(
 
     try:
         persisted = await repository.update_room_summary_atomic(
-            room_id,
+            conversation_id,
             summary,
             new_facts=new_facts or None,
             max_facts=50,
@@ -244,12 +247,12 @@ async def update_room_summary(
     except Exception:
         logger.exception(
             "Failed to persist room summary",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
         )
         return False
     if not persisted:
         logger.warning(
             "Failed to persist room summary",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
         )
     return persisted

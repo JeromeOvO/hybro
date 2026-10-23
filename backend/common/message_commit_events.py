@@ -12,7 +12,7 @@ MessageCommitType = Literal["user", "agent"]
 async def publish_message_committed(
     internal_event_publisher: InternalEventPublisher,
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     message_type: MessageCommitType,
     agent_id: str | None = None,
@@ -24,7 +24,7 @@ async def publish_message_committed(
     event = MessageCommitted(
         timestamp=utcnow(),
         payload={},
-        room_id=room_id,
+        conversation_id=conversation_id,
         message_id=message_id,
         message_type=message_type,
         agent_id=agent_id,

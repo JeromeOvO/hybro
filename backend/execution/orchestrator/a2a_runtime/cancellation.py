@@ -116,9 +116,11 @@ class A2ACancellationCoordinator:
         self, call: AgentCallLedgerRecord, deletion_id: str | None
     ) -> bool:
         if deletion_id is None:
-            return await self.room_epochs.verify_active(call.room_id, call.room_epoch)
+            return await self.room_epochs.verify_active(
+                call.conversation_id, call.room_epoch
+            )
         return await self.room_epochs.verify_cleanup_epoch(
-            call.room_id, call.room_epoch, deletion_id
+            call.conversation_id, call.room_epoch, deletion_id
         )
 
     async def cancel_run(

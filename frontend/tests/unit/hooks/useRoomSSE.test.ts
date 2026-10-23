@@ -137,7 +137,7 @@ describe('useRoomSSE', () => {
       expect(capturedOptions.onMessage).toBeDefined()
     })
 
-    const msg = { type: 'heartbeat', room_id: 'room-1', timestamp: new Date().toISOString() }
+    const msg = { type: 'heartbeat', conversation_id: 'room-1', timestamp: new Date().toISOString() }
     const result = (capturedOptions.onMessage as (m: unknown) => Promise<void>)(msg)
 
     expect(onMessage).toHaveBeenCalledWith(msg)

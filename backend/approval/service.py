@@ -75,12 +75,14 @@ logger = get_logger(__name__)
 def _room_write_fenced(method):
     @wraps(method)
     async def fenced(self, *args, **kwargs):
-        room_id = kwargs.get("room_id") or (args[0] if args else None)
-        if not isinstance(room_id, str) or not room_id:
-            raise TypeError("room_id is required")
+        conversation_id = kwargs.get("conversation_id") or (args[0] if args else None)
+        if not isinstance(conversation_id, str) or not conversation_id:
+            raise TypeError("conversation_id is required")
         if self._room_files is None:
             return await method(self, *args, **kwargs)
-        async with self._room_files.write_lease(room_id, f"hitl:{method.__name__}"):
+        async with self._room_files.write_lease(
+            conversation_id, f"hitl:{method.__name__}"
+        ):
             return await method(self, *args, **kwargs)
 
     return fenced
@@ -198,7 +200,7 @@ class HITLService:
     async def request_interaction(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         user_message_id: str,
         interaction_id: str,
         application_route: HITLApplicationRoute,
@@ -289,7 +291,7 @@ class HITLService:
         interaction = HITLInteraction(
             schema_version=3,
             interaction_id=interaction_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             user_message_id=user_message_id,
             orchestration_run_id=orchestration_run_id,
             application_route=application_route,
@@ -327,7 +329,7 @@ class HITLService:
         for index, raw_question in enumerate(inventory):
             question = dict(raw_question)
             request = await self._request_interaction_member(
-                room_id=interaction["room_id"],
+                conversation_id=interaction["room_id"],
                 user_message_id=interaction["user_message_id"],
                 application_route=HITLApplicationRoute(
                     interaction["application_route"]
@@ -361,7 +363,7 @@ class HITLService:
 
     async def _request_interaction_member(
         self,
-        room_id: str,
+        conversation_id: str,
         user_message_id: str,
         application_route: HITLApplicationRoute,
         public_source: HITLPublicSource,
@@ -397,7 +399,7 @@ class HITLService:
                 logger.error(
                     "Rejecting invalid agent HITL request",
                     extra={
-                        "room_id": room_id,
+                        "conversation_id": conversation_id,
                         "agent_id": agent_id,
                         "error_code": (
                             "invalid_interactive_prompt"
@@ -417,7 +419,7 @@ class HITLService:
             logger.error(
                 "Agent HITL request has no display or continuation message id",
                 extra={
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "user_message_id": user_message_id,
                     "agent_id": agent_id,
                 },
@@ -436,7 +438,7 @@ class HITLService:
                 "interaction_id": interaction_id,
                 "question_index": question_index,
                 "question_count": question_count,
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "user_message_id": user_message_id,
                 "orchestration_run_id": orchestration_run_id,
                 "application_route": application_route.value,
@@ -469,7 +471,7 @@ class HITLService:
 
         request_data = dict(
             schema_version=3,
-            room_id=room_id,
+            conversation_id=conversation_id,
             user_message_id=user_message_id,
             interaction_id=interaction_id,
             question_index=question_index,
@@ -739,7 +741,7 @@ class HITLService:
                 request.interaction_version = int(interaction.get("version") or 1)
                 request.application_status = HITLInteractionStatus.OPEN.value
                 await self._emit_hitl_event(
-                    room_id=request.room_id,
+                    conversation_id=request.conversation_id,
                     event_type=HITLEventType.INPUT_REQUESTED,
                     request=request,
                 )
@@ -791,7 +793,7 @@ class HITLService:
     @_room_write_fenced
     async def handle_batch_response(
         self,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         answers: list[dict[str, str]],
         user_id: str,
@@ -804,7 +806,7 @@ class HITLService:
             )
         return await self._application.handle_batch_response(
             self,
-            room_id=room_id,
+            conversation_id=conversation_id,
             interaction_id=interaction_id,
             answers=answers,
             user_id=user_id,
@@ -817,7 +819,7 @@ class HITLService:
         display_message_id: Any,
         user_input: Any,
         request_id: str | None = None,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         if not isinstance(display_message_id, str) or not display_message_id:
             return False
@@ -837,7 +839,7 @@ class HITLService:
                 "Failed to project completed HITL response onto display message",
                 extra={
                     "hitl_request_id": request_id,
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "display_message_id": display_message_id,
                 },
                 exc_info=True,
@@ -848,7 +850,7 @@ class HITLService:
                 "Incomplete completed HITL display projection",
                 extra={
                     "hitl_request_id": request_id,
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "display_message_id": display_message_id,
                     "answer_projected": bool(answer_projected),
                     "state_projected": bool(state_projected),
@@ -975,15 +977,15 @@ class HITLService:
                 public.append(_public_hitl_request_from_doc(enriched))
         return public
 
-    async def get_pending_requests(self, room_id: str) -> list[HITLRequest]:
+    async def get_pending_requests(self, conversation_id: str) -> list[HITLRequest]:
         """Get all pending HITL requests for a room (SSE reconnect catch-up)."""
         strict_reader = getattr(
             self.persistence, "get_pending_hitl_requests_strict", None
         )
         if callable(strict_reader) and inspect.iscoroutinefunction(strict_reader):
-            docs = await strict_reader(room_id)
+            docs = await strict_reader(conversation_id)
         else:
-            docs = await self.persistence.get_pending_hitl_requests(room_id)
+            docs = await self.persistence.get_pending_hitl_requests(conversation_id)
         return await self._public_pending_requests(docs)
 
     # ------------------------------------------------------------------
@@ -1032,7 +1034,7 @@ class HITLService:
                 continue
             try:
                 await self._emit_hitl_event(
-                    room_id=member.room_id,
+                    conversation_id=member.conversation_id,
                     event_type=event_type,
                     request=member,
                 )
@@ -1241,7 +1243,7 @@ class HITLService:
     async def cancel_interaction_by_user(
         self,
         interaction_id: str,
-        room_id: str,
+        conversation_id: str,
         *,
         expected_version: int,
     ) -> int:
@@ -1250,7 +1252,7 @@ class HITLService:
         interaction = await self._lifecycle.get_interaction_strict(interaction_id)
         if interaction is None:
             raise HITLNotFoundError("HITL interaction not found")
-        if interaction.get("room_id") != room_id:
+        if interaction.get("room_id") != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         if int(interaction.get("version") or 0) != expected_version:
             raise HITLConflictError("HITL interaction changed before cancellation")
@@ -1275,7 +1277,7 @@ class HITLService:
                 )
         request_ids = list(interaction.get("request_ids") or [])
         if request_ids:
-            await self.cancel_request(request_ids[0], room_id=room_id)
+            await self.cancel_request(request_ids[0], conversation_id=conversation_id)
         else:
             terminal = await self._lifecycle.terminalize_interaction(
                 interaction_id,
@@ -1295,7 +1297,7 @@ class HITLService:
     async def cancel_request(
         self,
         request_id: str,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
         *,
         failure_reason: str | None = None,
     ) -> None:
@@ -1306,7 +1308,7 @@ class HITLService:
         request = HITLRequest(
             **{key: value for key, value in doc.items() if key != "_id"}
         )
-        if room_id is not None and request.room_id != room_id:
+        if conversation_id is not None and request.conversation_id != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         if request.status == HITLStatus.CANCELED:
             await self._reconcile_terminal_request(
@@ -1458,7 +1460,7 @@ class HITLService:
 
     async def _emit_hitl_event(
         self,
-        room_id: str,
+        conversation_id: str,
         event_type: HITLEventType,
         request: HITLRequest,
         error: str | None = None,
@@ -1517,7 +1519,7 @@ class HITLService:
                 public_choices = request.choices
             await self._emit_delivery_event(
                 HITLRequestEvent(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     run_id=canonical_run_id,
                     request_id=request.request_id,
                     message_id=data["message_id"],
@@ -1568,7 +1570,7 @@ class HITLService:
         }
         await self._emit_delivery_event(
             HITLResolvedEvent(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 run_id=canonical_run_id,
                 request_id=request.request_id,
                 message_id=data["message_id"],

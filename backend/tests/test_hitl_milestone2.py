@@ -114,7 +114,7 @@ def test_interaction_model_rejects_impossible_applied_state():
         )
         HITLInteraction(
             interaction_id="interaction-1",
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="user-message-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
             public_source="supervisor",
@@ -451,7 +451,7 @@ async def test_batch_records_every_answer_before_single_application():
     coordinator.apply_interaction = AsyncMock(side_effect=apply)
     result = await coordinator.handle_batch_response(
         SimpleNamespace(persistence=persistence),
-        room_id="room-1",
+        conversation_id="room-1",
         interaction_id="group-1",
         answers=[
             {"request_id": "request-1", "user_input": "A"},
@@ -487,7 +487,7 @@ async def test_batch_records_answer_without_application_until_aggregate_ready():
     with pytest.raises(HITLRoutingFailedError, match="application is not ready"):
         await coordinator.handle_batch_response(
             SimpleNamespace(persistence=persistence),
-            room_id="room-1",
+            conversation_id="room-1",
             interaction_id="interaction-1",
             answers=[{"request_id": "request-1", "user_input": "Market A"}],
             user_id="user-1",
@@ -514,7 +514,7 @@ async def test_batch_failed_answer_recording_never_marks_request_responded():
     with pytest.raises(HITLRoutingFailedError, match="Failed to record"):
         await coordinator.handle_batch_response(
             SimpleNamespace(persistence=persistence),
-            room_id="room-1",
+            conversation_id="room-1",
             interaction_id="interaction-1",
             answers=[{"request_id": "request-1", "user_input": "Market A"}],
             user_id="user-1",
@@ -543,7 +543,7 @@ async def test_batch_rejects_mismatched_client_request_id_before_writes():
     with pytest.raises(Exception, match="client_request_id does not match"):
         await coordinator.handle_batch_response(
             SimpleNamespace(persistence=persistence),
-            room_id="room-1",
+            conversation_id="room-1",
             interaction_id="interaction-1",
             answers=[{"request_id": "request-1", "user_input": "Market A"}],
             user_id="user-1",
@@ -588,7 +588,7 @@ async def test_materializing_interaction_is_not_emitted_before_exact_inventory_o
         orchestration_run_id="run-1",
     )
     result = await service.request_interaction(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,

@@ -106,7 +106,9 @@ async def test_publish_sse_uses_json_envelope_and_configured_channel():
 async def test_incoming_sse_self_origin_ignored_and_other_origin_delivered():
     delivered: list[tuple[str, dict]] = []
     bus = make_bus(redis=FakeRedisPubSub())
-    bus.set_sse_callback(lambda room_id, frame: delivered.append((room_id, frame)))
+    bus.set_sse_callback(
+        lambda conversation_id, frame: delivered.append((conversation_id, frame))
+    )
 
     await bus.handle_sse_message(
         json.dumps(
@@ -133,10 +135,58 @@ async def test_incoming_sse_self_origin_ignored_and_other_origin_delivered():
 
 
 @pytest.mark.asyncio
+async def test_incoming_sse_envelope_accepts_conversation_id_key():
+    delivered: list[tuple[str, dict]] = []
+    bus = make_bus(redis=FakeRedisPubSub())
+    bus.set_sse_callback(
+        lambda conversation_id, frame: delivered.append((conversation_id, frame))
+    )
+
+    await bus.handle_sse_message(
+        json.dumps(
+            {
+                "kind": "sse_event",
+                "origin": "worker-2",
+                "conversation_id": "room-1",
+                "frame": {"type": "update"},
+            }
+        )
+    )
+
+    assert delivered == [("room-1", {"type": "update"})]
+
+
+@pytest.mark.asyncio
+async def test_incoming_legacy_frame_is_renamed_to_conversation_id():
+    delivered: list[tuple[str, dict]] = []
+    bus = make_bus(redis=FakeRedisPubSub())
+    bus.set_sse_callback(
+        lambda conversation_id, frame: delivered.append((conversation_id, frame))
+    )
+
+    await bus.handle_sse_message(
+        json.dumps(
+            {
+                "kind": "sse_event",
+                "origin": "worker-2",
+                "room_id": "room-1",
+                "frame": {"type": "update", "room_id": "room-1", "data": {}},
+            }
+        )
+    )
+
+    assert delivered == [
+        ("room-1", {"type": "update", "conversation_id": "room-1", "data": {}})
+    ]
+
+
+@pytest.mark.asyncio
 async def test_incoming_legacy_sse_envelope_is_reconstructed():
     delivered: list[tuple[str, dict]] = []
     bus = make_bus(redis=FakeRedisPubSub())
-    bus.set_sse_callback(lambda room_id, frame: delivered.append((room_id, frame)))
+    bus.set_sse_callback(
+        lambda conversation_id, frame: delivered.append((conversation_id, frame))
+    )
 
     await bus.handle_sse_message(
         json.dumps(
@@ -156,7 +206,7 @@ async def test_incoming_legacy_sse_envelope_is_reconstructed():
             {
                 "type": "agent_response",
                 "timestamp": NOW.isoformat(),
-                "room_id": "room-1",
+                "conversation_id": "room-1",
                 "data": {"content": "hi"},
             },
         )
@@ -246,7 +296,7 @@ async def test_subscription_loop_stopped_before_start_resolves_readiness_and_cle
             "sse",
             generation=generation,
             readiness=readiness,
-            room_id="room-1",
+            conversation_id="room-1",
         )
     )
     bus._room_tasks[channel] = listener
@@ -458,7 +508,7 @@ async def test_cancelled_first_admission_cleans_room_subscription_and_capacity()
 
     redis.subscribe_waiter.set()
     connection = await transport.open_connection("room-2")
-    assert connection.room_id == "room-2"
+    assert connection.conversation_id == "room-2"
     await transport.close_all_connections()
     await bus.stop()
 

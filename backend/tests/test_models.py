@@ -94,7 +94,7 @@ class TestRoomModel:
             room_owner_name="Test User",
         )
 
-        assert room.room_id is not None
+        assert room.conversation_id is not None
         assert room.room_name == "Test Room"
         assert room.room_owner_id == "user-123"
         assert room.room_agent_set == {}
@@ -122,7 +122,7 @@ class TestRoomModel:
 
         data = room.model_dump()
 
-        assert "room_id" in data
+        assert "conversation_id" in data
         assert "room_name" in data
         assert data["room_name"] == "Test Room"
 
@@ -133,20 +133,20 @@ class TestRoomUserMessageModel:
     def test_creates_user_message(self):
         """Should create user message with correct type."""
         message = RoomUserMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             user_id="user-789",
             message_content=MessageContent(message_text="Hello"),
         )
 
         assert message.message_type == "user"
-        assert message.room_id == "room-123"
+        assert message.conversation_id == "room-123"
         assert message.message_content.message_text == "Hello"
 
     def test_user_message_with_extend_info(self):
         """Should support extend_info field."""
         message = RoomUserMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             message_content=MessageContent(message_text="Hello"),
             extend_info={"custom_field": "custom_value"},
@@ -161,7 +161,7 @@ class TestRoomAgentMessageModel:
     def test_creates_agent_message(self):
         """Should create agent message with correct type."""
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(message_text="Response"),
@@ -179,7 +179,7 @@ class TestRoomAgentMessageModel:
         )
 
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(
@@ -196,7 +196,7 @@ class TestRoomAgentMessageModel:
     def test_agent_message_step_tracking(self):
         """Should support step tracking fields."""
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(message_text="Step 1"),
@@ -298,7 +298,7 @@ class TestHITLRequestModel:
     def test_creates_hitl_request(self):
         """Should create HITL request with defaults."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Please clarify",
@@ -311,7 +311,7 @@ class TestHITLRequestModel:
     def test_hitl_request_with_choices(self):
         """Should support choice prompt type."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Choose an option",
@@ -325,7 +325,7 @@ class TestHITLRequestModel:
     def test_hitl_request_agent_source(self):
         """Should support agent as source."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("agent"),
             prompt="Need more information",
@@ -339,7 +339,7 @@ class TestHITLRequestModel:
     def test_hitl_request_serialization(self):
         """Should serialize to JSON-compatible dict."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Test prompt",

@@ -25,7 +25,7 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
         sequence=7,
         timestamp=datetime.now(UTC),
         payload=payload or {},
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="msg-1",
         client_request_id="crid-1",
     )
@@ -103,7 +103,7 @@ async def test_canonical_label_secret_never_reaches_persisted_room_event():
     publisher = make_publisher(transport=FakeTransport(), room_events=store)
     await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id=projected.room_id,
+            conversation_id=projected.conversation_id,
             event_id=projected.event_id,
             run_id=projected.run_id,
             seq=projected.seq,
@@ -119,10 +119,10 @@ async def test_canonical_label_secret_never_reaches_persisted_room_event():
 
 def test_translator_missing_room_id_degrades_to_empty_string():
     event = _event("model_retry_scheduled", {"attempt": 2, "error_class": "timeout"})
-    event = event.model_copy(update={"room_id": None})
+    event = event.model_copy(update={"conversation_id": None})
     public = PublicProjectionTranslator().translate(event)
     assert public is not None
-    assert public.room_id == ""
+    assert public.conversation_id == ""
 
 
 def _agent_catalog():

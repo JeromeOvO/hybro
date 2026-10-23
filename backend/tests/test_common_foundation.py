@@ -286,13 +286,13 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
 
 def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
     base = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="processing",
         trace_id="trace-2",
     )
     run_event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="evt-1",
         run_id="run-1",
         seq=1,
@@ -300,7 +300,7 @@ def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
         correlation_id="cr-1",
     )
     omitted = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="evt-2",
         run_id="run-1",
         seq=2,
@@ -313,7 +313,7 @@ def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
 
 
 def test_room_info_defaults_to_manual_membership_status():
-    room = RoomInfo(room_id="r1", room_name="Room", owner_id="u1")
+    room = RoomInfo(conversation_id="r1", room_name="Room", owner_id="u1")
 
     assert room.membership_origin_status == "manual"
 
@@ -371,9 +371,9 @@ def test_event_exports_are_distinct():
 
 def test_delivery_event_schemas_match_design_doc():
     expected_fields = {
-        DeliveryEventBase: {"room_id", "timestamp", "trace_id"},
+        DeliveryEventBase: {"conversation_id", "timestamp", "trace_id"},
         ProcessingStatusEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -387,7 +387,7 @@ def test_delivery_event_schemas_match_design_doc():
             "delivery_id",
         },
         RunEventNotification: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -400,7 +400,7 @@ def test_delivery_event_schemas_match_design_doc():
             "correlation_id",
         },
         AgentMessagePartial: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -409,7 +409,7 @@ def test_delivery_event_schemas_match_design_doc():
             "content_delta",
         },
         AgentMessageFinal: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -419,7 +419,7 @@ def test_delivery_event_schemas_match_design_doc():
             "delivery_id",
         },
         CancellationEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -427,7 +427,7 @@ def test_delivery_event_schemas_match_design_doc():
             "reason",
         },
         HITLRequestEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "timestamp",
             "trace_id",
@@ -457,7 +457,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         HITLResolvedEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "timestamp",
             "trace_id",
@@ -480,7 +480,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         TaskSubmittedEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "opaque_public_call_id",
             "timestamp",
@@ -499,7 +499,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         TaskUpdateEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "opaque_public_call_id",
             "timestamp",
@@ -524,7 +524,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         ArtifactUpdateEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -536,7 +536,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         ErrorEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -557,31 +557,36 @@ def test_delivery_event_schemas_match_design_doc():
         assert set(dto.model_fields) == fields
 
     expected_required_fields = {
-        DeliveryEventBase: {"room_id"},
-        ProcessingStatusEvent: {"room_id", "message_id", "status"},
+        DeliveryEventBase: {"conversation_id"},
+        ProcessingStatusEvent: {"conversation_id", "message_id", "status"},
         RunEventNotification: {
-            "room_id",
+            "conversation_id",
             "event_id",
             "run_id",
             "seq",
             "run_event_type",
         },
-        AgentMessagePartial: {"room_id", "message_id", "agent_id", "content_delta"},
-        AgentMessageFinal: {"room_id", "message_id", "agent_id"},
-        CancellationEvent: {"room_id", "message_id"},
+        AgentMessagePartial: {
+            "conversation_id",
+            "message_id",
+            "agent_id",
+            "content_delta",
+        },
+        AgentMessageFinal: {"conversation_id", "message_id", "agent_id"},
+        CancellationEvent: {"conversation_id", "message_id"},
         HITLRequestEvent: {
-            "room_id",
+            "conversation_id",
             "request_id",
             "prompt",
             "prompt_type",
             "source",
             "message_id",
         },
-        HITLResolvedEvent: {"room_id", "request_id", "message_id", "source"},
-        TaskSubmittedEvent: {"room_id", "message_id", "task_id", "agent_name"},
-        TaskUpdateEvent: {"room_id", "message_id", "status"},
-        ArtifactUpdateEvent: {"room_id", "message_id", "agent_id", "artifact"},
-        ErrorEvent: {"room_id", "error"},
+        HITLResolvedEvent: {"conversation_id", "request_id", "message_id", "source"},
+        TaskSubmittedEvent: {"conversation_id", "message_id", "task_id", "agent_name"},
+        TaskUpdateEvent: {"conversation_id", "message_id", "status"},
+        ArtifactUpdateEvent: {"conversation_id", "message_id", "agent_id", "artifact"},
+        ErrorEvent: {"conversation_id", "error"},
     }
 
     for dto, fields in expected_required_fields.items():
@@ -789,20 +794,20 @@ def test_protocol_methods_match_design_doc():
     )
     _assert_params(
         protocols.ExecutionEngine.cancel,
-        ["self", "room_id", "message_id", "requested_by_user_id"],
+        ["self", "conversation_id", "message_id", "requested_by_user_id"],
     )
     _assert_params(protocols.SSEConnectionLike.get_message, ["self", "timeout"])
     _assert_params(
         protocols.SSERouteTransport.add_connection,
-        ["self", "room_id"],
+        ["self", "conversation_id"],
     )
     _assert_params(
         protocols.SSERouteTransport.remove_connection,
-        ["self", "room_id", "connection_id"],
+        ["self", "conversation_id", "connection_id"],
     )
     _assert_params(
         protocols.SSERouteTransport.get_room_status,
-        ["self", "room_id"],
+        ["self", "conversation_id"],
     )
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
 
@@ -818,7 +823,7 @@ def test_run_state_contract_matches_persisted_values():
     }
 
     assert {state.value for state in RunState} == persisted_values
-    RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
+    RunInfo(run_id="run1", conversation_id="r1", state=RunState.PROCESSING)
 
 
 def test_settings_class_uses_explicit_values_not_environment(monkeypatch):

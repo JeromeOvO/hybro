@@ -70,7 +70,7 @@ test.describe('Unified portal routing', () => {
       await page.route('**/agent/getAgent/me', route => route.fulfill({ json: { success: true, agents: [] } }))
       await page.route('**/agentGroups**', route => route.fulfill({ json: { success: true, groups: [] } }))
       await page.route('**/api/v1/rooms', route => route.request().method() === 'GET' ? route.fulfill({ json: { items: [{
-        room_id: 'navigation-history',
+        conversation_id: 'navigation-history',
         title: 'Navigation history',
         last_activity_at: '2026-08-01T00:00:00Z',
         is_pinned: false,

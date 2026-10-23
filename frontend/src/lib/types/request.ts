@@ -168,7 +168,7 @@ export interface PaginationParams {
   limit?: number | null;
 }
 export interface RoomAgentMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type?: string;
@@ -184,7 +184,7 @@ export interface MessageContent {
   [k: string]: unknown;
 }
 export interface RoomCenterAgentMessageRequest {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   related_message_id?: string | null;
   agent_id?: string | null;
@@ -200,7 +200,7 @@ export interface RoomCenterAgentMessageRequest {
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type: string;
@@ -221,7 +221,7 @@ export interface CreateRoomRequest {
   seed_all_current_agents?: true;
 }
 export interface RoomCenterUserMessageRequest {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   related_message_id?: string | null;
   user_id?: string | null;
@@ -251,7 +251,7 @@ export type SendMessagePayload = {
 }
 
 export interface RoomUserMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type?: string;

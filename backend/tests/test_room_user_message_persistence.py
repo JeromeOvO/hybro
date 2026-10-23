@@ -35,7 +35,7 @@ def _message(*, with_attachment: bool = True) -> RoomUserMessage:
             )
         ]
     return RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="message-1",
         user_id="user-1",
         message_content=MessageContent(

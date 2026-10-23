@@ -78,7 +78,7 @@ async def test_registry_and_ownership_methods_use_repository_and_agent_registry(
     room = await facade.get_room("r1")
 
     assert room is not None
-    assert room.room_id == "r1"
+    assert room.conversation_id == "r1"
     assert list(room.agent_ids) == ["a1", "a2"]
     assert await facade.get_room("missing") is None
     assert await facade.get_room_agents("r1") == ["a1", "a2"]
@@ -121,7 +121,7 @@ async def test_create_room_validates_required_fields_and_manual_seed():
         )
     )
 
-    assert room.room_id == "room-created"
+    assert room.conversation_id == "room-created"
     assert list(room.agent_ids) == ["a2", "a1"]
     assert dict(room.agent_set) == {"a2": "Agent Two", "a1": "Agent One"}
     assert room.membership_origin == "manual"
@@ -368,13 +368,15 @@ async def test_save_user_message_verifies_room_persists_raw_doc_and_returns_save
     with pytest.raises(ValueError, match="Room not found"):
         await facade.save_user_message(
             "missing",
-            UserMessageInput(room_id="missing", message_text="hi", sender_id="u1"),
+            UserMessageInput(
+                conversation_id="missing", message_text="hi", sender_id="u1"
+            ),
         )
 
     saved = await facade.save_user_message(
         "r1",
         UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             message_text="hello",
             sender_id="u1",
             sender_name="User",
@@ -414,13 +416,13 @@ async def test_save_agent_message_verifies_room_and_preserves_metadata():
     with pytest.raises(ValueError, match="Room not found"):
         await facade.save_agent_message(
             "missing",
-            AgentMessageInput(room_id="missing", agent_id="a1"),
+            AgentMessageInput(conversation_id="missing", agent_id="a1"),
         )
 
     message_id = await facade.save_agent_message(
         "r1",
         AgentMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             agent_id="a1",
             content={"message_text": "working"},
             parent_message_id="msg-user",
@@ -505,7 +507,7 @@ async def test_update_agent_message_does_not_rehydrate_existing_task_metadata():
         "message_created_at": NOW,
     }
     incoming = RoomAgentMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="a1",
         agent_id="agent",
         related_message_id="u1",
@@ -620,7 +622,7 @@ async def test_auto_fail_ignores_durable_orchestrator_projection():
 async def test_legacy_user_message_persistence_strips_ephemeral_fields():
     facade, _, messages, _, _ = _facade(ids=["unused-id"])
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="legacy-user",
         user_id="user",
         message_content=MessageContent(
@@ -651,7 +653,7 @@ async def test_legacy_user_message_persistence_strips_ephemeral_fields():
 async def test_facade_persists_internal_fingerprint_and_returns_typed_outcome():
     facade, _, messages, _, _ = _facade(ids=["generated-message-id"])
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="",
         user_id="user",
         client_request_id="request-1",
@@ -701,7 +703,7 @@ async def test_internal_idempotency_fields_are_not_exposed_by_user_message_model
 def test_ensure_user_message_id_assigns_once_and_is_idempotent():
     facade, _, _, _, _ = _facade(ids=["generated-message-id"])
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="",
         user_id="user",
         message_content=MessageContent(message_text="hello"),
@@ -725,13 +727,13 @@ async def test_quote_materialization_validates_source_and_dual_writes_extend_inf
         "message_created_at": NOW,
     }
     room = Room(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         room_owner_id="owner",
         room_owner_name="Owner",
     )
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         user_id="user",
         message_content=MessageContent(message_text="reply"),
@@ -757,7 +759,7 @@ async def test_quote_materialization_validates_source_and_dual_writes_extend_inf
         "quoted_sender_name": "Agent One",
         "quote_id": "quote-1",
     }
-    assert quote_repo.inserted[0].room_id == "r1"
+    assert quote_repo.inserted[0].conversation_id == "r1"
     assert quote_repo.inserted[0].text == "quoted text"
 
 
@@ -773,13 +775,13 @@ async def test_quote_materialization_rejects_invalid_source_room():
         "message_created_at": NOW,
     }
     room = Room(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         room_owner_id="owner",
         room_owner_name="Owner",
     )
     user_message = RoomUserMessage(
-        room_id="r1",
+        conversation_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="reply"),
         quote={
@@ -818,7 +820,7 @@ async def test_create_room_activates_epoch_after_persist():
     assert active is not None
     assert active.epoch == 1
     assert active.creation_id
-    assert room.room_id == "room-created"
+    assert room.conversation_id == "room-created"
     assert await facade.get_room("room-created") is not None
     assert rooms.deleted_ids == []
 
@@ -856,7 +858,7 @@ async def test_create_room_tolerates_epoch_replay():
         )
     )
 
-    assert room.room_id == "room-created"
+    assert room.conversation_id == "room-created"
     assert rooms.deleted_ids == []
     assert await facade.get_room("room-created") is not None
 
@@ -954,9 +956,9 @@ class FakeRoomRepository:
         self.membership_updates: list[dict] = []
         self.update_field_calls: list[tuple[str, dict]] = []
 
-    async def get_by_id(self, room_id: str) -> dict | None:
-        self.get_by_id_calls.append(room_id)
-        doc = self.docs.get(room_id)
+    async def get_by_id(self, conversation_id: str) -> dict | None:
+        self.get_by_id_calls.append(conversation_id)
+        doc = self.docs.get(conversation_id)
         return deepcopy(doc) if doc is not None else None
 
     async def get_by_owner(self, owner_id: str) -> list[dict]:
@@ -971,22 +973,22 @@ class FakeRoomRepository:
         self.docs[room["room_id"]] = deepcopy(room)
         return room["room_id"]
 
-    async def update(self, room_id: str, updates: dict) -> bool:
-        if room_id not in self.docs:
+    async def update(self, conversation_id: str, updates: dict) -> bool:
+        if conversation_id not in self.docs:
             return False
-        self.docs[room_id].update(deepcopy(updates))
+        self.docs[conversation_id].update(deepcopy(updates))
         return True
 
-    async def update_fields(self, room_id: str, updates: dict) -> dict | None:
-        self.update_field_calls.append((room_id, deepcopy(updates)))
-        if room_id not in self.docs:
+    async def update_fields(self, conversation_id: str, updates: dict) -> dict | None:
+        self.update_field_calls.append((conversation_id, deepcopy(updates)))
+        if conversation_id not in self.docs:
             return None
-        self.docs[room_id].update(deepcopy(updates))
-        return deepcopy(self.docs[room_id])
+        self.docs[conversation_id].update(deepcopy(updates))
+        return deepcopy(self.docs[conversation_id])
 
     async def set_membership(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         agent_set: dict[str, str],
         membership_origin: str,
@@ -1002,13 +1004,13 @@ class FakeRoomRepository:
             "source_group_name": source_group_name,
         }
         self.membership_updates.append(deepcopy(updates))
-        return await self.update_fields(room_id, updates)
+        return await self.update_fields(conversation_id, updates)
 
-    async def delete(self, room_id: str) -> bool:
-        if room_id not in self.docs:
+    async def delete(self, conversation_id: str) -> bool:
+        if conversation_id not in self.docs:
             return False
-        self.deleted_ids.append(room_id)
-        del self.docs[room_id]
+        self.deleted_ids.append(conversation_id)
+        del self.docs[conversation_id]
         return True
 
 
@@ -1024,11 +1026,11 @@ class FakeMessageRepository:
         return message["message_id"]
 
     async def get_user_message_by_idempotency_key(
-        self, room_id: str, client_request_id: str
+        self, conversation_id: str, client_request_id: str
     ) -> dict | None:
         for message in self.user_messages.values():
             if (
-                message.get("room_id") == room_id
+                message.get("room_id") == conversation_id
                 and message.get("client_request_id") == client_request_id
             ):
                 return deepcopy(message)
@@ -1086,18 +1088,18 @@ class FakeMessageRepository:
         return out
 
     async def get_for_room(
-        self, room_id: str, limit: int, before: datetime | None = None
+        self, conversation_id: str, limit: int, before: datetime | None = None
     ) -> list[dict]:
         docs = [
             *[
                 deepcopy(doc)
                 for doc in self.user_messages.values()
-                if doc.get("room_id") == room_id
+                if doc.get("room_id") == conversation_id
             ],
             *[
                 deepcopy(doc)
                 for doc in self.agent_messages.values()
-                if doc.get("room_id") == room_id
+                if doc.get("room_id") == conversation_id
             ],
         ]
         return docs[:limit]
@@ -1120,26 +1122,26 @@ class FakeMessageRepository:
         self.agent_messages[message_id].update(deepcopy(updates))
         return True
 
-    async def delete_for_room(self, room_id: str) -> dict[str, int]:
-        self.deleted_rooms.append(room_id)
+    async def delete_for_room(self, conversation_id: str) -> dict[str, int]:
+        self.deleted_rooms.append(conversation_id)
         return {"user_messages": 0, "agent_messages": 0}
 
     async def get_user_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         return [
             deepcopy(doc)
             for doc in self.user_messages.values()
-            if doc.get("room_id") == room_id
+            if doc.get("room_id") == conversation_id
         ][:limit]
 
     async def get_agent_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         return [
             deepcopy(doc)
             for doc in self.agent_messages.values()
-            if doc.get("room_id") == room_id
+            if doc.get("room_id") == conversation_id
         ][:limit]
 
     async def get_agent_messages_by_related_message_id(

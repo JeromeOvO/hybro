@@ -1956,7 +1956,7 @@ async def test_runtime_surface_publication_requires_exact_parked_target(
         )
     publish.assert_not_awaited()
     emit.assert_not_awaited()
-    assert await owner.get_published_interactions(call.room_id) == []
+    assert await owner.get_published_interactions(call.conversation_id) == []
 
 
 @pytest.mark.parametrize("outcome", ["stale", "conflict", "absent", "error"])
@@ -1991,7 +1991,7 @@ async def test_runtime_surface_rejected_visibility_write_emits_no_hitl(
             interaction_id="interaction-1",
         )
     emit.assert_not_awaited()
-    assert await runtime.hitl.get_published_interactions(call.room_id) == []
+    assert await runtime.hitl.get_published_interactions(call.conversation_id) == []
 
 
 @pytest.mark.parametrize("state", ["input_required", "auth_required"])
@@ -2028,5 +2028,5 @@ async def test_runtime_surface_legitimate_visibility_replay_completes_publicatio
         interaction_id="interaction-1",
     )
     assert publish.await_count == emit.await_count == 2
-    assert len(await runtime.hitl.get_published_interactions(call.room_id)) == 1
+    assert len(await runtime.hitl.get_published_interactions(call.conversation_id)) == 1
     assert await ledger.load_by_record_id(call.call_record_id) == call

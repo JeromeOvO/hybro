@@ -6,7 +6,7 @@ vi.mock('@/lib/auth', () => ({ useUser: () => ({ user: { id: 'u' }, isLoaded: tr
 vi.mock('@/hooks/useMcpStatus', () => ({ useMcpStatus: () => ({ status: 'ready', refresh: vi.fn() }) }))
 const history = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }))
 const refreshNetworks = vi.hoisted(() => vi.fn())
-vi.mock('@/hooks/useRoomHistory', () => ({ useRoomHistory: () => ({ refetch: history.refetch, data: { items: [{ room_id: 'r1', title: 'Trip plan', last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status: 'awaiting_input' }] }, dataUpdatedAt: Date.parse('2026-10-10T10:42:00Z'), isLoading: false, isError: history.isError }) }))
+vi.mock('@/hooks/useRoomHistory', () => ({ useRoomHistory: () => ({ refetch: history.refetch, data: { items: [{ conversation_id: 'r1', title: 'Trip plan', last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status: 'awaiting_input' }] }, dataUpdatedAt: Date.parse('2026-10-10T10:42:00Z'), isLoading: false, isError: history.isError }) }))
 vi.mock('@/hooks/useSessions', () => ({ useSessions: () => ({ data: { sessions: [{ session_id: 's1', client_label: 'Buyer agent', agents: [{ agent_id: 'a', name: 'writer' }], title: 'Generate a travel plan', state: 'waiting_on_owner', paused_agent_id: 'a', conversation_id: 'c1', opened_at: '2026-10-10T00:00:00Z', last_activity_at: '2026-10-10T00:00:00Z', closed_at: null }] }, isLoading: false, isError: false, refetch: vi.fn() }) }))
 vi.mock('@/hooks/useNetworks', () => ({
   useNetworks: () => ({ networks: [], agents: [{ ...placeholderAgent('a', '', 'active'), name: 'writer', roomCalls: 2 }], loading: false, agentsLoading: false, error: null, agentsError: null, refresh: refreshNetworks }),

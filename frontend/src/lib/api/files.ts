@@ -51,7 +51,7 @@ export async function uploadFile(
 ): Promise<FileUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  formData.append('room_id', roomId)
+  formData.append('conversation_id', roomId)
 
   const headers: Record<string, string> = {}
   if (getToken) {

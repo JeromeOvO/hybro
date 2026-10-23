@@ -9,6 +9,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from common.a2a_constants import FAILURE_STATES, TERMINAL_STATES, CommonTaskState
+from common.dto.base import to_stored_conversation_keys
 from common.utils.a2a_helpers import sanitize_artifact_parts
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -52,10 +53,12 @@ class ConversationMessageStore:
 
     async def get_room_user_messages_by_room_id(
         self,
-        room_id: str,
+        conversation_id: str,
     ) -> list[RoomUserMessage]:
         try:
-            docs = await self._message_repository.get_user_messages_for_room(room_id)
+            docs = await self._message_repository.get_user_messages_for_room(
+                conversation_id
+            )
             messages = [
                 _safe_parse_user_message(doc) for doc in docs if doc is not None
             ]
@@ -77,10 +80,12 @@ class ConversationMessageStore:
 
     async def get_room_agent_messages_by_room_id(
         self,
-        room_id: str,
+        conversation_id: str,
     ) -> list[RoomAgentMessage]:
         try:
-            docs = await self._message_repository.get_agent_messages_for_room(room_id)
+            docs = await self._message_repository.get_agent_messages_for_room(
+                conversation_id
+            )
             messages = [
                 _safe_parse_agent_message(doc) for doc in docs if doc is not None
             ]
@@ -113,7 +118,7 @@ class ConversationMessageStore:
             if room_agent_message.message_id == "":
                 room_agent_message.message_id = str(uuid.uuid4())
             await self._message_repository.save_agent_message(
-                room_agent_message.model_dump(mode="json")
+                to_stored_conversation_keys(room_agent_message.model_dump(mode="json"))
             )
             return True
         except Exception:
@@ -124,7 +129,9 @@ class ConversationMessageStore:
         try:
             if room_user_message.message_id == "":
                 room_user_message.message_id = str(uuid.uuid4())
-            doc = room_user_message.model_dump(mode="json", exclude={"quote"})
+            doc = to_stored_conversation_keys(
+                room_user_message.model_dump(mode="json", exclude={"quote"})
+            )
             _strip_file_urls(doc)
             return bool(await self._message_repository.save_user_message(doc))
         except Exception:
@@ -201,7 +208,9 @@ class ConversationMessageStore:
         self, message_id: str, room_user_message: RoomUserMessage
     ) -> bool:
         try:
-            update_data = room_user_message.model_dump(exclude_unset=True, mode="json")
+            update_data = to_stored_conversation_keys(
+                room_user_message.model_dump(exclude_unset=True, mode="json")
+            )
             _strip_file_urls(update_data)
             return await self._message_repository.update_user_message(
                 message_id,
@@ -215,14 +224,16 @@ class ConversationMessageStore:
         self, room_agent_message: RoomAgentMessage
     ) -> None:
         try:
-            raw_candidate = room_agent_message.model_dump(mode="json")
+            raw_candidate = to_stored_conversation_keys(
+                room_agent_message.model_dump(mode="json")
+            )
             for field in ("room_id", "message_id"):
                 value = raw_candidate.get(field)
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(f"Agent-message upsert requires non-empty {field}")
             candidate = normalize_timeline_document(raw_candidate)
             message_id = candidate["message_id"]
-            room_id = candidate["room_id"]
+            conversation_id = candidate["room_id"]
             existing = await self._room_agent_messages.find_one(
                 {"message_id": message_id}
             )
@@ -239,7 +250,7 @@ class ConversationMessageStore:
                     if existing is None:
                         raise
 
-            if existing.get("room_id") != room_id:
+            if existing.get("room_id") != conversation_id:
                 raise ValueError("Agent-message upsert room_id mismatch")
             existing_state = (
                 ((existing.get("message_content") or {}).get("message_task") or {}).get(
@@ -301,8 +312,8 @@ class ConversationMessageStore:
                 raise RuntimeError("Agent-message upsert lost replacement CAS")
         except Exception:
             logger.error(
-                "Failed to upsert room agent message room_id=%s message_id=%s",
-                room_agent_message.room_id,
+                "Failed to upsert room agent message conversation_id=%s message_id=%s",
+                room_agent_message.conversation_id,
                 room_agent_message.message_id,
                 exc_info=True,
             )
@@ -322,7 +333,9 @@ class ConversationMessageStore:
     ) -> bool:
         try:
             update_data = _strip_unset_task_tracking_fields(
-                room_agent_message.model_dump(exclude_unset=True, mode="json")
+                to_stored_conversation_keys(
+                    room_agent_message.model_dump(exclude_unset=True, mode="json")
+                )
             )
             return await self._message_repository.update_agent_message(
                 message_id,
@@ -370,15 +383,15 @@ class ConversationMessageStore:
             )
             return False
 
-    async def turn_exists(self, room_id: str, turn_id: str) -> bool:
+    async def turn_exists(self, conversation_id: str, turn_id: str) -> bool:
         try:
             user = await self._room_user_messages.find_one(
-                {"room_id": room_id, "turn_id": turn_id}
+                {"room_id": conversation_id, "turn_id": turn_id}
             )
             if user is not None:
                 return True
             agent = await self._room_agent_messages.find_one(
-                {"room_id": room_id, "turn_id": turn_id}
+                {"room_id": conversation_id, "turn_id": turn_id}
             )
             return agent is not None
         except Exception:
@@ -1464,10 +1477,12 @@ class ConversationMessageStore:
         another room is a conflict.
         """
         message_id = document["message_id"]
-        room_id = document["room_id"]
+        conversation_id = document["room_id"]
         existing = await self._room_agent_messages.find_one({"message_id": message_id})
         if existing is not None:
-            return "replayed" if existing.get("room_id") == room_id else "conflict"
+            return (
+                "replayed" if existing.get("room_id") == conversation_id else "conflict"
+            )
         try:
             await self._room_agent_messages.insert_one(
                 normalize_timeline_document(document)
@@ -1476,7 +1491,7 @@ class ConversationMessageStore:
             existing = await self._room_agent_messages.find_one(
                 {"message_id": message_id}
             )
-            if existing is None or existing.get("room_id") != room_id:
+            if existing is None or existing.get("room_id") != conversation_id:
                 return "conflict"
             return "replayed"
         return "accepted"

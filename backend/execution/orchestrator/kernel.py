@@ -3651,7 +3651,7 @@ class OrchestratorKernel:
             # The budget identity still owns the closed Turn, even though the
             # advisory active pointers no longer identify it.
             turn_id = invocation_key.split(":", 1)[0]
-            records = await self.canonical_event_reader(run.room_id, run.run_id)
+            records = await self.canonical_event_reader(run.conversation_id, run.run_id)
             kinds = {
                 data.get("type")
                 for record in records
@@ -3977,7 +3977,7 @@ class OrchestratorKernel:
             # without public history, do not adopt an older Assistant as one.
             return run, None
         records = (
-            await self.canonical_event_reader(run.room_id, run.run_id)
+            await self.canonical_event_reader(run.conversation_id, run.run_id)
             if self.canonical_event_reader is not None
             else []
         )
@@ -4288,7 +4288,7 @@ class OrchestratorKernel:
                     )
 
         canonical_records = (
-            await self.canonical_event_reader(run.room_id, run.run_id)
+            await self.canonical_event_reader(run.conversation_id, run.run_id)
             if self.canonical_event_reader is not None
             else []
         )
@@ -4784,7 +4784,7 @@ class OrchestratorKernel:
             event_intent_id=self.id_factory.new_id("intent-event"),
             final_message_intent_id=self.id_factory.new_id("intent-message"),
             public_run_intent_id=self.id_factory.new_id("intent-run"),
-            final_message_target=run.room_id,
+            final_message_target=run.conversation_id,
             public_run_target=run.run_id,
             created_at=self.clock.now(),
         )
@@ -4831,7 +4831,7 @@ class OrchestratorKernel:
         lifecycle = self._lifecycle_context.get()
         active_turn_id = run.active_internal_turn_id
         canonical_records = (
-            await self.canonical_event_reader(run.room_id, run.run_id)
+            await self.canonical_event_reader(run.conversation_id, run.run_id)
             if self.canonical_event_reader is not None
             else []
         )
@@ -5239,7 +5239,7 @@ class OrchestratorKernel:
                 described = (
                     await self.artifact_metadata_reader(
                         ref_id,
-                        room_id=current.room_id,
+                        conversation_id=current.conversation_id,
                         room_epoch=current.request.room_epoch,
                     )
                     if self.artifact_metadata_reader is not None

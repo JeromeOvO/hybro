@@ -1054,7 +1054,7 @@ describe('buildTurns – V2 data model', () => {
     const privateSentinel = 'PRIVATE_SENTINEL_timeline_spoofed_hitl'
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const incoming = await convertApiMessageToIncoming({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       message_id: 'a1',
       message_created_at: '2026-01-01T00:00:01Z',
       message_type: 'agent',
@@ -1092,7 +1092,7 @@ describe('buildTurns – V2 data model', () => {
   it('creates HITL UI state from trusted backend-projected API metadata', async () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const incoming = await convertApiMessageToIncoming({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       message_id: 'a1',
       message_created_at: '2026-01-01T00:00:01Z',
       message_type: 'agent',
@@ -1990,7 +1990,7 @@ describe('primaryStreamMessageId', () => {
     const privateSentinel = 'PRIVATE_SENTINEL_frontend_timeline'
     const user = makeUserEntity({ id: 'u1' })
     const incoming = await convertApiMessageToIncoming({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       message_id: 'a1',
       message_created_at: '2026-07-12T12:00:00Z',
       message_type: 'agent',
@@ -2031,7 +2031,7 @@ describe('primaryStreamMessageId', () => {
     const privateSentinel = 'PRIVATE_SENTINEL_frontend_timeline_failed_status'
     const user = makeUserEntity({ id: 'u1' })
     const incoming = await convertApiMessageToIncoming({
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       message_id: 'a1',
       message_created_at: '2026-07-12T12:00:00Z',
       message_type: 'agent',

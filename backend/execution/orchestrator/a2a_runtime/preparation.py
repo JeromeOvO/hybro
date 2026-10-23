@@ -43,7 +43,7 @@ class RunPreparedInvocationSnapshotReader:
             or binding.run_id != run.run_id
             or binding.binding_digest != invocation.tool.binding.binding_digest
             or binding.tool_name != invocation.tool.definition.name
-            or binding.room_id != run.room_id
+            or binding.conversation_id != run.conversation_id
             or binding.room_epoch != run.request.room_epoch
         ):
             return None
@@ -51,14 +51,14 @@ class RunPreparedInvocationSnapshotReader:
             arguments=invocation.arguments,
             run_manifest=run.resource_manifest,
             binding=binding,
-            source_room_id=run.room_id,
+            source_conversation_id=run.conversation_id,
             source_room_epoch=run.request.room_epoch,
             root_context_source_message_id=run.request.user_message_id,
         )
         return PreparedInvocationSnapshot(
             run_id=run.run_id,
             invocation_id=invocation.invocation_id,
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             room_epoch=run.request.room_epoch,
             requesting_subject_id=run.request.requesting_subject_id,
             binding=binding,

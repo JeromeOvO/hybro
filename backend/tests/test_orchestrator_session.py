@@ -466,7 +466,7 @@ async def test_session_events_carry_delivery_correlation_fields():
 
     assert observed
     for event in observed:
-        assert event.room_id == "room-1"
+        assert event.conversation_id == "room-1"
         assert event.client_request_id == "request-run-1"
         assert event.user_message_id
 

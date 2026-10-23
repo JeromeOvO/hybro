@@ -184,7 +184,7 @@ def _one_liner_fallback(turn: dict[str, Any]) -> str | None:
 async def _content_for_compact_turn(
     content_collection: Any,
     *,
-    room_id: Any,
+    conversation_id: Any,
     turn: dict[str, Any],
 ) -> str | None:
     content_ref = turn.get("content_ref")
@@ -200,11 +200,11 @@ async def _content_for_compact_turn(
     turn_id = turn.get("turn_id")
     if (
         (document is None or is_content_expired(document))
-        and room_id is not None
+        and conversation_id is not None
         and turn_id is not None
     ):
         document = await content_collection.find_one(
-            {"room_id": room_id, "turn_id": turn_id}
+            {"room_id": conversation_id, "turn_id": turn_id}
         )
 
     if document is None or is_content_expired(document):
@@ -217,7 +217,7 @@ async def plan_document_with_backfill(
 ) -> DocumentPlan:
     """Reconcile a document, then normalize every compact turn."""
     plan = plan_document(row)
-    room_id = row.get("room_id")
+    conversation_id = row.get("room_id")
     for index, turn in enumerate(plan.history):
         if turn.get("representation") != "compact":
             continue
@@ -237,7 +237,7 @@ async def plan_document_with_backfill(
         if _nonempty_string(turn.get("brief_summary")) is None:
             source = await _content_for_compact_turn(
                 content_collection,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 turn=turn,
             )
             if source is None:

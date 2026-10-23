@@ -19,7 +19,7 @@ async def test_nonterminal_preflight_emits_only_processing_compatibility_status(
     )
 
     await emit_processing_status(
-        room_id="room-1",
+        conversation_id="room-1",
         status="processing",
         message_id="message-1",
         event_publisher=publisher,

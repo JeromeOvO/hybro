@@ -147,7 +147,7 @@ class ProcessingStatusCall:
     path: str
     function_or_method: str
     line: int
-    room_id_expression: str | None
+    conversation_id_expression: str | None
     status_expression: str | None
     sse_message_id_expression: str | None
     client_request_id_expression: str | None
@@ -163,7 +163,7 @@ class ProcessingStatusCall:
         if self.function_or_method != entry.get("function_or_method"):
             return False
         fields = (
-            "room_id_expression",
+            "conversation_id_expression",
             "status_expression",
             "sse_message_id_expression",
             "client_request_id_expression",
@@ -198,7 +198,9 @@ def _discover_calls() -> list[ProcessingStatusCall]:
             else:
                 continue
             if call_name == "send_processing_status":
-                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                conversation_id_expression = _unparse(
+                    _arg_or_kw(node, 0, "conversation_id")
+                )
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
                 sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
                 client_request_id_expression = _unparse(
@@ -223,7 +225,9 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                 rel_path.startswith("execution/")
                 and call_name in EXECUTION_STATUS_HELPERS
             ):
-                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                conversation_id_expression = _unparse(
+                    _arg_or_kw(node, 0, "conversation_id")
+                )
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
                 sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
                 client_request_id_expression = _unparse(
@@ -239,7 +243,7 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                     path=rel_path,
                     function_or_method=_enclosing_function(node, parents),
                     line=node.lineno,
-                    room_id_expression=room_id_expression,
+                    conversation_id_expression=conversation_id_expression,
                     status_expression=status_expression,
                     sse_message_id_expression=sse_message_id_expression,
                     client_request_id_expression=client_request_id_expression,
@@ -372,7 +376,7 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
             + "\n".join(
                 f"- {call.path}:{call.line} {call.function_or_method} "
                 f"{call.delivery_expression}.send_processing_status("
-                f"{call.room_id_expression}, {call.status_expression}, "
+                f"{call.conversation_id_expression}, {call.status_expression}, "
                 f"{call.sse_message_id_expression})"
                 for call in unlisted
             )
@@ -401,7 +405,9 @@ async def send(flag):
         path="example.py",
         function_or_method="send",
         line=send_call.lineno,
-        room_id_expression=_unparse(_arg_or_kw(send_call, 0, "room_id")),
+        conversation_id_expression=_unparse(
+            _arg_or_kw(send_call, 0, "conversation_id")
+        ),
         status_expression=_unparse(_arg_or_kw(send_call, 1, "status")),
         sse_message_id_expression=_unparse(_arg_or_kw(send_call, 2, "message_id")),
         client_request_id_expression=None,

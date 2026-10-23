@@ -208,7 +208,7 @@ Route groups:
 - `session_routes.py`: `/sessions`.
 - `sse_routes.py`: room SSE stream, SSE status, event replay, and message
   cancellation.
-- `hitl_routes.py`: `/rooms/{room_id}/hitl` pending reads, batch answers, and
+- `hitl_routes.py`: `/rooms/{conversation_id}/hitl` pending reads, batch answers, and
   interaction cancellation.
 - `files_routes.py`: room file upload and content download.
 - `inspection_routes.py`: Agent Card and A2A connection inspection.
@@ -636,6 +636,18 @@ deleted per room epoch by the orchestrator epoch cleanup;
 `orchestrator_hitl_interactions`, `orchestrator_recovery_leases`, `room_events`,
 `room_event_seq`, `sessions`, `migration_markers`, and `agent_capability_issues`
 are retained, with no deletion or TTL.
+
+Code, DTOs, HTTP, and SSE name the conversation `conversation_id`. Mongo stores
+it as `room_id` in every collection, including indexes, aggregation paths, and
+nested paths such as `route.room_id`; the key is mapped at the repository
+boundary. Persisted-only models (orchestrator contracts, HITL aggregates, internal
+events) declare `common.dto.base.stored_conversation_id` and dump `room_id`;
+models that are also returned on the wire (`Room`, room messages, quotes,
+capability issues) read either key through `accepts_stored_conversation_id`, and
+their writers rename the key with `to_stored_conversation_keys`. Persisted digests
+hash the literal key `room_id`. Redis keys keep their `room:` and `sse:room:`
+prefixes. The cross-instance SSE envelope and internal event payloads still emit
+`room_id` for rolling deploys, and readers accept `conversation_id` or `room_id`.
 
 ### Contracts
 
@@ -1161,8 +1173,8 @@ status. See the [local MCP instructions](../README.md#local-mcp-access). The
 
 ## Core Workflow: Frontend Room Message
 
-1. The frontend opens `GET /api/v1/sse/room/{room_id}/stream`.
-2. It posts to `POST /api/v1/rooms/{room_id}/messages` with `message`,
+1. The frontend opens `GET /api/v1/sse/room/{conversation_id}/stream`.
+2. It posts to `POST /api/v1/rooms/{conversation_id}/messages` with `message`,
    `client_request_id`, optional attachments or inline file IDs, and the
    execution contract (`mode`, `agent_scope`).
 3. `api_gateway.routes.room_routes.send_message` verifies room ownership,
@@ -1173,7 +1185,7 @@ status. See the [local MCP instructions](../README.md#local-mcp-access). The
    graceful shutdown without terminalizing their durable Runs.
 4. `ExecutionFacade.execute`:
    - computes the versioned request fingerprint and looks up the normalized
-     `(room_id, client_request_id)` key before any pending-HITL or active-Run
+     `(conversation_id, client_request_id)` key before any pending-HITL or active-Run
      rejection;
    - returns the existing `message_id` without dispatch metadata for a valid
      replay, or a body-level `409` for a fingerprint conflict;
@@ -1209,7 +1221,7 @@ message or committed file references.
 
 ### Execution contract
 
-`POST /rooms/{room_id}/messages` requires a request-scoped contract:
+`POST /rooms/{conversation_id}/messages` requires a request-scoped contract:
 
 ```json
 {
@@ -1288,9 +1300,9 @@ operator repair, and replay does not repeat those effects.
 
 `GET /api/v1/rooms` derives ownership from the principal and returns at most 100
 lightweight summaries. Pinned rooms are ordered by `pin_order`; unpinned rooms by
-`last_activity_at`. `PATCH /api/v1/rooms/{room_id}` updates the title or pin
+`last_activity_at`. `PATCH /api/v1/rooms/{conversation_id}` updates the title or pin
 state, `PUT /api/v1/rooms/pinned-order` validates ownership before persisting a
-complete order, and `DELETE /api/v1/rooms/{room_id}` runs room deletion. User and
+complete order, and `DELETE /api/v1/rooms/{conversation_id}` runs room deletion. User and
 newly saved agent messages advance `last_activity_at` with a monotonic `$max`;
 streaming status, task, and artifact updates do not rewrite the room. The read is
 a projected aggregation capped at 100 rows using the `owner_history_order`
@@ -1301,7 +1313,7 @@ unbadged.
 
 ### Stable Room timeline pagination
 
-`GET /api/v1/rooms/{room_id}/messages` accepts optional `limit` (default and
+`GET /api/v1/rooms/{conversation_id}/messages` accepts optional `limit` (default and
 maximum `200`, minimum `1`) and an opaque `cursor`. The first request returns the
 newest page across user and Agent collections; `next_cursor` loads older data.
 Each page passes the public attachment, artifact/status, HITL, task-label,
@@ -1921,7 +1933,7 @@ Backend modules emit typed `common.dto.DeliveryEvent` objects; Delivery is the
 only layer that translates them into room SSE frames:
 
 ```json
-{"type": "event_name", "timestamp": "ISO-8601", "room_id": "room-id", "data": {}}
+{"type": "event_name", "timestamp": "ISO-8601", "conversation_id": "room-id", "data": {}}
 ```
 
 `ProcessingStatusEvent` supports `queued`, `processing`, `awaiting_input`,
@@ -1932,8 +1944,8 @@ public delivery dead letters), `CrossInstanceEventBus` (Redis Pub/Sub room
 fan-out), and `TerminalStatusDeduplicator`. Routes reach it as
 `SSERouteTransport` through `APIGatewayDeps.sse_transport`.
 
-Frontend SSE is room-scoped (`GET /api/v1/sse/room/{room_id}/stream`), and
-`GET /sse/room/{room_id}/events?after=<seq>&limit=N` replays persisted events
+Frontend SSE is room-scoped (`GET /api/v1/sse/room/{conversation_id}/stream`), and
+`GET /sse/room/{conversation_id}/events?after=<seq>&limit=N` replays persisted events
 with the same auth.
 
 ### Durable room event log
@@ -2006,7 +2018,7 @@ dispatch, so a follow-up challenge cannot overtake the interaction it replaces.
 Full message cancellation and direct interaction cancellation publish canceled
 responses before descendant cleanup and abort the Run.
 
-`GET /api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail`
+`GET /api/v1/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail`
 returns the private Tool output of one call to the room owner
 (`CanonicalAgentCallDetailService`); it never returns provider call IDs or Agent
 profile IDs. It accepts only exact `/api/v1/files/{file_id}/content` artifact
@@ -2077,9 +2089,9 @@ Active-Run reads use the canonical `orchestrator_runs` aggregate through
 `ExecutionFacade.bind_active_run_reader`. `awaiting_user` maps to public
 `awaiting_input`, other nonterminal states to `processing`, and the Run's User
 message is the public trigger. The same reader serves send-time exclusion, room
-settings, `GET /rooms/{room_id}/active-runs`, and room-history status.
+settings, `GET /rooms/{conversation_id}/active-runs`, and room-history status.
 
-Routes under `/api/v1/rooms/{room_id}/hitl`:
+Routes under `/api/v1/rooms/{conversation_id}/hitl`:
 
 - `GET /pending` uses the strict store read: persistence failures propagate as
   an HTTP failure rather than an empty list. Refresh and reconnect recovery use it
@@ -2128,7 +2140,7 @@ one question per missing detail with a header, two to four described choices,
 and `allow_other`.
 
 The frontend treats `hitl_request` and `hitl_response` as durable lifecycle
-events keyed by `room_id`, `request_id`, and `message_id`. `client_request_id` is
+events keyed by `conversation_id`, `request_id`, and `message_id`. `client_request_id` is
 included when resolvable and stored on the request as best-effort metadata, but
 it is not required to apply a HITL request, unlike turn-correlated frames such as
 `processing_status`, `task_update`, and `agent_response_partial`.
@@ -2236,7 +2248,7 @@ not proceed", sent on owner reject and on client close.
 ## Context Memory Workflow
 
 ```text
-frontend POST /api/v1/rooms/{room_id}/messages
+frontend POST /api/v1/rooms/{conversation_id}/messages
   -> Execution / Conversation persist the user message
   -> common.eventing publishes local-only MessageCommitted after persistence
   -> ContextMemoryEventHandler reloads the authoritative message
@@ -2448,7 +2460,7 @@ stopped and a verified `room_memories` backup), and timeline keys with
 
 ## Error and Recovery Model
 
-- Request idempotency (`(room_id, client_request_id)` plus fingerprint) prevents
+- Request idempotency (`(conversation_id, client_request_id)` plus fingerprint) prevents
   duplicate orchestration of a send.
 - The active-room unique index allows one non-terminal Run per room.
 - The canonical `orchestrator_runs` aggregate, its recovery leases, and the

@@ -26,7 +26,7 @@ class AgentToolCandidateSource(Protocol):
         self,
         *,
         run_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         requesting_subject_id: str,
         candidate_agent_ids: list[str],
@@ -55,7 +55,7 @@ class AgentToolCatalogAssembler:
         self,
         *,
         run_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         requesting_subject_id: str,
         candidate_scope: CandidateScopeSnapshot,
@@ -63,11 +63,11 @@ class AgentToolCatalogAssembler:
         authorization_basis_digest: str,
         created_at: datetime,
     ) -> PreparedAgentCatalog:
-        if not await self.room_epoch_store.verify_active(room_id, room_epoch):
+        if not await self.room_epoch_store.verify_active(conversation_id, room_epoch):
             raise PermissionError("Room epoch is not active")
         candidates = await self.candidate_source.list_candidates(
             run_id=run_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_epoch=room_epoch,
             requesting_subject_id=requesting_subject_id,
             candidate_agent_ids=candidate_scope.agent_ids,
@@ -150,7 +150,7 @@ class AgentToolCatalogAssembler:
                 binding_id=binding_id,
                 binding_digest=binding_digest,
                 run_id=run_id,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 room_epoch=room_epoch,
                 tool_name=name,
                 definition=definition,

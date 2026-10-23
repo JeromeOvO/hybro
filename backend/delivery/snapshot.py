@@ -248,7 +248,7 @@ class RoomEventFold:
         if data.get("run_id") is not None:
             try:
                 validated = TaskSubmittedEvent(
-                    room_id=str(record.get("room_id") or "snapshot"),
+                    conversation_id=str(record.get("room_id") or "snapshot"),
                     **{
                         key: value
                         for key, value in data.items()
@@ -325,7 +325,7 @@ class RoomEventFold:
         if data.get("run_id") is not None:
             try:
                 validated = TaskUpdateEvent(
-                    room_id=str(record.get("room_id") or "snapshot"),
+                    conversation_id=str(record.get("room_id") or "snapshot"),
                     **{
                         key: value
                         for key, value in data.items()
@@ -468,7 +468,7 @@ class RoomEventFold:
                 raise ValueError("canonical run event contains unknown public fields")
             try:
                 validated = RunEventNotification(
-                    room_id=str(record.get("room_id") or "snapshot"),
+                    conversation_id=str(record.get("room_id") or "snapshot"),
                     event_id=data.get("event_id"),
                     delivery_id=data.get("delivery_id"),
                     trace_id=data.get("trace_id"),
@@ -1055,7 +1055,7 @@ class RoomEventFold:
         if data.get("run_id") is not None:
             try:
                 HITLRequestEvent(
-                    room_id=str(record.get("room_id") or "snapshot"),
+                    conversation_id=str(record.get("room_id") or "snapshot"),
                     **{
                         key: value
                         for key, value in data.items()
@@ -1149,7 +1149,7 @@ class RoomEventFold:
         if data.get("run_id") is not None:
             try:
                 HITLResolvedEvent(
-                    room_id=str(record.get("room_id") or "snapshot"),
+                    conversation_id=str(record.get("room_id") or "snapshot"),
                     **{
                         key: value
                         for key, value in data.items()
@@ -1261,25 +1261,25 @@ class SnapshotService:
         self._capacity = capacity
         self._read_limit = read_limit
         self._now = now or (lambda: datetime.now())
-        # room_id → (watermark room_seq, folded state dict)
+        # conversation_id → (watermark room_seq, folded state dict)
         self._checkpoints: OrderedDict[str, tuple[int, RoomEventFold]] = OrderedDict()
         self._room_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
 
     async def snapshot(  # noqa: C901
-        self, room_id: str, *, force: bool = False
+        self, conversation_id: str, *, force: bool = False
     ) -> dict[str, Any]:
-        lock = self._room_locks.setdefault(room_id, asyncio.Lock())
+        lock = self._room_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            return await self._snapshot_locked(room_id, force=force)
+            return await self._snapshot_locked(conversation_id, force=force)
 
     async def _snapshot_locked(  # noqa: C901
-        self, room_id: str, *, force: bool
+        self, conversation_id: str, *, force: bool
     ) -> dict[str, Any]:
         watermark = 0
         fold = RoomEventFold()
-        cached = self._checkpoints.get(room_id)
+        cached = self._checkpoints.get(conversation_id)
         if not force and cached is not None:
             watermark, cached_fold = cached
             # Never mutate the authoritative checkpoint until every new event
@@ -1292,7 +1292,7 @@ class SnapshotService:
         reached_gap = False
         while True:
             records = await self._store.read_range(
-                room_id,
+                conversation_id,
                 after=expected - 1,
                 limit=self._read_limit,
                 include_skipped=True,
@@ -1326,15 +1326,17 @@ class SnapshotService:
             cached_watermark, cached_fold = cached
             return cached_fold.state(room_seq=cached_watermark)
         if force or folded_any or watermark > 0:
-            self._remember(room_id, watermark, fold)
+            self._remember(conversation_id, watermark, fold)
         return fold.state(room_seq=watermark)
 
-    async def latest_seq(self, room_id: str) -> int:
-        return await self._store.latest_seq(room_id)
+    async def latest_seq(self, conversation_id: str) -> int:
+        return await self._store.latest_seq(conversation_id)
 
-    def _remember(self, room_id: str, watermark: int, fold: RoomEventFold) -> None:
-        self._checkpoints[room_id] = (watermark, fold)
-        self._checkpoints.move_to_end(room_id)
+    def _remember(
+        self, conversation_id: str, watermark: int, fold: RoomEventFold
+    ) -> None:
+        self._checkpoints[conversation_id] = (watermark, fold)
+        self._checkpoints.move_to_end(conversation_id)
         while len(self._checkpoints) > self._capacity:
             self._checkpoints.popitem(last=False)
 

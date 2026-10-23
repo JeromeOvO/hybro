@@ -47,7 +47,7 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     svc = ChatService()
     facade = AsyncMock()
     facade.create_room.return_value = RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="owner",
         owner_name="Owner",
@@ -88,10 +88,10 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     delete_response = await svc.delete_room("r1", requesting_user_id="owner")
 
     assert create_response.success is True
-    assert create_response.room.room_id == "r1"
+    assert create_response.room.conversation_id == "r1"
     assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
-    assert list_response.room_list[0].room_id == "r1"
-    assert history_response.room_list[0].room_id == "r1"
+    assert list_response.room_list[0].conversation_id == "r1"
+    assert history_response.room_list[0].conversation_id == "r1"
     assert rename_response.success is True
     assert delete_response.success is True
     facade.create_room.assert_awaited_once()
@@ -112,7 +112,7 @@ async def test_chat_service_room_setting_returns_room_metadata_only():
     svc = ChatService()
     facade = AsyncMock()
     facade.get_room.return_value = RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="owner",
         owner_name="Owner",
@@ -156,7 +156,7 @@ async def test_create_room_without_membership_input_seeds_empty_manual_membershi
     svc = ChatService()
     facade = AsyncMock()
     facade.create_room.return_value = RoomInfo(
-        room_id="r1", room_name="Room", owner_id="owner", owner_name="Owner"
+        conversation_id="r1", room_name="Room", owner_id="owner", owner_name="Owner"
     )
     svc.bind_facade(facade)
 
@@ -182,7 +182,7 @@ async def test_room_response_passes_stored_membership_status_through():
     svc = ChatService()
     facade = AsyncMock()
     facade.get_room.return_value = RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="owner",
         membership_origin="saved_group",
@@ -256,7 +256,7 @@ async def test_rename_maps_facade_errors_through_the_room_error_envelope():
 
     assert response.success is False
     assert response.status_code == 403
-    assert response.room_id == "r1"
+    assert response.conversation_id == "r1"
 
 
 @pytest.mark.asyncio
@@ -264,7 +264,7 @@ async def test_unpinning_clears_pin_order():
     svc = ChatService()
     facade = AsyncMock()
     facade.update_room.return_value = RoomInfo(
-        room_id="r1", room_name="Room", owner_id="owner"
+        conversation_id="r1", room_name="Room", owner_id="owner"
     )
     svc.bind_facade(facade)
 

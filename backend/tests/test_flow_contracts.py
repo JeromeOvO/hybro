@@ -68,11 +68,11 @@ class TestRoomLifecycleFlow:
             send_message,
         )
 
-        room_id = "flow-room-001"
+        conversation_id = "flow-room-001"
         message_id = "flow-msg-001"
 
         mock_room = Room(
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_name="Flow Test Room",
             room_owner_id=flow_user.user_id,
             room_owner_name="Flow User",
@@ -80,7 +80,7 @@ class TestRoomLifecycleFlow:
         )
 
         user_msg = RoomUserMessage(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             user_id=flow_user.user_id,
             message_content=MessageContent(message_text="Hello agents!"),
@@ -93,7 +93,7 @@ class TestRoomLifecycleFlow:
         mock_rc.create_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
                 success=True,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 room=mock_room,
             )
         )
@@ -130,7 +130,7 @@ class TestRoomLifecycleFlow:
             rooms=mock_rc,
         )
         assert create_resp.success is True
-        assert create_resp.room_id == room_id
+        assert create_resp.conversation_id == conversation_id
 
         # Verify endpoint set room_owner_id from auth user
         create_call = mock_rc.create_room.await_args.kwargs
@@ -139,14 +139,14 @@ class TestRoomLifecycleFlow:
 
         # Step 2: Query room setting (real endpoint verifies ownership)
         setting_resp = await inquiry_room_setting(
-            room_id,
+            conversation_id,
             flow_user,
             store=mock_db,
             engine=mock_execution_engine,
             rooms=mock_rc,
         )
         assert setting_resp.success is True
-        assert setting_resp.room.room_id == room_id
+        assert setting_resp.room.conversation_id == conversation_id
 
         # Step 3: Send message (real endpoint builds request,
         # calls execution engine, queues background task)
@@ -160,7 +160,7 @@ class TestRoomLifecycleFlow:
             }
         )
         send_resp = await send_message(
-            room_id,
+            conversation_id,
             req3,
             flow_user,
             store=mock_db,
@@ -173,7 +173,7 @@ class TestRoomLifecycleFlow:
 
         # Step 4: Query messages
         msgs_resp = await inquiry_room_messages(
-            room_id,
+            conversation_id,
             user=flow_user,
             store=mock_db,
             rooms=mock_rc,
@@ -200,7 +200,7 @@ class TestRoomLifecycleFlow:
         )
 
         mock_room = Room(
-            room_id="guarded-room",
+            conversation_id="guarded-room",
             room_name="Not Yours",
             room_owner_id=flow_user.user_id,
             room_owner_name="Flow User",
@@ -342,18 +342,18 @@ class TestMessageCancellationFlow:
     async def test_cancel_message_flow(self, flow_user):
         from api_gateway.routes.sse_routes import cancel_message
 
-        room_id = "cancel-flow-room"
+        conversation_id = "cancel-flow-room"
         msg_id = "cancel-flow-msg"
 
         mock_room = Room(
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_name="Cancel Room",
             room_owner_id=flow_user.user_id,
             room_owner_name="Flow User",
             room_agent_set={},
         )
         mock_msg = RoomUserMessage(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=msg_id,
             user_id=flow_user.user_id,
             message_content=MessageContent(message_text="Cancel me"),
@@ -387,7 +387,7 @@ class TestMessageCancellationFlow:
         assert result["success"] is True
         assert result["message_id"] == msg_id
         mock_execution_engine.cancel.assert_awaited_once_with(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=msg_id,
             requested_by_user_id=flow_user.user_id,
         )
@@ -428,7 +428,7 @@ class TestErrorHandlingFlow:
             claims={},
         )
         mock_room = Room(
-            room_id="r",
+            conversation_id="r",
             room_name="R",
             room_owner_id="real_owner",
             room_owner_name="Owner",

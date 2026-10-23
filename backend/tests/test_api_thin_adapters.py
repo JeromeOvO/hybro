@@ -586,7 +586,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
     expectations = {
         "inquiry_active_runs": (
             "common.protocols.ExecutionEngine",
-            ["_active_run_refs_for_room(room_id, engine)"],
+            ["_active_run_refs_for_room(conversation_id, engine)"],
         ),
         "send_message": (
             "common.protocols.ExecutionEngine",
@@ -641,8 +641,8 @@ def test_room_active_runs_inventory_records_execution_support():
     room_runtime_source = Path("conversation/runtime.py").read_text()
 
     assert "_require_execution_engine" not in route_source
-    assert "runs = await engine.get_runs_for_room(room_id)" in route_source
-    assert "active_runs=await _active_run_refs_for_room(room_id, engine)" in (
+    assert "runs = await engine.get_runs_for_room(conversation_id)" in route_source
+    assert "active_runs=await _active_run_refs_for_room(conversation_id, engine)" in (
         route_source
     )
     assert "_read_active_runs_for_room" not in room_runtime_source

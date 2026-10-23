@@ -89,7 +89,7 @@ async def test_room_processing_status_emits_the_public_event():
     )
 
     await emit_room_processing_status(
-        room_id="room-1",
+        conversation_id="room-1",
         status="processing",
         message_id="message-1",
         event_publisher=publisher,
@@ -98,7 +98,7 @@ async def test_room_processing_status_emits_the_public_event():
     )
 
     event = publisher.emit.await_args.args[0]
-    assert event.room_id == "room-1"
+    assert event.conversation_id == "room-1"
     assert event.message_id == "message-1"
     assert event.status == "processing"
     assert event.client_request_id == "client-1"

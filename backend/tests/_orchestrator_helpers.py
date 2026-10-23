@@ -126,12 +126,12 @@ def profile(
 def session_config(**profile_kwargs) -> RoomAgentSessionConfig:
     return RoomAgentSessionConfig(
         session_id="session-1",
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(**profile_kwargs),
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             source="test",
-            room_id="room-1",
+            conversation_id="room-1",
             agent_ids=[],
             authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
