@@ -13,7 +13,6 @@ from common.dto.hitl import (
     A2AInteractionSpec,
     HITLAuthorizationResultAnswer,
     HITLQuestionAnswer,
-    HITLRouteSnapshotV2,
 )
 from common.utils.logger import get_logger
 
@@ -42,6 +41,7 @@ from .models import (
     AgentCallLedgerRecord,
     DurableHITLAnswerRecord,
     HITLAnswerAppliedMarker,
+    HITLRouteSnapshotV2,
     NormalizedA2AObservation,
     VerifiedAuthReferenceBinding,
 )

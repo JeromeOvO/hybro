@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
-from common.protocols import RoomMemoryCleanupPort
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.response import RoomCenterRoomSettingResponse
+
+
+@runtime_checkable
+class RoomMemoryCleanupPort(Protocol):
+    async def delete_room_memory(self, room_id: str) -> bool: ...
+
 
 logger = get_logger(__name__)
 

@@ -9,7 +9,8 @@ import pytest
 
 ZERO_CONSUMER_PROTOCOLS = {
     "common.protocols.a2a_protocols": ("AgentTransport",),
-    "common.protocols.context_memory_protocols": (
+    # The module itself is gone; its zero-consumer names stay off the package.
+    "common.protocols": (
         "MemorySearchPort",
         "ContextAssemblyPort",
     ),
@@ -85,14 +86,41 @@ MOVED_TO_CONSUMER = {
         "execution.orchestrator.a2a_runtime.hitl",
     ),
     "AgentMessageMatcher": ("common.protocols.agent_protocols", "agent.matcher"),
-    "ProjectionPort": (
-        "common.protocols.context_memory_protocols",
-        "context_memory.events",
+    "ProjectionPort": ("common.protocols", "context_memory.events"),
+    "CompactionPort": ("common.protocols", "jobs.compaction_sweep"),
+    # C9: single-consumer ports moved out of common.protocols.
+    "AgentCallCounter": (
+        "common.protocols.agent_protocols",
+        "execution.orchestrator.a2a_runtime.call_counting",
     ),
-    "CompactionPort": (
-        "common.protocols.context_memory_protocols",
-        "jobs.compaction_sweep",
+    "AgentRepository": ("common.protocols.repository_protocols", "agent.facade"),
+    "AttachmentMetadataReader": (
+        "common.protocols.platform_protocols",
+        "conversation.attachments",
     ),
+    "ContentStorageRepository": (
+        "common.protocols.repository_protocols",
+        "context_memory.ports",
+    ),
+    "LLMProviderAdapter": ("common.protocols.llm_protocols", "llm_gateway.gateway"),
+    "MemoryRepository": (
+        "common.protocols.repository_protocols",
+        "context_memory.ports",
+    ),
+    "MessageRepository": (
+        "common.protocols.repository_protocols",
+        "conversation.facade",
+    ),
+    "RoomManagement": ("common.protocols.room_protocols", "session.protocols"),
+    "RoomMembershipSeedSource": (
+        "common.protocols.room_protocols",
+        "conversation.membership",
+    ),
+    "RoomMemoryCleanupPort": ("common.protocols", "conversation.deletion"),
+    "RoomMessageStore": ("common.protocols.room_protocols", "session.protocols"),
+    "RoomRegistry": ("common.protocols.room_protocols", "session.protocols"),
+    "RoomStateOwner": ("common.protocols.room_protocols", "room_files.service"),
+    "SSETransport": ("common.protocols.delivery_protocols", "delivery.types"),
 }
 
 

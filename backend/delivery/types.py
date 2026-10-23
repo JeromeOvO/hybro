@@ -1,6 +1,14 @@
 import asyncio
-from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class SSETransport(Protocol):
+    def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
+    async def disconnect(self, connection_id: str) -> None: ...
+    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int: ...
+    def set_draining(self, draining: bool) -> None: ...
 
 
 class TaskRunner(Protocol):
@@ -22,5 +30,6 @@ class RoomSubscriptionLimitExceeded(RuntimeError):
 __all__ = [
     "InternalEnvelopeCallback",
     "RoomSubscriptionLimitExceeded",
+    "SSETransport",
     "TaskRunner",
 ]

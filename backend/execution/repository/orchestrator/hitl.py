@@ -13,9 +13,12 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from common.dto.hitl import A2AInteractionSpec, HITLRouteSnapshotV2
+from common.dto.hitl import A2AInteractionSpec
 from execution.adapters.hitl import StoredHITLInteraction, answers_identical
-from execution.orchestrator.a2a_runtime.models import DurableHITLAnswerRecord
+from execution.orchestrator.a2a_runtime.models import (
+    DurableHITLAnswerRecord,
+    HITLRouteSnapshotV2,
+)
 from execution.orchestrator.a2a_runtime.persistence import (
     HITL_INTERACTIONS_COLLECTION,
 )

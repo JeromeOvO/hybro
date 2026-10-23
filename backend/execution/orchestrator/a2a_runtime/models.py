@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from hashlib import sha256
-from typing import Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
-from common.dto.hitl import HITLQuestionAnswer
+from common.dto.base import FrozenDTO
+from common.dto.hitl import HITLQuestionAnswer, HITLRouteSnapshot
 
 from ..models import (
     ContentPart,
@@ -660,3 +662,60 @@ class RoomEpoch(A2ADurableModel):
     creation_id: str
     deletion_id: str | None = None
     updated_at: datetime
+
+
+_NonBlankId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+_StrictVersion = Annotated[int, Field(strict=True, ge=1)]
+
+
+class HITLRouteSnapshotV2(FrozenDTO):
+    """Invocation-owned route added for the orchestrator runtime."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal[2] = 2
+    route: Literal["orchestrator_tool"] = "orchestrator_tool"
+    orchestration_run_id: _NonBlankId
+    call_record_id: _NonBlankId
+    invocation_id: _NonBlankId
+    room_id: _NonBlankId
+    room_epoch: _StrictVersion
+    binding_id: _NonBlankId
+    agent_id: _NonBlankId
+    task_id: _NonBlankId | None = None
+    context_id: _NonBlankId | None = None
+    interaction_revision: _StrictVersion
+    interaction_fingerprint: _NonBlankId
+
+    @model_validator(mode="after")
+    def validate_authoritative_aliases(self) -> Self:
+        for value in (self.task_id, self.context_id):
+            if value is not None and _is_provisional_identifier(value):
+                raise ValueError("V2 route aliases must be authoritative")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        canonical_json = json.dumps(
+            self.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return sha256(canonical_json.encode()).hexdigest()
+
+
+HITLRouteSnapshotUnion = Annotated[
+    HITLRouteSnapshot | HITLRouteSnapshotV2,
+    Field(discriminator="schema_version"),
+]
+
+
+def _is_provisional_identifier(value: str) -> bool:
+    normalized = value.casefold()
+    return normalized in {"pending", "provisional", "unknown"} or normalized.startswith(
+        ("pending-", "relay-pending-", "provisional-")
+    )

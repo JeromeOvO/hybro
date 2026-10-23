@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from inspect import isawaitable
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from common.dto import (
@@ -13,28 +13,25 @@ from common.dto import (
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
-    RoomTimelineEntry,
-    RoomTimelinePage,
     SavedUserMessage,
-    TimelinePosition,
     UserMessageInput,
-    UserMessageInsertResult,
 )
 from common.observability import NoopTracingProvider
-from common.protocols import (
-    AgentRegistry,
-    AttachmentMetadataReader,
-    MessageRepository,
-    RoomMembershipSeedSource,
-    RoomRepository,
-)
+from common.protocols import AgentRegistry, RoomRepository
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import (
+    RoomTimelineEntry,
+    RoomTimelinePage,
+    TimelinePosition,
+    UserMessageInsertResult,
+)
 from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
 )
-from conversation.membership import resolve_membership_seed
+from conversation.membership import RoomMembershipSeedSource, resolve_membership_seed
 from conversation.translators import (
     agent_message_doc_from_input,
     create_room_doc,
@@ -46,6 +43,52 @@ from conversation.translators import (
 from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
+
+
+@runtime_checkable
+class MessageRepository(Protocol):
+    async def save_user_message(self, message: dict) -> str: ...
+    async def get_user_message_by_idempotency_key(
+        self, room_id: str, client_request_id: str
+    ) -> dict | None: ...
+    async def insert_user_message_idempotently(
+        self, document: dict
+    ) -> UserMessageInsertResult: ...
+    async def save_agent_message(self, message: dict) -> str: ...
+    async def get_by_id(self, message_id: str) -> dict | None: ...
+    async def get_user_message_by_id(self, message_id: str) -> dict | None: ...
+    async def get_agent_message_by_id(self, message_id: str) -> dict | None: ...
+
+    async def update_user_message(self, message_id: str, updates: dict) -> bool: ...
+    async def update_agent_message(self, message_id: str, updates: dict) -> bool: ...
+    async def update_agent_message_if_not_terminal(
+        self, message_id: str, updates: dict, terminal_states: list[str]
+    ) -> bool: ...
+    async def count_agent_messages(self, query: dict) -> int: ...
+    async def get_by_ids(self, message_ids: list[str]) -> list[dict]: ...
+    async def get_for_room(
+        self, room_id: str, limit: int, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_timeline_page(
+        self,
+        room_id: str,
+        *,
+        limit: int,
+        before: TimelinePosition | None,
+    ) -> RoomTimelinePage: ...
+    async def get_thread(self, parent_message_id: str) -> list[dict]: ...
+    async def update_status(self, message_id: str, status: str, **fields) -> bool: ...
+    async def delete_for_room(self, room_id: str) -> dict[str, int]: ...
+    async def get_user_messages_for_room(
+        self, room_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_agent_messages_for_room(
+        self, room_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]: ...
+
 
 _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
     {

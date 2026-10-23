@@ -163,7 +163,7 @@ def test_container_no_longer_wires_tracked_task_notifications():
 
 def test_tracked_task_only_constants_and_queries_are_gone():
     import common.a2a_constants as constants
-    from common.protocols.repository_protocols import MessageRepository
+    from conversation.facade import MessageRepository
     from conversation.repository import ConversationMessageStore
 
     assert not hasattr(constants, "UNSUPPORTED_INTERACTION_CODE")

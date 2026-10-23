@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import UserMessageInsertResult
+from conversation.dto import UserMessageInsertResult
 from conversation.mentions import parse_agent_mentions
 from conversation.message_sending import RoomMessageSender
 from conversation.preflight import MessagePreflight

@@ -12,7 +12,6 @@ from common.dto import (
     ArtifactUpdateEvent,
     CancellationEvent,
     CompactionResult,
-    ContextBlock,
     CreateRoomRequest,
     DeliveryEnvelope,
     EmbeddingResult,
@@ -30,9 +29,7 @@ from common.dto import (
     LLMResponse,
     MembershipSeed,
     MembershipUpdateRequest,
-    MemorySearchResult,
     MessageRecord,
-    ModelInfo,
     NotificationPayload,
     ProcessingStatusEvent,
     RoomCreated,
@@ -48,6 +45,8 @@ from common.dto import (
     TaskUpdateEvent,
     WorkflowState,
 )
+from context_memory.models import ContextBlock, MemorySearchResult
+from llm_gateway.model_registry import ModelInfo
 
 
 def test_common_dtos_can_be_instantiated():

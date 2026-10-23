@@ -29,7 +29,6 @@ from api_gateway.routes.room_routes import (
     verify_room_ownership,
 )
 from chat import ChatService
-from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
     DataPart,
@@ -41,6 +40,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.dto import RoomTimelineEntry, RoomTimelinePage
 from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
 from models.response import (

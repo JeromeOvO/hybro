@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.dto import AgentInfo, SavedAgentGroupSnapshot
+from common.dto import AgentInfo
 from common.utils.logger import get_logger
+from conversation.dto import SavedAgentGroupSnapshot
 from conversation.unbound import UNBOUND_RUNTIME_STORE
 
 logger = get_logger(__name__)

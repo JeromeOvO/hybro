@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from common.protocols import AgentCallCounter
 from common.utils.logger import get_logger
 
 from .models import TERMINAL_AGENT_CALL_STATES, AgentCallLedgerRecord
+
+
+@runtime_checkable
+class AgentCallCounter(Protocol):
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool
+    ) -> None: ...
+
 
 logger = get_logger(__name__)
 
@@ -63,4 +70,4 @@ class CountingAgentCallLedgerStore:
         return outcome
 
 
-__all__ = ["CountingAgentCallLedgerStore"]
+__all__ = ["AgentCallCounter", "CountingAgentCallLedgerStore"]

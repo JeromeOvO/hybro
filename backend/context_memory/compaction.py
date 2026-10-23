@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from common.protocols import ContentStorageRepository, MemoryRepository
 from common.utils.context_utils import estimate_tokens
 from context_memory.config import CompactionConfig
 from context_memory.content_storage import (
@@ -12,6 +11,7 @@ from context_memory.content_storage import (
     hash_content,
     store_full_content,
 )
+from context_memory.ports import ContentStorageRepository, MemoryRepository
 from context_memory.translators import (
     compaction_result_dto,
     normalize_room_memory,

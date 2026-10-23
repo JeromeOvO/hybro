@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
+from agent.facade import AgentRepository
 from api_gateway.dependencies import (
     APIGatewayDeps,
     bind_api_gateway_deps,
@@ -34,33 +35,23 @@ from common.observability import (
     traced_create_task,
 )
 from common.protocols import (
-    AgentCallCounter,
     AgentCardResolver,
     AgentExclusionReader,
     AgentMatcher,
     AgentRegistry,
-    AgentRepository,
-    AttachmentMetadataReader,
-    ContentStorageRepository,
     EventPublisher,
     ExecutionEngine,
     FileStorage,
     HITLManager,
     LeaderElector,
     LLMGateway,
-    MemoryRepository,
     MongoCollection,
     MongoDAL,
     RedisKV,
     RedisPubSub,
     RoomDistributedLock,
     RoomHistoryReader,
-    RoomManagement,
-    RoomMembershipSeedSource,
-    RoomMessageStore,
     RoomOwnershipReader,
-    RoomRegistry,
-    SSETransport,
 )
 from common.utils.time import utcnow
 from context_memory import (
@@ -74,7 +65,10 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
+from context_memory.ports import ContentStorageRepository, MemoryRepository
 from conversation import ConversationFacade, MessageMongoRepository, RoomMongoRepository
+from conversation.attachments import AttachmentMetadataReader
+from conversation.membership import RoomMembershipSeedSource
 from conversation.membership_source import RepositoryRoomMembershipSeedSource
 from conversation.repository import RoomQuoteMongoRepository
 from delivery.config import DeliveryConfig
@@ -83,8 +77,9 @@ from delivery.event_publisher import EventPublisherImpl
 from delivery.facade import DeliveryFacade
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
-from delivery.types import TaskRunner
+from delivery.types import SSETransport, TaskRunner
 from execution.adapters.canary_metrics import collect_metrics
+from execution.orchestrator.a2a_runtime.call_counting import AgentCallCounter
 from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from execution.orchestrator.public_text import sanitize_public_text
 from execution.repository.active_runs import CanonicalActiveRunRoomReader
@@ -112,6 +107,7 @@ from orchestrator_composition import (
 )
 from room_files import LocalFileContentStore, RoomFiles
 from session import MongoSessionRepository, SessionFacade, SessionWaiter
+from session.protocols import RoomManagement, RoomMessageStore, RoomRegistry
 
 if TYPE_CHECKING:
     from dal.redis.streams import RedisStreamsImpl

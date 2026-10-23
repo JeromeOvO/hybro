@@ -31,9 +31,6 @@ from common.protocols import (
     ExecutionEngine,
     HITLManager,
     RoomHistoryReader,
-    RoomManagement,
-    RoomMessageStore,
-    RoomRegistry,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -58,7 +55,13 @@ from session.projection import (
     final_message_id,
     resolve_state,
 )
-from session.protocols import SessionOwner, SessionStore
+from session.protocols import (
+    RoomManagement,
+    RoomMessageStore,
+    RoomRegistry,
+    SessionOwner,
+    SessionStore,
+)
 from session.waiter import CorrelatedOutcome, SessionWaiter
 
 logger = get_logger(__name__)

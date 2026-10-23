@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from common.dto import RoomTimelineEntry, RoomTimelinePage
-from common.protocols import AttachmentMetadataReader
 from common.types import Task, TaskState, TaskStatus
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import RoomTimelineEntry, RoomTimelinePage
 from conversation.message_reads import RoomMessageReader
 from conversation.timeline_projection import (
     HITLProjectionReader,

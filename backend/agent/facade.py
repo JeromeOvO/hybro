@@ -4,7 +4,7 @@ import hashlib
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.matching import (
@@ -31,8 +31,48 @@ from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentCardResolver,
     AgentExclusionReader,
-    AgentRepository,
 )
+
+
+@runtime_checkable
+class AgentRepository(Protocol):
+    async def get_by_id(self, agent_id: str) -> dict | None: ...
+    async def get_by_ids(self, agent_ids: list[str]) -> list[dict]: ...
+    async def get_by_provider(self, provider_id: str) -> list[dict]: ...
+    async def get_by_source(self, source: str) -> list[dict]: ...
+    async def get_public(self, limit: int = 50) -> list[dict]: ...
+    async def list_active_agents(
+        self, agent_ids: list[str] | None = None
+    ) -> list[dict]: ...
+    async def upsert(self, agent_id: str, data: dict) -> None: ...
+    async def delete(self, agent_id: str) -> bool: ...
+    async def update_health(self, agent_id: str, healthy: bool) -> None: ...
+    async def mark_agents_inactive(
+        self, agent_ids: list[str], *, source: str
+    ) -> int: ...
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool
+    ) -> None: ...
+    async def find_by_normalized_url(
+        self, normalized_url: str, provider_id: str | None = None
+    ) -> dict | None: ...
+    async def list_visible(
+        self,
+        *,
+        user_id: str | None = None,
+        active_only: bool = False,
+        agent_ids: list[str] | None = None,
+        query: dict | None = None,
+        limit: int = 0,
+        exhaust: bool = False,
+    ) -> list[dict]: ...
+    async def text_search(
+        self, agent_ids: list[str], query: str, limit: int
+    ) -> list[dict]: ...
+    async def update(self, agent_id: str, updates: dict) -> dict | None: ...
+    async def public_url_exists(self, subdomain: str, base_domain: str) -> bool: ...
+    async def activate_agents(self, agent_ids: list[str]) -> int: ...
+
 
 logger = logging.getLogger(__name__)
 

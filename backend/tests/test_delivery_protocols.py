@@ -206,15 +206,16 @@ def test_delivery_packages_are_registered():
 
 
 def test_sse_transport_connect_is_sync_async_iterator_factory():
-    from common.protocols import SSETransport
+    from delivery.types import SSETransport
 
     assert inspect.iscoroutinefunction(SSETransport.connect) is False
 
 
 def test_delivery_facade_exports_and_protocol_conformance():
     import delivery
-    from common.protocols import EventPublisher, SSETransport
+    from common.protocols import EventPublisher
     from delivery import DeliveryFacade, EventPublisherImpl, SSETransportImpl
+    from delivery.types import SSETransport
 
     assert delivery.__all__ == [
         "DeliveryFacade",
@@ -492,7 +493,7 @@ async def test_delivery_facade_refresh_health_handles_ping_failure():
 
 
 def test_container_delivery_factories_and_config_mapping():
-    from common.protocols import EventPublisher, SSETransport
+    from common.protocols import EventPublisher
     from container import (
         DeliveryDeps,
         create_delivery_config,
@@ -502,6 +503,7 @@ def test_container_delivery_factories_and_config_mapping():
     )
     from delivery.config import DeliveryConfig
     from delivery.facade import DeliveryFacade
+    from delivery.types import SSETransport
 
     values = {
         field: getattr(DeliveryConfig(), field)

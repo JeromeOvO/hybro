@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import UserMessageInsertResult
+from conversation.dto import UserMessageInsertResult
 from conversation.idempotency import UserMessagePersistenceError
 from conversation.user_message_persistence import (
     UserMessageCommitCommand,

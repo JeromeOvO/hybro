@@ -12,7 +12,7 @@ import inspect
 
 import pytest
 
-from tests.test_common_foundation import _assert_methods
+from tests.test_common_foundation import _assert_methods, _assert_params
 
 EXPECTED_METHODS = {
     "agent.protocols": {
@@ -141,6 +141,19 @@ EXPECTED_METHODS = {
     },
     "session.protocols": {
         "ConversationEventsPort": {"latest_seq", "read_range"},
+        "RoomManagement": {
+            "create_room",
+            "delete_room",
+            "update_membership",
+            "update_room",
+        },
+        "RoomMessageStore": {
+            "get_message",
+            "save_agent_message",
+            "save_user_message",
+            "update_agent_message_status",
+        },
+        "RoomRegistry": {"get_room", "get_room_agents", "get_room_owner"},
         "SessionAccess": {"check", "close", "get_record", "list_sessions", "send"},
         "SessionService": {
             "check",
@@ -178,3 +191,119 @@ def test_module_protocol_methods_match_inventory(module_name):
         and getattr(getattr(module, name), "_is_protocol", False)
     }
     assert exported_protocols == set(expected)
+
+
+# Ports a module declares beside its single consumer rather than in its
+# ``protocols`` module.
+CONSUMER_PORT_METHODS = {
+    ("context_memory.ports", "ContentStorageRepository"): {
+        "delete_content_by_room_id",
+        "delete_content_by_turn_id",
+        "get_content_by_document_id",
+        "get_content_by_turn_id",
+        "get_content_stats_for_room",
+        "hydrate_turn_content",
+        "scan_text_search",
+        "text_search",
+        "upsert_full_content",
+    },
+    ("context_memory.ports", "MemoryRepository"): {
+        "compact_turns_bulk",
+        "create_room_memory",
+        "delete_room_memory",
+        "ensure_room_memory",
+        "get_room_memory",
+        "get_room_summary_projection",
+        "list_room_ids_with_memory",
+        "push_and_trim_conversation_turn",
+        "push_and_trim_conversation_turn_if_absent",
+        "update_room_summary_atomic",
+        "update_turn_notes",
+        "upsert_room_memory",
+    },
+    ("agent.facade", "AgentRepository"): {
+        "activate_agents",
+        "delete",
+        "find_by_normalized_url",
+        "get_by_id",
+        "get_by_ids",
+        "get_by_provider",
+        "get_by_source",
+        "get_public",
+        "increment_agent_call_count",
+        "list_active_agents",
+        "list_visible",
+        "mark_agents_inactive",
+        "public_url_exists",
+        "text_search",
+        "update",
+        "update_health",
+        "upsert",
+    },
+    ("conversation.attachments", "AttachmentMetadataReader"): {"get_for_room_file"},
+    ("conversation.deletion", "RoomMemoryCleanupPort"): {"delete_room_memory"},
+    ("conversation.facade", "MessageRepository"): {
+        "count_agent_messages",
+        "delete_for_room",
+        "get_agent_message_by_id",
+        "get_agent_messages_by_related_message_id",
+        "get_agent_messages_for_room",
+        "get_by_id",
+        "get_by_ids",
+        "get_for_room",
+        "get_thread",
+        "get_timeline_page",
+        "get_user_message_by_id",
+        "get_user_message_by_idempotency_key",
+        "get_user_messages_for_room",
+        "insert_user_message_idempotently",
+        "save_agent_message",
+        "save_user_message",
+        "update_agent_message",
+        "update_agent_message_if_not_terminal",
+        "update_status",
+        "update_user_message",
+    },
+    ("conversation.membership", "RoomMembershipSeedSource"): {
+        "get_saved_group",
+        "list_current_agents",
+    },
+    ("delivery.types", "SSETransport"): {
+        "broadcast_frame_to_room",
+        "connect",
+        "disconnect",
+        "set_draining",
+    },
+    ("execution.orchestrator.a2a_runtime.call_counting", "AgentCallCounter"): {
+        "increment_agent_call_count"
+    },
+    ("llm_gateway.gateway", "LLMProviderAdapter"): {
+        "embed",
+        "embed_batch",
+        "generate",
+        "generate_structured",
+    },
+    ("room_files.service", "RoomStateOwner"): {"delete_room_state"},
+}
+
+
+@pytest.mark.parametrize(
+    ("module_name", "protocol_name"), sorted(CONSUMER_PORT_METHODS)
+)
+def test_consumer_port_methods_match_inventory(module_name, protocol_name):
+    module = importlib.import_module(module_name)
+    _assert_methods(
+        getattr(module, protocol_name),
+        CONSUMER_PORT_METHODS[(module_name, protocol_name)],
+    )
+
+
+def test_moved_port_signatures_are_pinned():
+    from agent.facade import AgentRepository
+    from session.protocols import RoomManagement
+
+    _assert_params(
+        AgentRepository.list_visible,
+        ["self", "user_id", "active_only", "agent_ids", "query", "limit", "exhaust"],
+    )
+    _assert_params(RoomManagement.create_room, ["self", "request"])

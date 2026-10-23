@@ -6,14 +6,10 @@ from common.protocols.a2a_protocols import (
     SSEUserMessageRecord,
 )
 from common.protocols.agent_protocols import (
-    AgentCallCounter,
     AgentExclusionReader,
     AgentMatcher,
     AgentNetworkTargetResolver,
     AgentRegistry,
-)
-from common.protocols.context_memory_protocols import (
-    RoomMemoryCleanupPort,
 )
 from common.protocols.dal_protocols import (
     LeaderElector,
@@ -28,7 +24,6 @@ from common.protocols.delivery_protocols import (
     EventPublisher,
     SSEConnectionLike,
     SSERouteTransport,
-    SSETransport,
 )
 from common.protocols.execution_protocols import (
     ExecutionEngine,
@@ -39,44 +34,29 @@ from common.protocols.json_types import JsonMap, JsonScalar, JsonValue
 from common.protocols.llm_protocols import (
     LLMEmbeddingGateway,
     LLMGateway,
-    LLMProviderAdapter,
     LLMStreamGateway,
     LLMStructuredGateway,
     LLMTextGateway,
 )
 from common.protocols.platform_protocols import (
-    AttachmentMetadataReader,
     FileStorage,
     HealthCheck,
     PreparedFileStream,
 )
 from common.protocols.repository_protocols import (
-    AgentRepository,
-    ContentStorageRepository,
-    MemoryRepository,
-    MessageRepository,
     RoomRepository,
 )
 from common.protocols.room_protocols import (
     RoomHistoryReader,
-    RoomManagement,
-    RoomMembershipSeedSource,
-    RoomMessageStore,
     RoomOwnershipReader,
-    RoomRegistry,
-    RoomStateOwner,
 )
 
 __all__ = [
-    "AgentCallCounter",
     "AgentCardResolver",
     "AgentExclusionReader",
     "AgentMatcher",
     "AgentNetworkTargetResolver",
     "AgentRegistry",
-    "AgentRepository",
-    "AttachmentMetadataReader",
-    "ContentStorageRepository",
     "DeliveryEventPublisher",
     "EventPublisher",
     "ExecutionEngine",
@@ -89,27 +69,18 @@ __all__ = [
     "JsonValue",
     "LLMEmbeddingGateway",
     "LLMGateway",
-    "LLMProviderAdapter",
     "LLMStreamGateway",
     "LLMStructuredGateway",
     "LLMTextGateway",
     "LeaderElector",
     "MongoChangeStream",
-    "MemoryRepository",
-    "MessageRepository",
     "MongoCollection",
     "MongoDAL",
     "RedisKV",
     "RedisPubSub",
     "RoomHistoryReader",
     "RoomDistributedLock",
-    "RoomManagement",
-    "RoomMemoryCleanupPort",
-    "RoomMembershipSeedSource",
-    "RoomMessageStore",
     "RoomOwnershipReader",
-    "RoomRegistry",
-    "RoomStateOwner",
     "RoomRepository",
     "RoomRouteRecord",
     "RoomRouteReader",
@@ -117,5 +88,4 @@ __all__ = [
     "SSEStateReader",
     "SSEUserMessageRecord",
     "SSERouteTransport",
-    "SSETransport",
 ]

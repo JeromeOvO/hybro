@@ -3,13 +3,12 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
-from common.dto import MemorySearchResult
-from common.protocols import ContentStorageRepository
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from context_memory.config import MemorySearchConfig
 from context_memory.content_storage import is_content_expired
-from context_memory.models import SearchRankingRecord
+from context_memory.models import MemorySearchResult, SearchRankingRecord
+from context_memory.ports import ContentStorageRepository
 from context_memory.translators import search_result_from_record
 
 logger = get_logger(__name__)

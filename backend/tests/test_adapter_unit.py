@@ -13,9 +13,9 @@ from common.dto import (
     LLMResponse,
     LLMStructuredResponse,
     LLMUsage,
-    ModelInfo,
 )
 from common.types import MessageRole
+from llm_gateway.model_registry import ModelInfo
 
 
 @pytest.fixture(autouse=True)

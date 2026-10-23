@@ -23,14 +23,11 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Protocol
 
-from common.dto.hitl import (
-    A2AInteractionSpec,
-    HITLQuestionAnswer,
-    HITLRouteSnapshotV2,
-)
+from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 from execution.orchestrator.a2a_runtime.models import (
     AgentCallLedgerRecord,
     DurableHITLAnswerRecord,
+    HITLRouteSnapshotV2,
     VerifiedAuthReferenceBinding,
 )
 

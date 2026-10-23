@@ -1,10 +1,8 @@
-from common.dto import (
-    UserMessageInsertResult,
-)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from conversation.attachments import resolve_and_apply_room_attachments
 from conversation.candidate_scope import SUPPORTED_CANDIDATE_SCOPE_SOURCES
+from conversation.dto import UserMessageInsertResult
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,

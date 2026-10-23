@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from common.dto.base import FrozenDTO
+
 
 class TruncationReason(str, Enum):
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
@@ -176,3 +178,30 @@ class SearchRankingRecord:
     temporal_decay_factor: float = 1.0
     timestamp: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ContextBlock(FrozenDTO):
+    block_id: str
+    room_id: str
+    content: str
+    token_count: int
+    block_type: str = "context"
+    metadata: dict[str, Any] = {}
+
+
+class AssembledContext(FrozenDTO):
+    room_id: str
+    blocks: list[ContextBlock] = []
+    total_tokens: int = 0
+    metadata: dict[str, Any] = {}
+
+
+class MemorySearchResult(FrozenDTO):
+    room_id: str
+    content: str
+    keyword_score: float
+    relevance_score: float
+    temporal_decay_factor: float
+    memory_id: str | None = None
+    source_message_id: str | None = None
+    metadata: dict[str, Any] = {}

@@ -40,19 +40,10 @@ class EmbeddingResult(FrozenDTO):
     dimensions: int | None = None
 
 
-class ModelInfo(FrozenDTO):
-    model_id: str
-    logical_name: str
-    provider: str
-    capabilities: list[str]
-    max_context_tokens: int
-
-
 __all__ = [
     "EmbeddingResult",
     "LLMRequest",
     "LLMResponse",
     "LLMStructuredResponse",
     "LLMUsage",
-    "ModelInfo",
 ]

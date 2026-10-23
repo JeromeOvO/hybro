@@ -77,7 +77,7 @@ OWNED = {
 
 
 def test_room_state_owner_port_is_shared():
-    from common.protocols import RoomStateOwner
+    from room_files.service import RoomStateOwner
 
     assert inspect.iscoroutinefunction(RoomStateOwner.delete_room_state)
 
@@ -85,7 +85,7 @@ def test_room_state_owner_port_is_shared():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner_key", sorted(OWNED))
 async def test_each_owner_deletes_only_its_own_rows(owner_key):
-    from common.protocols import RoomStateOwner
+    from room_files.service import RoomStateOwner
 
     mongo = _Mongo()
     owner = _owners(mongo)[owner_key]

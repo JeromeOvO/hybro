@@ -7,12 +7,6 @@ from typing import Any
 from pymongo.errors import DuplicateKeyError
 
 from common.a2a_constants import TERMINAL_STATES
-from common.dto import (
-    RoomTimelineEntry,
-    RoomTimelinePage,
-    TimelinePosition,
-    UserMessageInsertResult,
-)
 from common.idempotency import (
     MAX_CLIENT_REQUEST_ID_LENGTH,
     normalize_client_request_id,
@@ -20,6 +14,12 @@ from common.idempotency import (
 from common.protocols import MongoDAL
 from common.utils.mongo_indexes import create_index
 from common.utils.room_state import delete_room_rows
+from conversation.dto import (
+    RoomTimelineEntry,
+    RoomTimelinePage,
+    TimelinePosition,
+    UserMessageInsertResult,
+)
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,

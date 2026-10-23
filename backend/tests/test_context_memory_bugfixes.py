@@ -17,12 +17,16 @@ from uuid import uuid4
 
 import pytest
 
-from common.dto import CompactionResult, MemorySearchResult
+from common.dto import CompactionResult
 from common.types import MessageRole
 from common.utils.context_utils import estimate_tokens, get_context_stats
 from context_memory import search
 from context_memory.config import TokenBudgetConfig
-from context_memory.models import ConversationTurnData, SearchRankingRecord
+from context_memory.models import (
+    ConversationTurnData,
+    MemorySearchResult,
+    SearchRankingRecord,
+)
 
 # =============================================================================
 # Fixtures

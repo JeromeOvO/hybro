@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pymongo.errors import DuplicateKeyError
 
-from common.dto import TimelinePosition
+from conversation.dto import TimelinePosition
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,

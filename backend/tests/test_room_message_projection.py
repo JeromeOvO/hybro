@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
     FileContent,
@@ -18,6 +17,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.dto import RoomTimelineEntry, RoomTimelinePage
 from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
 from models.request import RoomCenterRoomMessageRequest

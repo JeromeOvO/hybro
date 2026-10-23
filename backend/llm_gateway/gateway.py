@@ -2,13 +2,12 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import aclosing
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from common.config.loader import settings
 from common.config.runtime_store import current_store
-from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
+from common.dto import LLMResponse, LLMStructuredResponse
 from common.observability import get_logger, safe_exception_metadata
-from common.protocols import LLMProviderAdapter
 from llm_gateway.config import LLMGatewayConfig, load_optional_setup
 from llm_gateway.errors import (
     LLMModelRoutingError,
@@ -16,9 +15,29 @@ from llm_gateway.errors import (
     LLMStreamingUnsupportedError,
 )
 from llm_gateway.image_types import GatewayImageRequest, GatewayImageResult
-from llm_gateway.model_registry import ModelRegistryImpl
+from llm_gateway.model_registry import ModelInfo, ModelRegistryImpl
 from llm_gateway.providers import DeepSeekProvider, OpenAIProvider
 from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
+
+
+@runtime_checkable
+class LLMProviderAdapter(Protocol):
+    async def generate(
+        self, messages: list[dict[str, Any]], model: str, **kwargs: Any
+    ) -> LLMResponse: ...
+
+    async def generate_structured(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        schema: dict[str, Any] | None = None,
+        json_mode: bool = False,
+        **kwargs: Any,
+    ) -> LLMStructuredResponse: ...
+
+    async def embed(self, text: str, model: str) -> list[float]: ...
+    async def embed_batch(self, texts: list[str], model: str) -> list[list[float]]: ...
+
 
 ProviderHint = Literal["openai", "deepseek"]
 T = TypeVar("T")

@@ -5,11 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Protocol
 
-from common.dto.hitl import (
-    A2AInteractionSpec,
-    HITLQuestionAnswer,
-    HITLRouteSnapshotV2,
-)
+from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 
 from ..models import ToolInvocation, ToolObservation
 from .models import (
@@ -24,6 +20,7 @@ from .models import (
     AgentToolBindingRecord,
     DurableHITLAnswerRecord,
     FrozenCallResourceManifest,
+    HITLRouteSnapshotV2,
     MaterializedResourcePart,
     NormalizedA2AObservation,
     PreparedInvocationSnapshot,

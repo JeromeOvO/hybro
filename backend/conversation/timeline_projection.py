@@ -9,12 +9,12 @@ from common.a2a_task_projection import (
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )
-from common.dto import RoomTimelinePage
-from common.protocols import AttachmentMetadataReader
 from common.public_prompt import concrete_agent_input_prompt
 from common.types import Artifact, Part, Task, TaskState, TextPart
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.logger import get_logger
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import RoomTimelinePage
 from models.room import (
     CoordinatorAgentId,
     MessageContent,

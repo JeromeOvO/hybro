@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from common.protocols import LLMStructuredGateway, MemoryRepository
+from common.protocols import LLMStructuredGateway
 from common.utils.logger import get_logger
 from context_memory.config import ContextMemoryLLMConfig
+from context_memory.ports import MemoryRepository
 
 logger = get_logger(__name__)
 

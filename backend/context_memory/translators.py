@@ -2,16 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.dto import (
-    AssembledContext,
-    CompactionResult,
-    ContextBlock,
-    MemorySearchResult,
-)
+from common.dto import CompactionResult
 from context_memory.models import (
+    AssembledContext,
     AssemblyResult,
     ContentReferenceData,
+    ContextBlock,
     ConversationTurnData,
+    MemorySearchResult,
     RoomMemoryState,
     RoomSummaryData,
 )

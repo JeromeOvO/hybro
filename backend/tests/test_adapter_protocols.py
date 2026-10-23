@@ -5,11 +5,8 @@ from pathlib import Path
 from typing import get_type_hints
 from unittest.mock import MagicMock
 
-from common.protocols import (
-    AgentCardResolver,
-    LLMGateway,
-    LLMProviderAdapter,
-)
+from common.protocols import AgentCardResolver, LLMGateway
+from llm_gateway.gateway import LLMProviderAdapter
 
 
 def test_adapter_implementations_satisfy_runtime_protocols():

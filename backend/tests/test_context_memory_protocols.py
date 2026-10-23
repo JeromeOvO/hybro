@@ -8,11 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from common.protocols import (
-    MemoryRepository,
-    RoomMemoryCleanupPort,
-)
 from context_memory.events import ProjectionPort
+from context_memory.ports import MemoryRepository
+from conversation.deletion import RoomMemoryCleanupPort
 from jobs.compaction_sweep import CompactionPort
 
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
@@ -169,8 +167,8 @@ def _facade():
 
 
 def test_context_memory_port_conformance():
-    from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
+    from context_memory.ports import ContentStorageRepository
 
     facade = _facade()
 
@@ -289,7 +287,7 @@ def test_context_memory_packages_are_listed():
 
 
 def test_context_memory_protocol_method_sets():
-    from common import protocols
+    from context_memory import ports as protocols
 
     def public_methods(protocol):
         return {

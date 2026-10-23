@@ -6,12 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from common.dto import (
-    AgentInfo,
-    MembershipSeed,
-    SavedAgentGroupSnapshot,
-    UserMessageInput,
-)
+from common.dto import AgentInfo, MembershipSeed, UserMessageInput
+from conversation.dto import SavedAgentGroupSnapshot
 from conversation.membership import normalize_room_agent_set, resolve_membership_seed
 from conversation.membership_source import RepositoryRoomMembershipSeedSource
 from conversation.message_graph import (
@@ -245,7 +241,7 @@ def test_message_graph_sort_thread_and_status_payload_helpers():
 
 
 def test_saved_group_snapshot_dto_fields_and_runtime_protocol_export():
-    from common.protocols import RoomMembershipSeedSource
+    from conversation.membership import RoomMembershipSeedSource
 
     snapshot = SavedAgentGroupSnapshot(
         group_id="g1",

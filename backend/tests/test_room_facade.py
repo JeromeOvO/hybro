@@ -15,12 +15,11 @@ from common.dto import (
     CreateRoomRequest,
     MembershipSeed,
     MembershipUpdateRequest,
-    SavedAgentGroupSnapshot,
     UserMessageInput,
-    UserMessageInsertResult,
 )
 from common.types import Task, TaskState, TaskStatus
 from conversation import ConversationFacade
+from conversation.dto import SavedAgentGroupSnapshot, UserMessageInsertResult
 from conversation.idempotency import IdempotencyConflictError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from models.quote import QuoteSourceKind

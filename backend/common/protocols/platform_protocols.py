@@ -48,13 +48,7 @@ class FileStorage(Protocol):
     def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]: ...
 
 
-@runtime_checkable
-class AttachmentMetadataReader(Protocol):
-    async def get_for_room_file(self, room_id: str, file_id: str) -> dict | None: ...
-
-
 __all__ = [
-    "AttachmentMetadataReader",
     "HealthCheck",
     "FileStorage",
     "PreparedFileStream",

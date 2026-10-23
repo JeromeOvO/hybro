@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
@@ -40,14 +39,6 @@ class MembershipSeed(FrozenDTO):
     agent_ids: list[str] | None = None
     group_id: str | None = None
     requesting_user_id: str | None = None
-
-
-class SavedAgentGroupSnapshot(FrozenDTO):
-    group_id: str
-    name: str
-    owner_id: str | None = None
-    type: str | None = None
-    agent_ids: list[str] = Field(default_factory=list)
 
 
 class MembershipUpdateRequest(FrozenDTO):
@@ -117,35 +108,6 @@ class SavedUserMessage(FrozenDTO):
     scope_resolution_error: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
-class UserMessageInsertResult:
-    """Atomic user-message insert outcome returned by persistence adapters."""
-
-    message_id: str
-    created: bool
-    document: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class TimelinePosition:
-    timeline_sort_us: int
-    source: Literal["user", "agent"]
-    message_id: str
-
-
-@dataclass(frozen=True)
-class RoomTimelineEntry:
-    source: Literal["user", "agent"]
-    message: Any
-
-
-@dataclass(frozen=True)
-class RoomTimelinePage:
-    entries: list[RoomTimelineEntry]
-    has_more: bool
-    next_position: TimelinePosition | None
-
-
 RoomMessageInfo = MessageRecord
 
 
@@ -159,11 +121,6 @@ __all__ = [
     "RoomMembership",
     "RoomMessageInfo",
     "RoomSummary",
-    "RoomTimelineEntry",
-    "RoomTimelinePage",
-    "SavedAgentGroupSnapshot",
     "SavedUserMessage",
-    "TimelinePosition",
     "UserMessageInput",
-    "UserMessageInsertResult",
 ]

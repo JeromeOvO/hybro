@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
-from common.protocols import AttachmentMetadataReader
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import RoomUserMessage, UserAttachment
+
+
+@runtime_checkable
+class AttachmentMetadataReader(Protocol):
+    async def get_for_room_file(self, room_id: str, file_id: str) -> dict | None: ...
 
 
 @dataclass

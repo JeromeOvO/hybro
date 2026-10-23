@@ -56,15 +56,7 @@ class AgentExclusionReader(Protocol):
     async def get_excluded_agent_ids(self) -> frozenset[str]: ...
 
 
-@runtime_checkable
-class AgentCallCounter(Protocol):
-    async def increment_agent_call_count(
-        self, agent_id: str, *, success: bool
-    ) -> None: ...
-
-
 __all__ = [
-    "AgentCallCounter",
     "AgentExclusionReader",
     "AgentMatcher",
     "AgentNetworkTargetResolver",

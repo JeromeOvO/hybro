@@ -5,10 +5,11 @@ from typing import Any
 
 import pytest
 
-from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
+from common.dto import LLMResponse, LLMStructuredResponse
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedError
 from llm_gateway.gateway import LLMGatewayImpl
+from llm_gateway.model_registry import ModelInfo
 
 
 @pytest.fixture(autouse=True)

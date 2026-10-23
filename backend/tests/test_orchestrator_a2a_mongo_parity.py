@@ -14,7 +14,6 @@ from common.dto.hitl import (
     HITLInteractionKind,
     HITLQuestionAnswer,
     HITLQuestionSpec,
-    HITLRouteSnapshotV2,
     HITLTextAnswer,
 )
 from execution.adapters.hitl import InMemoryHITLApplicationStore
@@ -29,6 +28,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2AObservationInboxRecord,
     A2ARuntimePolicy,
     DurableHITLAnswerRecord,
+    HITLRouteSnapshotV2,
     NormalizedA2AObservation,
 )
 from execution.orchestrator.models import ProjectionIntent, RecoveryClaim

@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from common.dto.room import TimelinePosition
+from conversation.dto import TimelinePosition
 
 CURSOR_VERSION = 1
 MAX_CURSOR_LENGTH = 1024

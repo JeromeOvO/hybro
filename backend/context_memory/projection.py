@@ -4,7 +4,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from common.protocols import LLMStructuredGateway, MemoryRepository, RoomHistoryReader
+from common.protocols import LLMStructuredGateway, RoomHistoryReader
 from common.utils.context_utils import (
     LLM_TURN_NOTES_THRESHOLD,
     MAX_HISTORY_TURNS,
@@ -15,6 +15,7 @@ from common.utils.context_utils import (
 )
 from common.utils.logger import get_logger
 from context_memory.config import ContextMemoryLLMConfig
+from context_memory.ports import MemoryRepository
 
 logger = get_logger(__name__)
 

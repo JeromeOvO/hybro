@@ -6,7 +6,7 @@ import inspect
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pymongo.errors import ConnectionFailure, ExecutionTimeout, WTimeoutError
@@ -16,12 +16,20 @@ from common.errors import (
     FileStoragePlatformError,
     RetryableFileStoragePlatformError,
 )
-from common.protocols import PreparedFileStream, RoomStateOwner
+from common.protocols import PreparedFileStream
 from common.utils.time import ensure_utc, utcnow
 from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileOperationError, FileStorageError
 from room_files.leases import RoomWriteLeases
 from room_files.mime import normalize_mime_type
+
+
+@runtime_checkable
+class RoomStateOwner(Protocol):
+    """A module that deletes, and verifies deleted, its own rows for a room."""
+
+    async def delete_room_state(self, room_id: str) -> bool: ...
+
 
 DEFAULT_CONTENT_URL_PREFIX = "/api/v1/files"
 

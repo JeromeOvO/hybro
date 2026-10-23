@@ -1,4 +1,3 @@
-from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from common.dto import DeliveryEvent
@@ -12,14 +11,6 @@ class DeliveryEventPublisher(Protocol):
 
 # Short alias for the public delivery-only contract.
 EventPublisher = DeliveryEventPublisher
-
-
-@runtime_checkable
-class SSETransport(Protocol):
-    def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
-    async def disconnect(self, connection_id: str) -> None: ...
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int: ...
-    def set_draining(self, draining: bool) -> None: ...
 
 
 @runtime_checkable
@@ -42,5 +33,4 @@ __all__ = [
     "EventPublisher",
     "SSEConnectionLike",
     "SSERouteTransport",
-    "SSETransport",
 ]

@@ -4,8 +4,8 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
-from common.protocols import ContentStorageRepository
 from context_memory.config import CompactionConfig
+from context_memory.ports import ContentStorageRepository
 
 
 class ContentExpiredError(Exception):

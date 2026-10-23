@@ -5,14 +5,9 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.dto import AssembledContext, CompactionResult, MemorySearchResult
+from common.dto import CompactionResult
 from common.observability import NoopTracingProvider, traced_create_task
-from common.protocols import (
-    ContentStorageRepository,
-    LLMGateway,
-    MemoryRepository,
-    RoomHistoryReader,
-)
+from common.protocols import LLMGateway, RoomHistoryReader
 from common.utils.logger import get_logger
 from context_memory import assembly, compaction, projection, search, summary
 from context_memory.config import (
@@ -21,6 +16,8 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
+from context_memory.models import AssembledContext, MemorySearchResult
+from context_memory.ports import ContentStorageRepository, MemoryRepository
 from context_memory.translators import normalize_room_memory
 
 logger = get_logger(__name__)

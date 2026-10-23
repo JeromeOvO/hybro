@@ -11,8 +11,9 @@ from common.dto import (
     TaskUpdateEvent,
 )
 from common.observability import get_logger
-from common.protocols import EventPublisher, RedisKV, SSETransport
+from common.protocols import EventPublisher, RedisKV
 from delivery.config import DeliveryConfig
+from delivery.types import SSETransport
 
 logger = get_logger(__name__)
 

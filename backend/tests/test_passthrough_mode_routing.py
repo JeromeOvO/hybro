@@ -18,8 +18,9 @@ from pydantic import ValidationError
 
 from api_gateway.routes.room_routes import send_message
 from common.config.loader import Settings
-from common.dto import ExecutionAck, ExecutionRequest, UserMessageInsertResult
+from common.dto import ExecutionAck, ExecutionRequest
 from common.dto.turn_lifecycle import RunStartedPayload
+from conversation.dto import UserMessageInsertResult
 from conversation.message_sending import RoomMessageSender
 from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
