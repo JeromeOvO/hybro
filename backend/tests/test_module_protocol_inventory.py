@@ -233,6 +233,7 @@ CONSUMER_PORT_METHODS = {
     },
     ("conversation.attachments", "AttachmentMetadataReader"): {"get_for_room_file"},
     ("conversation.deletion", "RoomMemoryCleanupPort"): {"delete_room_memory"},
+    ("conversation.facade", "CanonicalAgentCallReader"): {"agent_call_exists"},
     ("conversation.facade", "MessageRepository"): {
         "count_agent_messages",
         "delete_for_room",

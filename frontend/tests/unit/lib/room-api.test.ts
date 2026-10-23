@@ -239,55 +239,6 @@ describe('Room API', () => {
       expect(capturedBody).not.toHaveProperty('target_group')
     })
 
-    it('should include quoted text in extend_info', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Quoted text here',
-      })
-
-      expect(capturedBody).not.toBeNull()
-      const body = capturedBody as unknown as Record<string, unknown>
-      const message = body.message as Record<string, unknown>
-      expect(message.related_message_id).toBe('related-msg-1')
-      expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
-    })
-
-    it('should include quoted sender name in extend_info', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Quoted text here',
-        quotedSenderName: 'Spec Agent',
-      })
-
-      expect(capturedBody).not.toBeNull()
-      const body = capturedBody as unknown as Record<string, unknown>
-      const message = body.message as Record<string, unknown>
-      expect(message.extend_info).toMatchObject({
-        quoted_text: 'Quoted text here',
-        quoted_sender_name: 'Spec Agent',
-      })
-    })
-
     it('should send structured quote payload when structuredQuote is provided', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
@@ -300,8 +251,6 @@ describe('Room API', () => {
       await SendMessage({
         ...baseSendParams,
         userInput: 'Get details',
-        relatedMessageId: null,
-        quotedText: null,
         structuredQuote: {
           text: 'The highlighted content',
           source_message_id: 'agent-msg-42',
@@ -321,14 +270,12 @@ describe('Room API', () => {
         sender_display_name: 'Research Agent',
         source_agent_id: 'agent-42',
       })
-      expect(message.extend_info).toMatchObject({
-        quoted_text: 'The highlighted content',
-        quoted_sender_name: 'Research Agent',
-      })
+      // The backend derives the display fields after persisting the quote.
+      expect(message.extend_info).toBeNull()
       expect(message.related_message_id).toBeNull()
     })
 
-    it('should use legacy extend_info when structuredQuote is null but quoted_text provided', async () => {
+    it('sends no quote and no client display metadata without a structured quote', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
         http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
@@ -337,20 +284,13 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Legacy quoted text',
-        quotedSenderName: 'Agent Name',
-        structuredQuote: null,
-      })
+      await SendMessage({ ...baseSendParams, userInput: 'Reply', structuredQuote: null })
 
       const body = capturedBody as unknown as Record<string, unknown>
       const message = body.message as Record<string, unknown>
-      expect(message.quote).toBeUndefined()
-      expect(message.extend_info).toMatchObject({ quoted_text: 'Legacy quoted text', quoted_sender_name: 'Agent Name' })
-      expect(message.related_message_id).toBe('related-msg-1')
+      expect(message).not.toHaveProperty('quote')
+      expect(message.extend_info).toBeNull()
+      expect(message.related_message_id).toBeNull()
     })
 
     it('sends mentioned_agent_ids without message_target_mode or target_group_id', async () => {

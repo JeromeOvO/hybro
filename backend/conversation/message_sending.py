@@ -175,6 +175,7 @@ class RoomMessageSender:
             user_message.conversation_id = request.conversation_id
             user_message.user_id = request.user_id
             user_message.client_request_id = client_request_id
+            _discard_client_quote_display(user_message)
             if idempotency_fingerprint is not None:
                 # Canonical sendMessage accepts only user-authored content and
                 # relationship fields. Everything else below is server-owned and
@@ -191,21 +192,7 @@ class RoomMessageSender:
                 user_message.processing_claimed_at = None
                 user_message.quote_id = None
                 user_message.message_content.message_task = None
-                extend_info = (
-                    user_message.extend_info
-                    if isinstance(user_message.extend_info, dict)
-                    else {}
-                )
-                legacy_quote_keys = (
-                    ()
-                    if user_message.quote is not None
-                    else ("quoted_text", "quoted_sender_name")
-                )
-                user_message.extend_info = {
-                    key: value
-                    for key in legacy_quote_keys
-                    if isinstance((value := extend_info.get(key)), str)
-                } or None
+                user_message.extend_info = None
 
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
@@ -562,3 +549,34 @@ class RoomMessageSender:
 
 
 __all__ = ["RoomMessageSender"]
+
+
+_QUOTE_DISPLAY_KEYS = ("quoted_text", "quoted_sender_name", "quote_id")
+
+
+def _discard_client_quote_display(user_message: RoomUserMessage) -> None:
+    """Drop client-supplied quote display fields.
+
+    Only ``materialize_quote`` writes them, from the structured ``quote`` after
+    it persists the quote record. A tab built before the plain-text path was
+    removed may still send them without ``quote``; that message is sent without
+    a quote rather than rejected.
+    """
+
+    extend_info = user_message.extend_info
+    if not isinstance(extend_info, dict):
+        return
+    present = [key for key in _QUOTE_DISPLAY_KEYS if key in extend_info]
+    if not present:
+        return
+    if user_message.quote is None:
+        logger.debug(
+            "Ignoring unstructured quote fields %s for room %s",
+            present,
+            user_message.conversation_id,
+        )
+    user_message.extend_info = {
+        key: value
+        for key, value in extend_info.items()
+        if key not in _QUOTE_DISPLAY_KEYS
+    } or None

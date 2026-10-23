@@ -150,13 +150,11 @@ export interface SendMessageParams {
   getToken?: () => Promise<string | null>
   userId?: string
   userName?: string
-  relatedMessageId?: string | null
-  quotedText?: string | null
-  quotedSenderName?: string | null
   attachments?: Array<{ file_id: string }>
   mode: ExecutionMode
   agentScope: AgentScopeInput
   clientRequestId: string
+  /** The only way to send a quote; the backend derives the display fields. */
   structuredQuote?: RoomQuoteWire | null
 }
 
@@ -174,9 +172,6 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
     getToken,
     userId,
     userName,
-    relatedMessageId,
-    quotedText,
-    quotedSenderName,
     attachments,
     mode,
     agentScope,
@@ -188,22 +183,16 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
     conversation_id: conversationId,
     message_id: "",
     message_type: "user",
-    related_message_id: relatedMessageId || null,
+    related_message_id: null,
     message_content: {
       message_text: userInput
     },
     user_id: userId || "",
-    extend_info: null as Record<string, unknown> | null,
+    extend_info: null,
   }
 
   if (structuredQuote) {
     message.quote = structuredQuote
-    message.extend_info = {
-      quoted_text: structuredQuote.text,
-      quoted_sender_name: structuredQuote.sender_display_name ?? null,
-    }
-  } else if (quotedText) {
-    message.extend_info = { quoted_text: quotedText, quoted_sender_name: quotedSenderName || null }
   }
 
   const requestData: SendMessageRequestBody = {

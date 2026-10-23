@@ -10,6 +10,7 @@ Tests cover:
 
 import ast
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -404,6 +405,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
 async def test_canonical_send_sanitizes_server_owned_user_message_fields(
     with_structured_quote,
     monkeypatch,
+    caplog,
 ):
     svc = ConversationRuntime()
     svc._store = MagicMock()
@@ -443,20 +445,12 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
         assert user_message.task_content is None
         assert user_message.processing_claimed_at is None
         assert user_message.quote_id is None
-        expected_legacy_quote = (
-            {
-                "execution_mode": "direct",
-                "agent_scope": {"source": "room_default"},
-            }
-            if with_structured_quote
-            else {
-                "quoted_text": "allowed quote",
-                "quoted_sender_name": "Allowed Sender",
-                "execution_mode": "direct",
-                "agent_scope": {"source": "room_default"},
-            }
-        )
-        assert user_message.extend_info == expected_legacy_quote
+        # Client quote display fields are dropped whether or not a structured
+        # quote is present; only materialize_quote writes them.
+        assert user_message.extend_info == {
+            "execution_mode": "direct",
+            "agent_scope": {"source": "room_default"},
+        }
         user_message.message_id = "server-message"
         return UserMessageInsertResult(
             message_id="server-message",
@@ -505,16 +499,22 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
         ),
     )
 
-    response, context = await svc.persist_message_to_room(
-        request,
-        target_group="all_agents",
-        idempotency_fingerprint="fingerprint-1",
-        idempotency_fingerprint_version=1,
-    )
+    with caplog.at_level(logging.DEBUG, logger="conversation.message_sending"):
+        response, context = await svc.persist_message_to_room(
+            request,
+            target_group="all_agents",
+            idempotency_fingerprint="fingerprint-1",
+            idempotency_fingerprint_version=1,
+        )
 
     assert response.success is True
     assert response.message_id == "server-message"
     assert context is not None
+    ignored_logged = any(
+        "Ignoring unstructured quote fields" in record.getMessage()
+        for record in caplog.records
+    )
+    assert ignored_logged is (not with_structured_quote)
 
 
 @pytest.mark.asyncio

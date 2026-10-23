@@ -1249,6 +1249,20 @@ that attempt is an idempotent replay or is later rejected by Execution. A missin
 flag defaults to Ultimate. Saved-team member IDs are expanded and authorized
 by the backend. `client_request_id` drives optimistic-message replacement.
 
+Quotes are sent only as the structured `message.quote` (`RoomQuoteWire`: text,
+source message ID, source kind, sender display name, source Agent ID);
+`SendMessage` sends `extend_info: null` and no plain quoted text. The quote
+button (`useTextSelectionQuote`) reads the source from the nearest
+`data-quote-message-id` region: agent results and the Agent detail pane
+(`agent`, including canonical Agent Card IDs `orchestrator:{run_id}:inv_…`),
+synthesis (`synthesis`), and terminal turn copy (`user_turn`, only when the turn
+has a persisted user message; placeholder and optimistic `cr:` turns are not
+quotable). The backend validates the source, persists the quote, and returns
+`quote_id`; stored messages carry `extend_info.quoted_text`,
+`quoted_sender_name`, and `quote_id`, which `convert-api-message.ts` maps for
+`UserMessageBlock` and the detail pane. The optimistic user message shows the
+quote locally until the server message replaces it.
+
 Debate is not a `ChatMode`, Room setting, request flag, or handled SSE event. The
 ModeSelector retains one disabled `Debate (Coming Soon)` row as display-only UI;
 it has no selection handler and can never create a Debate request.

@@ -41,14 +41,25 @@ function ProcessingBlock({
   return show ? <ProcessingStatusLog entries={entries ?? []} isRunning={isRunning} /> : null
 }
 
-function TerminalContent({ intro, turnId }: { intro: string; turnId?: string }) {
+/**
+ * A `user_turn` quote must name a persisted user message. Placeholder turns
+ * (`turn-${i}`, no user message) and optimistic `cr:` ids are not quotable.
+ */
+function quotableUserTurnMessageId(turn: Pick<TurnViewModel, 'userMessageId'>): string | undefined {
+  const id = turn.userMessageId
+  return id && !id.startsWith('cr:') ? id : undefined
+}
+
+function TerminalContent({ intro, quoteMessageId }: { intro: string; quoteMessageId?: string }) {
+  const quoteAttributes = quoteMessageId
+    ? {
+        'data-quote-message-id': quoteMessageId,
+        'data-quote-agent-name': 'HYBRO AI',
+        'data-quote-source-kind': 'user_turn',
+      }
+    : {}
   return (
-    <div
-      className="conversation-content-body"
-      data-quote-message-id={turnId}
-      data-quote-agent-name="HYBRO AI"
-      data-quote-source-kind="user_turn"
-    >
+    <div className="conversation-content-body" {...quoteAttributes}>
       <MarkdownContent className="conversation-markdown-body" content={intro} />
     </div>
   )
@@ -58,17 +69,17 @@ function DeterministicDoneBlock({
   intro,
   summaryResult,
   turnArtifacts,
-  turnId,
+  quoteMessageId,
 }: {
   intro: string
   summaryResult?: AgentResultViewModel
   turnArtifacts?: TurnViewModel['agentResults'][number]['artifacts']
-  turnId?: string
+  quoteMessageId?: string
 }) {
   if (summaryResult) {
     return <SynthesisContent summaryResult={summaryResult} turnArtifacts={turnArtifacts} />
   }
-  return <TerminalContent intro={intro} turnId={turnId} />
+  return <TerminalContent intro={intro} quoteMessageId={quoteMessageId} />
 }
 
 function SynthesisBlock({
@@ -159,10 +170,10 @@ export function FinalAnswerSurface({
       )
       break
     case 'canceled':
-      body = <TerminalContent intro={finalAnswer.canceledIntro ?? ''} turnId={turn.id} />
+      body = <TerminalContent intro={finalAnswer.canceledIntro ?? ''} quoteMessageId={quotableUserTurnMessageId(turn)} />
       break
     case 'failed':
-      body = <TerminalContent intro={finalAnswer.failedIntro ?? ''} turnId={turn.id} />
+      body = <TerminalContent intro={finalAnswer.failedIntro ?? ''} quoteMessageId={quotableUserTurnMessageId(turn)} />
       break
     case 'deterministic_done':
       body = (
@@ -170,7 +181,7 @@ export function FinalAnswerSurface({
           intro={finalAnswer.deterministicIntro ?? ''}
           summaryResult={summaryResult?.summaryOrigin === 'deterministic' ? summaryResult : undefined}
           turnArtifacts={turn.agentResults.flatMap((result) => result.artifacts ?? [])}
-          turnId={turn.id}
+          quoteMessageId={quotableUserTurnMessageId(turn)}
         />
       )
       break

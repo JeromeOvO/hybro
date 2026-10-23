@@ -45,6 +45,37 @@ from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 
+_CANONICAL_CARD_PREFIX = "orchestrator:"
+_CANONICAL_PUBLIC_CALL_PREFIX = "inv_"
+
+
+@runtime_checkable
+class CanonicalAgentCallReader(Protocol):
+    """Confirms that a canonical Agent Card names a call in the given room."""
+
+    async def agent_call_exists(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        public_call_id: str,
+    ) -> bool: ...
+
+
+def _parse_canonical_card_id(message_id: str) -> tuple[str, str] | None:
+    """Split ``orchestrator:{run_id}:{public_call_id}``; ``None`` when malformed."""
+
+    if not message_id.startswith(_CANONICAL_CARD_PREFIX):
+        return None
+    separator = message_id.rfind(":" + _CANONICAL_PUBLIC_CALL_PREFIX)
+    if separator <= len(_CANONICAL_CARD_PREFIX):
+        return None
+    run_id = message_id[len(_CANONICAL_CARD_PREFIX) : separator]
+    public_call_id = message_id[separator + 1 :]
+    if public_call_id == _CANONICAL_PUBLIC_CALL_PREFIX or ":" in public_call_id:
+        return None
+    return run_id, public_call_id
+
 
 @runtime_checkable
 class MessageRepository(Protocol):
@@ -129,6 +160,11 @@ class ConversationFacade:
         self._now = now
         self._tracer = tracer or NoopTracingProvider()
         self._epoch_store = epoch_store
+        self._agent_call_reader: CanonicalAgentCallReader | None = None
+
+    def bind_agent_call_reader(self, reader: CanonicalAgentCallReader) -> None:
+        """Late-bound: the canonical run store is composed after this facade."""
+        self._agent_call_reader = reader
 
     async def get_room(self, conversation_id: str) -> RoomInfo | None:
         doc = await self._repository.get_by_id(conversation_id)
@@ -559,36 +595,19 @@ class ConversationFacade:
             if hasattr(payload.source_kind, "value")
             else payload.source_kind
         )
-        source_kind_value = str(source_kind)
-        if source_kind_value not in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
-            source_message = await self.get_message(payload.source_message_id)
-            if (
-                source_message is None
-                or source_message.conversation_id != room.conversation_id
-            ):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source",
-                    status_code=400,
-                )
-            expected_message_type = {
-                "user_turn": "user",
-                "agent": "agent",
-                "synthesis": "agent",
-            }.get(source_kind_value.lower())
-            if (
-                expected_message_type is not None
-                and source_message.message_type != expected_message_type
-            ):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source type",
-                    status_code=400,
-                )
+        source_error = await self._quote_source_error(
+            conversation_id=room.conversation_id,
+            source_message_id=payload.source_message_id,
+            source_kind=str(source_kind),
+        )
+        if source_error is not None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=source_error,
+                status_code=400,
+            )
 
         if self._quote_repository is None:
             return RoomCenterUserMessageResponse(
@@ -631,6 +650,72 @@ class ConversationFacade:
         user_message.extend_info = extend_info
         user_message.quote = None
         return None
+
+    async def _quote_source_error(
+        self,
+        *,
+        conversation_id: str,
+        source_message_id: str,
+        source_kind: str,
+    ) -> str | None:
+        """Return the 400 error for an invalid quote source, else ``None``."""
+
+        if source_message_id.startswith(_CANONICAL_CARD_PREFIX):
+            valid = await self._canonical_quote_source_is_valid(
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                source_kind=source_kind,
+            )
+            return None if valid else "Invalid quote source"
+        if source_kind in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
+            return None
+        source_message = await self.get_message(source_message_id)
+        if source_message is None or source_message.conversation_id != conversation_id:
+            return "Invalid quote source"
+        expected_message_type = {
+            "user_turn": "user",
+            "agent": "agent",
+            "synthesis": "agent",
+        }.get(source_kind.lower())
+        if (
+            expected_message_type is not None
+            and source_message.message_type != expected_message_type
+        ):
+            return "Invalid quote source type"
+        return None
+
+    async def _canonical_quote_source_is_valid(
+        self,
+        *,
+        conversation_id: str,
+        source_message_id: str,
+        source_kind: str,
+    ) -> bool:
+        """Canonical Agent Cards are not room messages; check the call record.
+
+        Fails closed: a malformed id, a non-``agent`` kind, a missing reader, a
+        reader error, and an unknown or foreign call are indistinguishable.
+        """
+
+        if source_kind != QuoteSourceKind.AGENT.value:
+            return False
+        identity = _parse_canonical_card_id(source_message_id)
+        if identity is None or self._agent_call_reader is None:
+            return False
+        run_id, public_call_id = identity
+        try:
+            return await self._agent_call_reader.agent_call_exists(
+                conversation_id=conversation_id,
+                run_id=run_id,
+                public_call_id=public_call_id,
+            )
+        except Exception:
+            logger.warning(
+                "Canonical quote source lookup failed for room %s",
+                conversation_id,
+                exc_info=True,
+            )
+            return False
 
     async def get_message_thread(self, parent_message_id: str) -> list[RoomMessageInfo]:
         return [

@@ -101,6 +101,24 @@ class CanonicalAgentCallDetailService:
             ),
         )
 
+    async def agent_call_exists(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        public_call_id: str,
+    ) -> bool:
+        """Whether this room's run holds the opaque public call; output not read."""
+
+        run = await self._run_store.load(run_id)
+        if run is None or run.conversation_id != conversation_id:
+            return False
+        return any(
+            item.opaque_public_call_id == public_call_id
+            for batch in run.tool_batches
+            for item in batch.entries
+        )
+
     async def get(
         self,
         *,

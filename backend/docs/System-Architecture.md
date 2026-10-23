@@ -747,6 +747,7 @@ port, or facade port, update the exact method inventory in
 | `RoomEpochDeactivationPort` | `conversation.deletion` | `execution.repository.orchestrator.stores.MongoRoomEpochStore` | crosses to `execution` |
 | `RoomFileDeletionLifecycle` | `conversation.deletion` | SimpleNamespace port in `container` | crosses to composition root |
 | `RoomMemoryCleanupPort` | `conversation.deletion` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory` |
+| `CanonicalAgentCallReader` | `conversation.facade` | `conversation.agent_call_detail.CanonicalAgentCallDetailService` | internal to `conversation` |
 | `MessageRepository` | `conversation.facade` | `conversation.repository.mongo.MessageMongoRepository` | internal to `conversation` |
 | `RoomMembershipSeedSource` | `conversation.membership` | `conversation.membership_source.RepositoryRoomMembershipSeedSource` | crosses to composition root |
 | `ClientRequestIdResolver` | `conversation.protocols` | `conversation.repository.client_request_ids.ClientRequestIdStore` | crosses to `execution` |
@@ -1272,10 +1273,22 @@ sets are sorted; empty mention sets normalize to absence, while an empty
 selected-Agent set stays an explicit empty selection. Candidate group ID is
 included only for effective `saved_group` scope. The runtime discards
 client-supplied run/claim/task fields and forces user-message identity.
-String-valued quote display metadata in `extend_info` is allowlisted only without
-a structured quote; structured quotes rebuild display metadata from the
-structured payload. Generated IDs, timestamps, resolved file metadata and URLs,
-and the request-time display name are not fingerprinted.
+Client-supplied `extend_info` is discarded. The structured `message.quote` is
+the only way to send a quote: `materialize_quote` validates the source, persists
+the `room_quotes` record, and then writes the display fields `quoted_text`,
+`quoted_sender_name`, and `quote_id` into `extend_info`. Client-supplied values
+of those three keys are dropped before that. Source rules: kind `agent` or
+`synthesis` needs an agent message and `user_turn` a user message in the same
+room; a canonical Agent Card ID is checked against its call record (see Agent
+Cards and private details); kind `unknown` with any other ID is stored without a
+source check. Any invalid source returns 400 `Invalid quote source` (or
+`Invalid quote source type` for a same-room message of the wrong type). A
+request carrying client display keys without a structured quote (a tab built
+before structured quotes became mandatory) is sent without a quote and logged
+at debug level, not rejected. The fingerprint keeps its `legacy_quote` key,
+always `null`, so fingerprints stored before that change stay byte-identical.
+Generated IDs, timestamps, resolved file metadata and URLs, and the
+request-time display name are not fingerprinted.
 
 `room_user_messages` has two critical unique indexes:
 `room_user_message_id_unique` on `message_id`, and
@@ -2015,11 +2028,12 @@ Each canonical A2A invocation owns one Agent Card keyed by
 without exposing private IDs. The private binding stores the sanitized root
 Agent Card name separately from the skill-specific Tool label, so cards show
 `Weather Agent` while Trace may show `Weather Agent - Get Current Weather`.
-Lifecycle projection writes `room_agent_messages` and emits durable
-`task_submitted` / `task_update` events containing only run/public-call
-identity, public Agent name, and status; a missing-name update cannot downgrade a
-persisted name. Private agent IDs and raw content, errors, parts, and artifacts
-are excluded, and canonical HITL prompts, choices, and labels pass the configured
+Cards are not room messages: no `room_agent_messages` row is written for them,
+and no production path emits `task_submitted` / `task_update` for them. The
+frontend folds each card from the Run's canonical `run_event` tool activity,
+which carries only run/public-call identity, public Agent name, and status.
+Private agent IDs and raw content, errors, parts, and artifacts are excluded,
+and canonical HITL prompts, choices, and labels pass the configured
 secret inventory. The HITL producer resolves the accepted Tool's opaque public
 call ID and root Agent label before emitting a request; canonical frames carry
 `run_id`, the exact client/User root, and no private identity. After the ordered
@@ -2038,6 +2052,13 @@ room-file ID, display name, MIME type, and size. The A2A content sequence is a
 discriminated `parts` list (`{kind: "text", text}`, `{kind: "data", data}`);
 private part metadata is omitted, and external URLs ending in a local-looking
 `/files/…/content` suffix are never remapped.
+
+A quote whose `source_message_id` is a card ID is validated against the same
+call record: the source kind must be `agent`, the ID must parse as
+`orchestrator:{run_id}:inv_…`, and `CanonicalAgentCallDetailService.agent_call_exists`
+must find that public call in a Run of the quoting room. It reads no call output.
+Any failure, including a missing reader or a lookup error, returns the same 400
+`Invalid quote source`, so an unknown call and another room's call look alike.
 
 ### Fan-out, dedup, and connections
 

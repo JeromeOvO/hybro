@@ -179,6 +179,31 @@ describe('useSendMessage room-history rollback', () => {
     expect(activeQueryClient.getQueryData(roomHistoryQueryKey('user-1'))).toEqual(initialHistory)
   })
 
+  it('sends every quote as a structured quote without plain display fields', async () => {
+    sendMessageMock.mockResolvedValueOnce({ success: true, message_id: 'message-1' })
+
+    expect(await send({
+      quoteData: {
+        content: '  Sunny, 21C  ',
+        messageId: 'orchestrator:run-1:inv_weather_0001',
+        senderName: 'Weather Agent',
+        sourceKind: 'agent',
+      },
+    })).toBe(true)
+
+    const params = sendMessageMock.mock.calls[0][0]
+    expect(params.structuredQuote).toEqual({
+      text: 'Sunny, 21C',
+      source_message_id: 'orchestrator:run-1:inv_weather_0001',
+      source_kind: 'agent',
+      sender_display_name: 'Weather Agent',
+      source_agent_id: null,
+    })
+    expect(params).not.toHaveProperty('quotedText')
+    expect(params).not.toHaveProperty('quotedSenderName')
+    expect(params).not.toHaveProperty('relatedMessageId')
+  })
+
   it('restores history when the quote is too long', async () => {
     expect(await send({
       quoteData: {

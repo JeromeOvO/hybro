@@ -6,7 +6,7 @@ import {
   roomHistoryQueryKey,
 } from '@/lib/room-history-query'
 import { toast } from 'sonner'
-import type { QuoteData } from '@/lib/types/quote'
+import type { QuoteData, RoomQuoteWire } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
 import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
 import { useMessageStore } from '@/stores/message-store'
@@ -147,7 +147,7 @@ export function useSendMessage(
         return false
       }
 
-      const structuredQuote = quoteData
+      const structuredQuote: RoomQuoteWire | null = quoteData
         ? {
             text: quoteData.content.trim(),
             source_message_id: quoteData.messageId,
@@ -164,9 +164,6 @@ export function useSendMessage(
         getToken,
         userId,
         userName,
-        relatedMessageId: structuredQuote ? null : (quoteData?.messageId ?? null),
-        quotedText: structuredQuote ? null : (quoteData?.content ?? null),
-        quotedSenderName: structuredQuote ? null : (quoteData?.senderName ?? null),
         attachments: uploadedAttachments,
         mode,
         agentScope,

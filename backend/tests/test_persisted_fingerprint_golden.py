@@ -163,6 +163,61 @@ def test_execution_request_fingerprint_is_pinned() -> None:
     )
 
 
+_GOLDEN_REQUEST_BASE = {
+    "conversation_id": "room-1",
+    "sender_id": "user-1",
+    "sender_name": "Display Name",
+    "client_request_id": "request-1",
+    "mode": "direct",
+    "agent_scope": {"source": "room_default"},
+}
+
+
+def test_no_quote_request_fingerprint_is_pinned() -> None:
+    # Pinned before the unstructured quote path was removed.
+    request = ExecutionRequest(
+        **_GOLDEN_REQUEST_BASE,
+        message={
+            "room_id": "room-1",
+            "message_id": "",
+            "message_content": {"message_text": "hello"},
+            "extend_info": None,
+        },
+    )
+
+    assert build_execution_request_fingerprint(request) == (
+        "cf1eb6d06cca6beb913bde17b9da92f10d434bb8365e46ff0ea92705250405e2"
+    )
+
+
+def test_canonical_card_quote_request_fingerprint_is_pinned() -> None:
+    # Pinned before the unstructured quote path was removed. The duplicate
+    # display fields are what tabs built before the removal still send.
+    request = ExecutionRequest(
+        **_GOLDEN_REQUEST_BASE,
+        message={
+            "room_id": "room-1",
+            "message_id": "",
+            "message_content": {"message_text": "hello"},
+            "quote": {
+                "text": "quoted",
+                "source_message_id": "orchestrator:run-1:call-1",
+                "source_kind": "agent",
+                "sender_display_name": "Weather Agent",
+                "source_agent_id": None,
+            },
+            "extend_info": {
+                "quoted_text": "quoted",
+                "quoted_sender_name": "Weather Agent",
+            },
+        },
+    )
+
+    assert build_execution_request_fingerprint(request) == (
+        "1f980baa80afc8c075fa6e350429e1b2bb875c123b68b30b3cd5aa3963f3fe56"
+    )
+
+
 def test_supervisor_route_snapshot_fingerprint_is_pinned() -> None:
     snapshot = HITLRouteSnapshot(route="supervisor_run", orchestration_run_id="run-1")
 

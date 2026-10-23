@@ -1726,6 +1726,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     artifact_metadata_reader=file_storage,
                 )
             )
+            # Quotes of canonical Agent Cards validate against the call record.
+            _room_facade.bind_agent_call_reader(
+                app.state.canonical_agent_call_detail_reader
+            )
             logger.info("Canonical orchestrator runtime composition ready")
         except OrchestratorCompositionError as exc:
             raise RuntimeError("Canonical orchestrator runtime is required") from exc

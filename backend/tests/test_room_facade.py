@@ -803,6 +803,140 @@ async def test_quote_materialization_rejects_invalid_source_room():
     assert quote_repo.inserted == []
 
 
+class FakeAgentCallReader:
+    def __init__(self, calls: set[tuple[str, str, str]]) -> None:
+        self.calls = calls
+        self.lookups: list[tuple[str, str, str]] = []
+
+    async def agent_call_exists(
+        self, *, conversation_id: str, run_id: str, public_call_id: str
+    ) -> bool:
+        key = (conversation_id, run_id, public_call_id)
+        self.lookups.append(key)
+        return key in self.calls
+
+
+_QUOTE_ROOM = Room(
+    conversation_id="r1",
+    room_name="Room",
+    room_owner_id="owner",
+    room_owner_name="Owner",
+)
+
+
+def _canonical_quote_message(source_message_id: str, source_kind: QuoteSourceKind):
+    return RoomUserMessage(
+        conversation_id="r1",
+        message_id="u1",
+        user_id="user",
+        message_content=MessageContent(message_text="reply"),
+        quote={
+            "text": " forecast text ",
+            "source_message_id": source_message_id,
+            "source_kind": source_kind,
+            "sender_display_name": "Weather Agent",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_quote_materialization_accepts_same_room_canonical_agent_card():
+    quote_repo = FakeQuoteRepository()
+    facade, _, _, _, _ = _facade(quote_repository=quote_repo)
+    reader = FakeAgentCallReader({("r1", "run-1", "inv_weather_0001")})
+    facade.bind_agent_call_reader(reader)
+    user_message = _canonical_quote_message(
+        "orchestrator:run-1:inv_weather_0001", QuoteSourceKind.AGENT
+    )
+
+    response = await facade.materialize_quote(
+        room=_QUOTE_ROOM,
+        request=RoomCenterUserMessageRequest(user_id="user"),
+        user_message=user_message,
+    )
+
+    assert response is None
+    assert reader.lookups == [("r1", "run-1", "inv_weather_0001")]
+    assert user_message.extend_info == {
+        "quoted_text": "forecast text",
+        "quoted_sender_name": "Weather Agent",
+        "quote_id": "quote-1",
+    }
+    stored = quote_repo.inserted[0]
+    assert stored.source_message_id == "orchestrator:run-1:inv_weather_0001"
+    assert stored.source_kind == "agent"
+    assert stored.sender_display_name == "Weather Agent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_message_id", "source_kind", "bind_reader"),
+    [
+        # The run exists only in another room.
+        ("orchestrator:run-other:inv_weather_0001", QuoteSourceKind.AGENT, True),
+        ("orchestrator:run-missing:inv_weather_0001", QuoteSourceKind.AGENT, True),
+        ("orchestrator:run-1:inv_missing", QuoteSourceKind.AGENT, True),
+        ("orchestrator:run-1:call-1", QuoteSourceKind.AGENT, True),
+        ("orchestrator::inv_weather_0001", QuoteSourceKind.AGENT, True),
+        ("orchestrator:run-1:inv_", QuoteSourceKind.AGENT, True),
+        ("orchestrator:run-1:inv_weather_0001", QuoteSourceKind.SYNTHESIS, True),
+        ("orchestrator:run-1:inv_weather_0001", QuoteSourceKind.USER_TURN, True),
+        ("orchestrator:run-1:inv_weather_0001", QuoteSourceKind.UNKNOWN, True),
+        ("orchestrator:run-1:inv_weather_0001", QuoteSourceKind.AGENT, False),
+    ],
+)
+async def test_quote_materialization_rejects_invalid_canonical_agent_card(
+    source_message_id, source_kind, bind_reader
+):
+    quote_repo = FakeQuoteRepository()
+    facade, _, _, _, _ = _facade(quote_repository=quote_repo)
+    if bind_reader:
+        facade.bind_agent_call_reader(
+            FakeAgentCallReader(
+                {
+                    ("r1", "run-1", "inv_weather_0001"),
+                    ("other", "run-other", "inv_weather_0001"),
+                }
+            )
+        )
+    user_message = _canonical_quote_message(source_message_id, source_kind)
+
+    response = await facade.materialize_quote(
+        room=_QUOTE_ROOM,
+        request=RoomCenterUserMessageRequest(user_id="user"),
+        user_message=user_message,
+    )
+
+    assert response is not None
+    assert response.success is False
+    assert response.status_code == 400
+    assert response.error == "Invalid quote source"
+    assert quote_repo.inserted == []
+
+
+@pytest.mark.asyncio
+async def test_quote_materialization_fails_closed_when_call_lookup_errors():
+    class FailingReader:
+        async def agent_call_exists(self, **_kwargs) -> bool:
+            raise RuntimeError("run store unavailable")
+
+    quote_repo = FakeQuoteRepository()
+    facade, _, _, _, _ = _facade(quote_repository=quote_repo)
+    facade.bind_agent_call_reader(FailingReader())
+
+    response = await facade.materialize_quote(
+        room=_QUOTE_ROOM,
+        request=RoomCenterUserMessageRequest(user_id="user"),
+        user_message=_canonical_quote_message(
+            "orchestrator:run-1:inv_weather_0001", QuoteSourceKind.AGENT
+        ),
+    )
+
+    assert response is not None
+    assert response.error == "Invalid quote source"
+    assert quote_repo.inserted == []
+
+
 async def test_create_room_activates_epoch_after_persist():
     epoch_store = InMemoryRoomEpochStore()
     facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)

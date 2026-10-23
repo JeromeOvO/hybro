@@ -251,3 +251,29 @@ async def test_private_detail_route_authorizes_room_and_handles_missing_output()
             RoomStore("owner"),
         )
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("conversation_id", "run_id", "public_call_id", "expected"),
+    [
+        ("room-1", "run-1", "inv_weather_0001", True),
+        ("room-2", "run-1", "inv_weather_0001", False),
+        ("room-1", "run-missing", "inv_weather_0001", False),
+        ("room-1", "run-1", "inv_unknown", False),
+    ],
+)
+async def test_agent_call_exists_requires_same_room_run_and_call(
+    conversation_id, run_id, public_call_id, expected
+):
+    # Existence does not depend on buffered output, so a running call counts.
+    service = CanonicalAgentCallDetailService(RunStore(canonical_run(output=False)))
+
+    assert (
+        await service.agent_call_exists(
+            conversation_id=conversation_id,
+            run_id=run_id,
+            public_call_id=public_call_id,
+        )
+        is expected
+    )

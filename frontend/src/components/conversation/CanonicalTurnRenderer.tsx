@@ -135,12 +135,22 @@ function CanonicalFinalAnswer({ turn, surfaceRef }: { turn: TurnProjection; surf
   const assistant = turn.currentAssistant ?? turn.finalAnswer
   if (assistant?.text || artifacts.length > 0 || loadFailed) {
     const streaming = assistant?.status === 'streaming'
+    // Only a final answer the backend has stored (finalCommitted) is an agent
+    // message it accepts as a synthesis quote source; earlier text is not.
+    const quotable =
+      turn.finalCommitted &&
+      assistant !== undefined &&
+      assistant === turn.finalAnswer &&
+      assistant.status === 'completed'
     return (
       <div
         ref={surfaceRef}
         className="canonical-final-answer conversation-content-body"
         data-canonical-final-answer
         data-message-id={assistant?.messageId ?? turn.id}
+        data-quote-message-id={quotable ? assistant.messageId : undefined}
+        data-quote-agent-name={quotable ? 'HYBRO AI' : undefined}
+        data-quote-source-kind={quotable ? 'synthesis' : undefined}
         data-streaming={streaming || undefined}
         aria-live={streaming ? 'polite' : undefined}
       >
