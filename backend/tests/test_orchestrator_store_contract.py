@@ -5,7 +5,6 @@ from datetime import timedelta
 
 import pytest
 
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from execution.orchestrator import (
     AssistantMessage,
     RecoveryClaim,
@@ -16,20 +15,23 @@ from execution.orchestrator import (
     commit_terminal_decision,
     commit_terminal_status,
 )
-from execution.orchestrator.contract_harness import InMemoryOrchestratorContractHarness
-from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.ports import OrchestratorRunStore
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from tests.orchestrator_harness.contract_harness import (
+    InMemoryOrchestratorContractHarness,
+)
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_helpers import NOW, make_run
 
 
-def _run(run_id: str, room_id: str):
+def _run(run_id: str, conversation_id: str):
     run = make_run()
     return run.model_copy(
         update={
             "run_id": run_id,
-            "session_id": room_id,
-            "room_id": room_id,
+            "session_id": conversation_id,
+            "conversation_id": conversation_id,
             "client_request_id": f"request-{run_id}",
             "request": run.request.model_copy(
                 update={
@@ -263,10 +265,10 @@ def test_deletion_waits_for_live_projection_claim_and_fences_stale_owner():
         )
         == "accepted"
     )
-    assert store.delete_room(run.room_id, owner_id="deleter") == "conflict"
+    assert store.delete_room(run.conversation_id, owner_id="deleter") == "conflict"
     assert run.run_id in store.runs
     store.release_projection(run.run_id, "projection-1", owner_id="projector")
-    assert store.delete_room(run.room_id, owner_id="deleter") == "accepted"
+    assert store.delete_room(run.conversation_id, owner_id="deleter") == "accepted"
     assert run.run_id not in store.runs
     assert (
         store.confirm_projection(

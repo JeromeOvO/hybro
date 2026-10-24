@@ -8,18 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
+from approval.application import HITLApplicationCoordinator
+from approval.exceptions import HITLRoutingFailedError
+from approval.repository import HITLRequestStore
+from approval.service import HITLService
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
-from execution.hitl.application import HITLApplicationCoordinator
-from execution.hitl.exceptions import HITLRoutingFailedError
-from execution.hitl.service import HITLService
 from models.hitl import (
     HITLInteraction,
     HITLInteractionStatus,
-    HITLRequest,
-    HITLResumeCommand,
-    HITLResumeCommandStatus,
     HITLStatus,
 )
 
@@ -54,7 +51,7 @@ def _request_doc(**updates):
     doc.pop("group_id", None)
     doc["public_source"] = source
     doc["evidence_origin"] = source
-    doc["application_route"] = "a2a_resume" if source == "agent" else "supervisor_run"
+    doc["application_route"] = "supervisor_run"
     if source == "agent":
         doc.setdefault("agent_id", "agent-1")
         doc.setdefault("a2a_task_id", "remote-task")
@@ -67,19 +64,10 @@ def _request_doc(**updates):
 def _interaction(**updates):
     source = updates.pop("source", "supervisor")
     creation_prompts = updates.pop("creation_prompts", None)
-    if source == "agent":
-        snapshot = HITLRouteSnapshot(
-            route=HITLApplicationRoute.A2A_RESUME,
-            task_id="remote-task",
-            context_id="remote-context",
-            continuation_message_id="agent-message",
-            agent_id="agent-1",
-        )
-    else:
-        snapshot = HITLRouteSnapshot(
-            route=HITLApplicationRoute.SUPERVISOR_RUN,
-            orchestration_run_id="run-1",
-        )
+    snapshot = HITLRouteSnapshot(
+        route=HITLApplicationRoute.SUPERVISOR_RUN,
+        orchestration_run_id="run-1",
+    )
     doc = {
         "schema_version": 3,
         "interaction_id": "interaction-1",
@@ -118,22 +106,6 @@ def _interaction(**updates):
     return doc
 
 
-def test_models_reject_provisional_remote_command_ids():
-    with pytest.raises(ValidationError):
-        HITLResumeCommand(
-            command_id="command-1",
-            interaction_id="interaction-1",
-            application_revision=1,
-            task_id="pending-local",
-            context_id="remote-context",
-            continuation_message_id="message-1",
-            agent_id="agent-1",
-            outbound_message_id="outbound-1",
-            answer_request_ids=["request-1"],
-            answer_digest="digest",
-        )
-
-
 def test_interaction_model_rejects_impossible_applied_state():
     with pytest.raises(ValidationError):
         snapshot = HITLRouteSnapshot(
@@ -142,7 +114,7 @@ def test_interaction_model_rejects_impossible_applied_state():
         )
         HITLInteraction(
             interaction_id="interaction-1",
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="user-message-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
             public_source="supervisor",
@@ -163,11 +135,7 @@ async def test_deadline_is_part_of_claim_and_pending_queries_without_truncation(
     collection = MagicMock()
     collection.find_one_and_update = AsyncMock(return_value=None)
     collection.find = AsyncMock(return_value=[])
-    part = HITLRuntimeStorePart(
-        hitl_requests=collection,
-        room_agent_messages=MagicMock(),
-        room_user_messages=MagicMock(),
-    )
+    part = HITLRequestStore(hitl_requests=collection, message_writer=MagicMock())
 
     await part.claim_hitl_request("request-1", status="answer_recorded")
     claim_query = collection.find_one_and_update.await_args.args[0]
@@ -269,89 +237,6 @@ async def test_pending_projection_validates_complete_inventory_then_hides_respon
 
     assert [request.request_id for request in result] == ["request-2"]
     assert persistence.get_hitl_request.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_partial_group_records_answer_without_application():
-    request = _request_doc(interaction_id="group-1", group_total=2, group_index=0)
-    request_2 = _request_doc(
-        request_id="request-2",
-        interaction_id="group-1",
-        group_total=2,
-        group_index=1,
-    )
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(
-        side_effect=lambda request_id: (
-            request if request_id == "request-1" else request_2
-        )
-    )
-    persistence.claim_hitl_request = AsyncMock(return_value=request)
-    lifecycle = MagicMock()
-    lifecycle.get_interaction_strict = AsyncMock(
-        return_value=_interaction(
-            interaction_id="group-1",
-            request_ids=["request-1", "request-2"],
-            required_request_ids=["request-1", "request-2"],
-            expected_request_count=2,
-        )
-    )
-    lifecycle.record_interaction_answer = AsyncMock(
-        return_value=_interaction(
-            interaction_id="group-1",
-            request_ids=["request-1", "request-2"],
-            required_request_ids=["request-1", "request-2"],
-            expected_request_count=2,
-            answer_request_ids=["request-1"],
-            status=HITLInteractionStatus.PARTIALLY_ANSWERED.value,
-        )
-    )
-    lifecycle.claim_interaction_application = AsyncMock()
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-    service = SimpleNamespace(persistence=persistence)
-
-    result = await coordinator.handle_response(
-        service,
-        room_id="room-1",
-        request_id="request-1",
-        user_input="Market A",
-        user_id="user-1",
-    )
-
-    assert result["status"] == "accepted"
-    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
-        HITLStatus.ANSWER_RECORDED.value
-    )
-    lifecycle.claim_interaction_application.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_crash_after_answer_recording_never_marks_request_responded():
-    request = _request_doc()
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=request)
-    persistence.claim_hitl_request = AsyncMock(return_value=request)
-    lifecycle = MagicMock()
-    lifecycle.get_interaction_strict = AsyncMock(return_value=_interaction())
-    lifecycle.record_interaction_answer = AsyncMock(return_value=None)
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-
-    with pytest.raises(HITLRoutingFailedError):
-        await coordinator.handle_response(
-            SimpleNamespace(persistence=persistence),
-            room_id="room-1",
-            request_id="request-1",
-            user_input="Market A",
-            user_id="user-1",
-        )
-
-    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
-        HITLStatus.ANSWER_RECORDED.value
-    )
-    assert all(
-        call.kwargs.get("status") != HITLStatus.RESPONDED.value
-        for call in persistence.mock_calls
-    )
 
 
 @pytest.mark.asyncio
@@ -566,7 +451,7 @@ async def test_batch_records_every_answer_before_single_application():
     coordinator.apply_interaction = AsyncMock(side_effect=apply)
     result = await coordinator.handle_batch_response(
         SimpleNamespace(persistence=persistence),
-        room_id="room-1",
+        conversation_id="room-1",
         interaction_id="group-1",
         answers=[
             {"request_id": "request-1", "user_input": "A"},
@@ -582,6 +467,70 @@ async def test_batch_records_every_answer_before_single_application():
 
 
 @pytest.mark.asyncio
+async def test_batch_records_answer_without_application_until_aggregate_ready():
+    request = _request_doc()
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(return_value=request)
+    persistence.claim_hitl_request = AsyncMock(return_value=request)
+    partially_answered = _interaction(
+        answer_request_ids=["request-1"],
+        status=HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+    )
+    lifecycle = MagicMock()
+    lifecycle.get_interaction_strict = AsyncMock(
+        side_effect=[_interaction(), partially_answered]
+    )
+    lifecycle.record_interaction_answer = AsyncMock(return_value=partially_answered)
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator.apply_interaction = AsyncMock()
+
+    with pytest.raises(HITLRoutingFailedError, match="application is not ready"):
+        await coordinator.handle_batch_response(
+            SimpleNamespace(persistence=persistence),
+            conversation_id="room-1",
+            interaction_id="interaction-1",
+            answers=[{"request_id": "request-1", "user_input": "Market A"}],
+            user_id="user-1",
+        )
+
+    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
+        HITLStatus.ANSWER_RECORDED.value
+    )
+    coordinator.apply_interaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_failed_answer_recording_never_marks_request_responded():
+    request = _request_doc()
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(return_value=request)
+    persistence.claim_hitl_request = AsyncMock(return_value=request)
+    lifecycle = MagicMock()
+    lifecycle.get_interaction_strict = AsyncMock(return_value=_interaction())
+    lifecycle.record_interaction_answer = AsyncMock(return_value=None)
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator.apply_interaction = AsyncMock()
+
+    with pytest.raises(HITLRoutingFailedError, match="Failed to record"):
+        await coordinator.handle_batch_response(
+            SimpleNamespace(persistence=persistence),
+            conversation_id="room-1",
+            interaction_id="interaction-1",
+            answers=[{"request_id": "request-1", "user_input": "Market A"}],
+            user_id="user-1",
+        )
+
+    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
+        HITLStatus.ANSWER_RECORDED.value
+    )
+    assert all(
+        call.kwargs.get("status") != HITLStatus.RESPONDED.value
+        for call in persistence.mock_calls
+    )
+    coordinator.apply_interaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_batch_rejects_mismatched_client_request_id_before_writes():
     row = _request_doc(client_request_id="authoritative-client")
     persistence = MagicMock()
@@ -594,7 +543,7 @@ async def test_batch_rejects_mismatched_client_request_id_before_writes():
     with pytest.raises(Exception, match="client_request_id does not match"):
         await coordinator.handle_batch_response(
             SimpleNamespace(persistence=persistence),
-            room_id="room-1",
+            conversation_id="room-1",
             interaction_id="interaction-1",
             answers=[{"request_id": "request-1", "user_input": "Market A"}],
             user_id="user-1",
@@ -602,250 +551,6 @@ async def test_batch_rejects_mismatched_client_request_id_before_writes():
         )
 
     persistence.claim_hitl_request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_remote_command_uses_stable_message_id_and_timeout_is_uncertain():
-    request = SimpleNamespace(
-        a2a_task_id="remote-task",
-        a2a_context_id="remote-context",
-        continuation_message_id="agent-message",
-        display_message_id="agent-message",
-    )
-    interaction = _interaction(
-        source="agent",
-        status="applying",
-        application_revision=1,
-        answer_request_ids=["request-1"],
-        answer_refs=[{"request_id": "request-1", "digest": _sha("answer")}],
-    )
-    row = _request_doc(
-        source="agent",
-        a2a_task_id="remote-task",
-        a2a_context_id="remote-context",
-        continuation_message_id="agent-message",
-        user_input="answer",
-        answer_digest=_sha("answer"),
-        status="answer_recorded",
-    )
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=row)
-    lifecycle = MagicMock()
-    lifecycle.create_resume_command = AsyncMock(side_effect=lambda doc: doc)
-    lifecycle.claim_resume_command = AsyncMock(return_value={"status": "delivering"})
-    lifecycle.renew_interaction_application = AsyncMock(return_value=True)
-    lifecycle.renew_resume_command = AsyncMock(return_value=True)
-    lifecycle.mark_resume_command_state = AsyncMock(
-        return_value={"status": "delivery_uncertain"}
-    )
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-    service = SimpleNamespace(
-        persistence=persistence,
-        _handle_agent_response=AsyncMock(side_effect=TimeoutError("lost reply")),
-    )
-
-    with pytest.raises(TimeoutError):
-        await coordinator._apply_agent(
-            service,
-            request=request,
-            interaction=interaction,
-            claim_id="claim-1",
-            user_input="answer",
-        )
-
-    command = lifecycle.create_resume_command.await_args.args[0]
-    assert isinstance(command["created_at"], datetime)
-    assert isinstance(command["updated_at"], datetime)
-    outbound_id = command["outbound_message_id"]
-    assert outbound_id.startswith("hitl-message-")
-    assert (
-        service._handle_agent_response.await_args.kwargs["outbound_message_id"]
-        == outbound_id
-    )
-    assert lifecycle.mark_resume_command_state.await_args.kwargs["status"] == (
-        HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
-    )
-
-
-@pytest.mark.asyncio
-async def test_reconciled_terminal_task_resumes_direct_queue_idempotently():
-    continuation = SimpleNamespace(
-        resume_queue_from_continuation=AsyncMock(return_value=False),
-        has_pending_queue_continuation=AsyncMock(return_value=False),
-    )
-    service = HITLService(continuation=continuation)
-    request = HITLRequest.model_validate(
-        _request_doc(source="agent", orchestration_run_id=None)
-    )
-
-    result = await service._project_reconciled_agent_response(
-        request,
-        {
-            "reconciled_from_get_task": True,
-            "task_state": "completed",
-            "response_text": "Recovered result",
-        },
-    )
-
-    continuation.resume_queue_from_continuation.assert_awaited_once_with(
-        "agent-message",
-        task_result_text="Recovered result",
-        failed=False,
-    )
-    assert result["queue_resume_triggered"] is False
-    assert result["queue_resume_already_completed"] is True
-
-
-@pytest.mark.asyncio
-async def test_reconciled_expired_task_resumes_queue_as_failure():
-    continuation = SimpleNamespace(
-        resume_queue_from_continuation=AsyncMock(return_value=True),
-        has_pending_queue_continuation=AsyncMock(return_value=False),
-    )
-    service = HITLService(continuation=continuation)
-    request = HITLRequest.model_validate(
-        _request_doc(source="agent", orchestration_run_id=None)
-    )
-
-    await service._project_reconciled_agent_response(
-        request,
-        {
-            "reconciled_from_get_task": True,
-            "task_state": "expired",
-            "response_text": "",
-        },
-    )
-
-    continuation.resume_queue_from_continuation.assert_awaited_once_with(
-        "agent-message",
-        task_result_text="",
-        failed=True,
-    )
-
-
-@pytest.mark.asyncio
-async def test_reconciled_terminal_task_retries_when_queue_continuation_remains():
-    continuation = SimpleNamespace(
-        resume_queue_from_continuation=AsyncMock(return_value=False),
-        has_pending_queue_continuation=AsyncMock(return_value=True),
-    )
-    service = HITLService(continuation=continuation)
-    request = HITLRequest.model_validate(
-        _request_doc(source="agent", orchestration_run_id=None)
-    )
-
-    with pytest.raises(RuntimeError, match="remains pending"):
-        await service._project_reconciled_agent_response(
-            request,
-            {
-                "reconciled_from_get_task": True,
-                "task_state": "completed",
-                "response_text": "Recovered result",
-            },
-        )
-
-
-@pytest.mark.asyncio
-async def test_get_task_confirmed_command_projects_local_queue_without_resend():
-    interaction = _interaction(
-        source="agent",
-        status="applying",
-        application_revision=1,
-        answer_request_ids=["request-1"],
-        answer_refs=[{"request_id": "request-1", "digest": _sha("answer")}],
-    )
-    row = _request_doc(
-        source="agent",
-        user_input="answer",
-        answer_digest=_sha("answer"),
-        status="answer_recorded",
-    )
-    lifecycle = MagicMock()
-    lifecycle.create_resume_command = AsyncMock(
-        side_effect=lambda command: {
-            **command,
-            "status": HITLResumeCommandStatus.PROJECTED.value,
-            "response_snapshot": {
-                "reconciled_from_get_task": True,
-                "task_state": "completed",
-                "response_text": "Recovered result",
-            },
-        }
-    )
-    lifecycle.claim_resume_command = AsyncMock()
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=row)
-    service = SimpleNamespace(
-        persistence=persistence,
-        _handle_agent_response=AsyncMock(),
-        _project_reconciled_agent_response=AsyncMock(
-            return_value={"queue_resume_triggered": True}
-        ),
-    )
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-
-    result = await coordinator._apply_agent(
-        service,
-        request=SimpleNamespace(display_message_id="agent-message"),
-        interaction=interaction,
-        claim_id="claim",
-        user_input="answer",
-    )
-
-    assert result == {"queue_resume_triggered": True}
-    service._project_reconciled_agent_response.assert_awaited_once()
-    lifecycle.claim_resume_command.assert_not_awaited()
-    service._handle_agent_response.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_existing_uncertain_command_is_never_resent():
-    lifecycle = MagicMock()
-    lifecycle.create_resume_command = AsyncMock(
-        side_effect=lambda command: {
-            **command,
-            "status": HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
-            "uncertain_since": utcnow(),
-        }
-    )
-    lifecycle.claim_resume_command = AsyncMock()
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-    row = _request_doc(
-        source="agent",
-        user_input="answer",
-        answer_digest=_sha("answer"),
-        status="answer_recorded",
-    )
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=row)
-    service = SimpleNamespace(
-        persistence=persistence,
-        _handle_agent_response=AsyncMock(),
-    )
-    request = SimpleNamespace(
-        a2a_task_id="remote-task",
-        a2a_context_id="remote-context",
-        continuation_message_id="agent-message",
-        display_message_id="agent-message",
-    )
-
-    with pytest.raises(TimeoutError):
-        await coordinator._apply_agent(
-            service,
-            request=request,
-            interaction=_interaction(
-                source="agent",
-                status="applying",
-                application_revision=1,
-                answer_request_ids=["request-1"],
-                answer_refs=[{"request_id": "request-1", "digest": _sha("answer")}],
-            ),
-            claim_id="claim",
-            user_input="answer",
-        )
-
-    lifecycle.claim_resume_command.assert_not_awaited()
-    service._handle_agent_response.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -883,7 +588,7 @@ async def test_materializing_interaction_is_not_emitted_before_exact_inventory_o
         orchestration_run_id="run-1",
     )
     result = await service.request_interaction(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,

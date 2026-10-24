@@ -21,12 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_MODULES = frozenset(
     {
         "agent",
+        "approval",
         "chat",
         "context_memory",
         "conversation",
         "delivery",
         "execution",
-        "extensions",
         "jobs",
         "llm_gateway",
         "local_agents",
@@ -41,7 +41,6 @@ DAL_ROOT = "dal"
 # package root or protocols.
 DOMAIN_IMPORT_DEBT = frozenset(
     {
-        ("agent/resolver.py", "llm_gateway.errors"),
         ("execution/adapters/profiles.py", "llm_gateway.errors"),
         ("execution/adapters/profiles.py", "llm_gateway.model_registry"),
         ("execution/orchestrator/model_runtime.py", "llm_gateway.error_classification"),
@@ -55,25 +54,12 @@ DOMAIN_IMPORT_DEBT = frozenset(
         ("execution/orchestrator_routing.py", "context_memory.resources"),
         ("execution/orchestrator_routing.py", "context_memory.translators"),
         ("jobs/orchestrator_workers.py", "execution.adapters.canary_metrics"),
-        ("jobs/stale_task_checker.py", "execution.cancellation.ports"),
-        ("jobs/stale_task_checker.py", "execution.dispatch.agent_event"),
         ("local_agents/card_probe.py", "agent.url_utils"),
     }
 )
 
 # Persistence adapters that still import domain types.
-DAL_IMPORT_DEBT = frozenset(
-    {
-        "dal/orchestrator/artifacts.py",
-        "dal/orchestrator/event_store.py",
-        "dal/orchestrator/hitl.py",
-        "dal/orchestrator/projection.py",
-        "dal/orchestrator/run_store.py",
-        "dal/orchestrator/stores.py",
-        "dal/runtime_store/cancellation_repository.py",
-        "dal/runtime_store/parts/message_store.py",
-    }
-)
+DAL_IMPORT_DEBT: frozenset[str] = frozenset()
 
 
 def _is_module(root: Path, dotted: str) -> bool:
@@ -171,7 +157,7 @@ def test_scanner_resolves_both_import_forms_to_submodules(tmp_path):
             "execution/__init__.py": "",
             "execution/engine.py": (
                 "import llm_gateway.errors\n"
-                "from llm_gateway import gateway, LLMServiceNotBoundError\n"
+                "from llm_gateway import gateway, LLMGatewayImpl\n"
                 "from agent import protocols\n"
                 "from agent import AgentFacade\n"
             ),

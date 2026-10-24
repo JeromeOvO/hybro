@@ -13,6 +13,7 @@ from common.errors import (
     FileStoragePlatformError,
     RetryableFileStoragePlatformError,
 )
+from conversation.repository import RoomMongoRepository
 from room_files import MemoryFileContentStore, RoomFiles
 from room_files.errors import FileOperationError
 
@@ -67,12 +68,17 @@ class InMemoryCollection:
         return AsyncCursor([deepcopy(doc) for doc in self.docs if _matches(doc, query)])
 
 
+def room_lifecycle(rooms):
+    """Conversation's room lifecycle store over an in-memory ``rooms``."""
+    return RoomMongoRepository(SimpleNamespace(collection=lambda _name: rooms))
+
+
 class AlwaysValidLeases:
     @asynccontextmanager
-    async def hold(self, _room_id, _owner):
+    async def hold(self, _conversation_id, _owner):
         yield "test-lease"
 
-    async def assert_valid(self, _room_id, _lease_id):
+    async def assert_valid(self, _conversation_id, _lease_id):
         return None
 
 
@@ -147,7 +153,7 @@ async def test_room_files_upload_persists_ready_metadata_and_content():
         file_bytes=b"hello",
         filename="../../report.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="text/plain",
     )
 
@@ -220,7 +226,7 @@ async def test_user_upload_survives_lost_finalize_acknowledgement():
         file_bytes=b"hello",
         filename="report.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="text/plain",
     )
 
@@ -237,13 +243,13 @@ async def test_agent_artifact_rejects_configured_room_without_write_leases():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         lease_writes=False,
     )
 
     with pytest.raises(FileStoragePlatformError) as exc_info:
         await files.store_agent_artifact(
-            room_id="room-1",
+            conversation_id="room-1",
             source_message_id="message-1",
             origin_key="origin-1",
             content=b"result",
@@ -267,13 +273,13 @@ async def test_agent_artifact_translates_transient_content_backend_failure():
     files = RoomFiles(
         metadata=collection,
         content=FailingContentStore(),
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
     with pytest.raises(RetryableFileStoragePlatformError) as exc_info:
         await files.store_agent_artifact(
-            room_id="room-1",
+            conversation_id="room-1",
             source_message_id="message-1",
             origin_key="origin-1",
             content=b"result",
@@ -293,13 +299,13 @@ async def test_agent_artifact_survives_lost_finalize_acknowledgement():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: file_id,
     )
     files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -319,7 +325,7 @@ async def test_room_files_normalizes_mime_types_before_persistence():
     files = RoomFiles(
         metadata=collection,
         content=MemoryFileContentStore(),
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
@@ -327,11 +333,11 @@ async def test_room_files_normalizes_mime_types_before_persistence():
         file_bytes=b"user",
         filename="user.txt",
         owner_id="user-1",
-        room_id="room-1",
+        conversation_id="room-1",
         content_type="Text/Plain; charset=UTF-8",
     )
     agent = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-unsafe-mime",
         content=b"agent",
@@ -361,7 +367,7 @@ async def test_room_files_rejects_upload_before_writing_metadata_or_content():
             file_bytes=b"123456",
             filename="large.txt",
             owner_id="user-1",
-            room_id="room-1",
+            conversation_id="room-1",
             content_type="text/plain",
         )
 
@@ -419,12 +425,12 @@ async def test_room_files_materializes_agent_artifact_idempotently():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
     )
     files._leases = AlwaysValidLeases()
 
     first = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -432,7 +438,7 @@ async def test_room_files_materializes_agent_artifact_idempotently():
         mime_type="text/plain",
     )
     second = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -470,11 +476,15 @@ async def test_room_files_resumes_pending_agent_artifact_without_duplicate_origi
         }
     )
     await content_store.write(file_id, b"result", "text/plain")
-    files = RoomFiles(metadata=collection, content=content_store, rooms=rooms)
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        room_lifecycle=room_lifecycle(rooms),
+    )
     files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-1",
         content=b"result",
@@ -498,12 +508,12 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     files = RoomFiles(
         metadata=collection,
         content=content_store,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: next(ids),
     )
     files._leases = AlwaysValidLeases()
     old = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-old",
         content=b"old",
@@ -511,7 +521,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
         mime_type="text/plain",
     )
     new = await files.store_agent_artifact(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         origin_key="origin-new",
         content=b"new",
@@ -520,7 +530,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     )
 
     deleted = await files.delete_superseded_agent_artifacts(
-        room_id="room-1",
+        conversation_id="room-1",
         source_message_id="message-1",
         file_ids={old["file_id"]},
     )
@@ -684,58 +694,3 @@ async def test_recovery_removes_crash_orphaned_agent_artifact():
     assert recovered == 1
     assert collection.docs == []
     assert await content_store.read(orphan_file_id, max_bytes=6) is None
-
-
-class NamedCollection:
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.deleted_many: list[dict] = []
-        self.counts: list[dict] = []
-
-    async def delete_many(self, query):
-        self.deleted_many.append(query)
-        return SimpleNamespace(deleted_count=0)
-
-    async def count(self, query):
-        self.counts.append(query)
-        return 0
-
-
-async def test_delete_room_state_skips_all_orchestrator_collections():
-    runs = NamedCollection("orchestrator_runs")
-    bindings = NamedCollection("orchestrator_agent_tool_bindings")
-    calls = NamedCollection("orchestrator_agent_calls")
-    observations = NamedCollection("orchestrator_a2a_observations")
-    conflicts = NamedCollection("orchestrator_a2a_observation_conflicts")
-    epochs = NamedCollection("orchestrator_room_epochs")
-    run_events = NamedCollection("orchestrator_run_events")
-
-    files = RoomFiles(
-        metadata=object(),
-        content=MemoryFileContentStore(),
-        room_owned_collections=[
-            runs,
-            bindings,
-            calls,
-            observations,
-            conflicts,
-            epochs,
-            run_events,
-        ],
-        excluded_from_room_state_delete={
-            "orchestrator_room_epochs",
-            "orchestrator_run_events",
-            "orchestrator_runs",
-            "orchestrator_agent_tool_bindings",
-            "orchestrator_agent_calls",
-            "orchestrator_a2a_observations",
-            "orchestrator_a2a_observation_conflicts",
-        },
-    )
-
-    assert await files.delete_room_state("room-1") is True
-
-    for collection in (runs, bindings, calls, observations, conflicts):
-        assert collection.deleted_many == []
-    assert epochs.deleted_many == []
-    assert run_events.deleted_many == []

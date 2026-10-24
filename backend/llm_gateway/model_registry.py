@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from common.config.loader import settings
-from common.dto import ModelInfo
+from common.dto.base import FrozenDTO
 from llm_gateway.config import resolve_generation_provider
 from llm_gateway.errors import LLMModelRoutingError
 
@@ -19,6 +19,14 @@ def _supported_thinking_levels(
     if provider == "openai" and normalized.startswith(_OPENAI_REASONING_MODEL_PREFIXES):
         return _OPENAI_REASONING_LEVELS
     return ()
+
+
+class ModelInfo(FrozenDTO):
+    model_id: str
+    logical_name: str
+    provider: str
+    capabilities: list[str]
+    max_context_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +107,6 @@ class ModelRegistryImpl:
                 4096,
                 1,
             ),
-            ("context_memory_json_model", "gpt-4o-mini", 128000, 4096, 1),
             (
                 "supervisor_model",
                 self._settings.supervisor_model or self._settings.lead_ai_model,

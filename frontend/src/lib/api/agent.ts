@@ -1,12 +1,13 @@
 // Agent-related API functions
 import type { 
-  AgentCenterRequest, 
-  AgentCenterResponse,
+  AgentRegisterRequest,
+  AgentDeleteRequest,
+  AgentRouteResponse,
   InspectionCenterRequest,
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
-import { apiGet, apiPost } from '../api-client'
+import { ApiError, apiGet, apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
 const LOCAL_AGENTS_BASE_URL = getApiUrl('local-agents')
@@ -37,21 +38,34 @@ export async function discoverLocalAgents(
 
 // Register agent
 export async function registerAgent(
-  request: AgentCenterRequest,
+  request: AgentRegisterRequest,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/registerAgent`,
     request,
     getToken
   )
 }
 
+/**
+ * The reason a registration was refused with HTTP 409, from the backend's
+ * `{detail: {code, message}}` conflict body; undefined for any other error.
+ */
+export function registrationConflictMessage(error: unknown): string | undefined {
+  if (!(error instanceof ApiError) || error.status !== 409) return undefined
+  const details = error.details
+  if (typeof details !== 'object' || details === null || !('detail' in details)) return undefined
+  const detail = details.detail
+  if (typeof detail !== 'object' || detail === null || !('message' in detail)) return undefined
+  return typeof detail.message === 'string' && detail.message ? detail.message : undefined
+}
+
 // Get agents from provider_id
 export async function getAgentsByProviderId(
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiGet<AgentRouteResponse>(
     `${API_BASE_URL}/getAgent/me`,
     getToken
   )
@@ -59,10 +73,10 @@ export async function getAgentsByProviderId(
 
 // Delete agent
 export async function deleteAgent(
-  request: AgentCenterRequest,
+  request: AgentDeleteRequest,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/deleteAgent`,
     request,
     getToken
@@ -74,8 +88,8 @@ export async function deleteAgent(
 // Get agent card from URL - PUBLIC
 export async function getAgentCardFromUrl(
   request: InspectionCenterRequest
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/getAgentCardFromUrl`,
     request
   )
@@ -86,8 +100,8 @@ export async function getAgent(
   agentId: string,
   signal?: AbortSignal,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiGet<AgentRouteResponse>(
     `${API_BASE_URL}/getAgent/${agentId}`,
     getToken,
     signal
@@ -104,12 +118,12 @@ export interface GetAllAgentsOptions {
 // Get visible agents, optionally filtering to active agents.
 export async function getAllAgents(
   options: GetAllAgentsOptions = {}
-): Promise<AgentCenterResponse> {
+): Promise<AgentRouteResponse> {
   const url = new URL(`${API_BASE_URL}/getAllAgents`)
   if (options.activeOnly) {
     url.searchParams.set('active_only', 'true')
   }
-  return apiGet<AgentCenterResponse>(
+  return apiGet<AgentRouteResponse>(
     url.toString(),
     options.getToken,
     options.signal,

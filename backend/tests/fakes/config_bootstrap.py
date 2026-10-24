@@ -34,7 +34,6 @@ for key in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
             "services": {
                 "default_agent_registrar_token": "fixture-registrar-" * 4,
                 "default_agent_llm_token": "fixture-inference-" * 4,
-                "webhook_signing_key": "fixture-webhook-" * 4,
             },
         }
     )

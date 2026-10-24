@@ -22,7 +22,7 @@ describe('selectPendingHitls', () => {
   it('returns non-grouped unresolved HITL', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-1', roomId: 'room-1',
+        id: 'hitl-1', conversationId: 'room-1',
         hitlRequestId: 'req-1', hitlPrompt: 'What is your name?',
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
       }),
@@ -37,7 +37,7 @@ describe('selectPendingHitls', () => {
   it('excludes resolved non-grouped HITL', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-1', roomId: 'room-1',
+        id: 'hitl-1', conversationId: 'room-1',
         hitlRequestId: 'req-1', hitlResolved: true,
         hitlPrompt: 'Done?', hitlUserAnswer: 'Yes',
         senderName: 'Analyst', taskStatus: TASK_STATE.COMPLETED,
@@ -50,14 +50,14 @@ describe('selectPendingHitls', () => {
   it('returns entire group when any member is unanswered', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'g1-q1', roomId: 'room-1',
+        id: 'g1-q1', conversationId: 'room-1',
         hitlRequestId: 'req-1', hitlPrompt: 'Q1?',
         hitlGroupId: 'group-A', hitlGroupTotal: 2, hitlGroupIndex: 0,
         hitlResolved: true, hitlUserAnswer: 'A1',
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
       }),
       createAgentMessage({
-        id: 'g1-q2', roomId: 'room-1',
+        id: 'g1-q2', conversationId: 'room-1',
         hitlRequestId: 'req-2', hitlPrompt: 'Q2?',
         hitlGroupId: 'group-A', hitlGroupTotal: 2, hitlGroupIndex: 1,
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
@@ -73,7 +73,7 @@ describe('selectPendingHitls', () => {
   it('passes through choice promptType and choices', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-c', roomId: 'room-1',
+        id: 'hitl-c', conversationId: 'room-1',
         hitlRequestId: 'req-c', hitlPrompt: 'Pick one',
         hitlPromptType: 'choice', hitlChoices: ['A', 'B', 'C'],
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
@@ -88,7 +88,7 @@ describe('selectPendingHitls', () => {
   it('passes through confirmation promptType', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-cf', roomId: 'room-1',
+        id: 'hitl-cf', conversationId: 'room-1',
         hitlRequestId: 'req-cf', hitlPrompt: 'Approve deploy?',
         hitlPromptType: 'confirmation',
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
@@ -103,7 +103,7 @@ describe('selectPendingHitls', () => {
   it('defaults promptType to text when hitlPromptType is undefined', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-t', roomId: 'room-1',
+        id: 'hitl-t', conversationId: 'room-1',
         hitlRequestId: 'req-t', hitlPrompt: 'What?',
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
       }),
@@ -115,7 +115,7 @@ describe('selectPendingHitls', () => {
   it('excludes HITL from other rooms', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'hitl-other', roomId: 'room-2',
+        id: 'hitl-other', conversationId: 'room-2',
         hitlRequestId: 'req-1', hitlPrompt: 'Q?',
         senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
       }),
@@ -130,7 +130,7 @@ describe('selectAgentHitlState', () => {
 
   it('returns null for entity without hitlRequestId', () => {
     const entity = {
-      ...createAgentMessage({ id: 'a1', roomId: 'room-1' }),
+      ...createAgentMessage({ id: 'a1', conversationId: 'room-1' }),
       source: 'db' as const, sourceVersion: 1,
       displayType: 'agent-bubble' as const,
       isEphemeral: false, createdAt: Date.now(), updatedAt: Date.now(),
@@ -141,7 +141,7 @@ describe('selectAgentHitlState', () => {
   it('returns HitlState with question from hitlPrompt', () => {
     const entity = {
       ...createAgentMessage({
-        id: 'a1', roomId: 'room-1',
+        id: 'a1', conversationId: 'room-1',
         hitlRequestId: 'req-1', hitlPrompt: 'How?', hitlUserAnswer: 'Like this',
         hitlResolved: true,
       }),
@@ -161,7 +161,7 @@ describe('selectAgentHitlState', () => {
   it('falls back to content when hitlPrompt is missing', () => {
     const entity = {
       ...createAgentMessage({
-        id: 'a1', roomId: 'room-1',
+        id: 'a1', conversationId: 'room-1',
         hitlRequestId: 'req-1', content: 'Agent needs input',
       }),
       source: 'db' as const, sourceVersion: 1,

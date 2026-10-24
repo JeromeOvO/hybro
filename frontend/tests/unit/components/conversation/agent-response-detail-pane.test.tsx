@@ -31,7 +31,7 @@ const detail: AgentResponseDetail = {
   taskError: null,
   requestMessage: {
     id: 'user-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'user',
     content: 'help me research a2a agents',
     senderName: 'User',

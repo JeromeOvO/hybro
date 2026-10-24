@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import BaseModel, Field, field_validator
+
 from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
-from models.orchestration import (
-    AuthorizationBasis,
-    CandidateAgentSnapshot,
-    CandidateScopeSnapshot,
-)
+from common.utils.time import utcnow
 
 AuthorizationKind = Literal[
     "room_member",
@@ -20,6 +19,51 @@ AuthorizationKind = Literal[
     "mention",
     "all_active_agents",
 ]
+
+
+class AuthorizationBasis(BaseModel):
+    kind: AuthorizationKind
+    conversation_id: str | None = None
+    group_id: str | None = None
+    selected_by_user_id: str | None = None
+    checked_at: datetime = Field(default_factory=utcnow)
+
+
+class CandidateAgentSnapshot(BaseModel):
+    agent_id: str
+    name: str | None = None
+    role: str | None = None
+    capability_summary: str = ""
+    status: str | None = None
+    source: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    input_modes: list[str] = Field(default_factory=lambda: ["text"])
+    output_modes: list[str] = Field(default_factory=list)
+    supports_file_upload: bool = False
+    success_rate: float | None = None
+
+
+class CandidateScopeSnapshot(BaseModel):
+    snapshot_id: str
+    revision: int = 1
+    source: str
+    conversation_id: str
+    group_id: str | None = None
+    agent_ids: list[str]
+    agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
+    room_membership_version: str | None = None
+    group_version: str | None = None
+    resolved_at: datetime = Field(default_factory=utcnow)
+    authorization_basis: AuthorizationBasis
+
+    @field_validator("revision")
+    @classmethod
+    def _revision_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("revision must be at least 1")
+        return value
+
+
 _AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
     "room_default": "room_member",
     "saved_group": "saved_group_member",
@@ -32,7 +76,7 @@ SUPPORTED_CANDIDATE_SCOPE_SOURCES = frozenset(_AUTHORIZATION_KIND_BY_SOURCE)
 
 def normalize_candidate_scope(
     *,
-    room_id: str,
+    conversation_id: str,
     source: str,
     selected_agent_set: Mapping[str, Any] | Sequence[Any],
     group_id: str | None = None,
@@ -46,7 +90,7 @@ def normalize_candidate_scope(
     return CandidateScopeSnapshot(
         snapshot_id=uuid4().hex,
         source=source,
-        room_id=room_id,
+        conversation_id=conversation_id,
         group_id=group_id,
         agent_ids=[agent.agent_id for agent in agents],
         agents=agents,
@@ -54,7 +98,7 @@ def normalize_candidate_scope(
         group_version=group_version,
         authorization_basis=AuthorizationBasis(
             kind=_authorization_kind(source),
-            room_id=room_id,
+            conversation_id=conversation_id,
             group_id=group_id,
             selected_by_user_id=selected_by_user_id,
         ),
@@ -63,7 +107,7 @@ def normalize_candidate_scope(
 
 def candidate_scope_from_envelope(
     *,
-    room_id: str,
+    conversation_id: str,
     envelope: Mapping[str, Any] | None,
     selected_agent_set: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> CandidateScopeSnapshot:
@@ -89,7 +133,7 @@ def candidate_scope_from_envelope(
         selected = []
 
     scope = normalize_candidate_scope(
-        room_id=room_id,
+        conversation_id=conversation_id,
         source=source,
         group_id=group_id,
         selected_agent_set=selected,

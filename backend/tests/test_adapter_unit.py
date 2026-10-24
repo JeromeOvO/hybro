@@ -13,9 +13,9 @@ from common.dto import (
     LLMResponse,
     LLMStructuredResponse,
     LLMUsage,
-    ModelInfo,
 )
 from common.types import MessageRole
+from llm_gateway.model_registry import ModelInfo
 
 
 @pytest.fixture(autouse=True)
@@ -49,28 +49,26 @@ def test_agent_card_data_normalizes_nested_agent_skill_models():
 
     from a2a_adapter.card_data import agent_card_dict, build_agent_card
 
+    interface = {
+        "url": "https://agent.example",
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0",
+    }
     data = agent_card_dict(
         {
             "name": "Minimal",
-            "url": "https://agent.example",
             "version": "1",
             "capabilities": {},
             "skills": [{"id": "skill-1", "name": "Skill"}],
+            "supportedInterfaces": [interface],
         }
     )
 
-    # The SDK card parser owns normalization: a legacy top-level ``url`` becomes
-    # one advertised interface, and ProtoJSON omits unset optional skill fields
-    # instead of materializing them as ``None``.
+    # The SDK card parser owns normalization: ProtoJSON omits unset optional
+    # skill fields instead of materializing them as ``None``.
     card = MessageToDict(build_agent_card(data))
 
-    assert card["supportedInterfaces"] == [
-        {
-            "url": "https://agent.example",
-            "protocolBinding": "JSONRPC",
-            "protocolVersion": "0.3.0",
-        }
-    ]
+    assert card["supportedInterfaces"] == [interface]
     assert card["skills"] == [{"id": "skill-1", "name": "Skill"}]
     assert card["capabilities"] == {}
     assert "defaultInputModes" not in card
@@ -184,7 +182,7 @@ def _probe_card(**overrides):
             200,
         ),
         # A response with no recognizable event member is malformed.
-        ({}, ["Response from agent is missing required 'kind' field."], 500),
+        ({}, ["Unrecognized A2A response from agent."], 500),
         (
             {"kind": "message", "result": {"kind": "message"}},
             [
@@ -311,48 +309,6 @@ async def test_agent_card_health_keeps_healthy_invalid_card_nonfatal():
     assert client.urls == ["https://agent.example" + AGENT_CARD_WELL_KNOWN_PATH]
 
 
-def test_completed_text_task_factory_builds_sdk_task_payload():
-    from a2a_adapter.task_status import build_completed_text_task
-    from common.types import TaskState
-
-    task = build_completed_text_task(
-        task_id="summary-1",
-        text="summary text",
-        context_id="ctx-1",
-    )
-
-    assert task.id == "summary-1"
-    assert task.context_id == "ctx-1"
-    assert task.status.state == TaskState.completed
-    assert task.status.message.message_id == "summary-1"
-    assert task.status.message.parts[0].model_dump(mode="json") == {
-        "kind": "text",
-        "metadata": None,
-        "text": "summary text",
-    }
-    assert task.history == [task.status.message]
-
-
-def test_failed_text_task_factory_builds_sdk_task_payload():
-    from a2a_adapter.task_status import build_failed_text_task
-    from common.types import TaskState
-
-    task = build_failed_text_task(
-        task_id="task-1",
-        context_id="ctx-1",
-        error_text="failed",
-    )
-
-    assert task.id == "task-1"
-    assert task.context_id == "ctx-1"
-    assert task.status.state == TaskState.failed
-    assert task.status.message.parts[0].model_dump(mode="json") == {
-        "kind": "text",
-        "metadata": None,
-        "text": "failed",
-    }
-
-
 def test_get_task_request_helpers_keep_sdk_details_in_adapter():
     from a2a.types import GetTaskRequest
 
@@ -424,31 +380,6 @@ def test_message_factory_builds_sdk_message_from_parts():
     assert MessageToDict(message)["parts"] == [{"text": "hello"}]
 
 
-def test_artifact_factory_materializes_non_text_parts_on_task():
-    from types import SimpleNamespace
-
-    from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
-
-    task = SimpleNamespace(artifacts=None)
-
-    materialize_non_text_parts_as_artifact(
-        task,
-        [{"kind": "data", "data": {"value": 1}}],
-    )
-
-    assert task.artifacts is not None
-    assert len(task.artifacts) == 1
-    assert type(task.artifacts[0]).__module__ == "common.types"
-    assert type(task.artifacts[0].parts[0]).__module__ == "common.types"
-    assert type(task.artifacts[0].parts[0].root).__module__ == "common.types"
-    assert task.artifacts[0].parts[0].model_dump(mode="json") == {
-        "kind": "data",
-        "metadata": None,
-        "data": {"value": 1},
-        "mimeType": None,
-    }
-
-
 @pytest.mark.asyncio
 async def test_pydantic_artifact_files_persist_internal_mime_type():
     from a2a_adapter.artifact_storage import (
@@ -490,7 +421,7 @@ async def test_pydantic_artifact_files_persist_internal_mime_type():
 
     converted = await materialize_artifacts(
         [artifact],
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
     )
 
@@ -545,7 +476,7 @@ async def test_artifact_materialization_enforces_raw_budget_across_artifacts(
 
     converted = await storage_module.materialize_artifacts(
         artifacts,
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
     )
 
@@ -677,7 +608,13 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
             "id": "agent-1",
             "name": "Agent One",
             "description": "Does work",
-            "url": "https://agent.example/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://agent.example/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ],
             "defaultInputModes": ["text/plain"],
             "defaultOutputModes": ["application/json"],
             "capabilities": {
@@ -693,7 +630,7 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
             agent_id="agent-2",
             name="Agent Two",
             description="Does other work",
-            url="https://two.example/a2a",
+            supported_interfaces=[SimpleNamespace(url="https://two.example/a2a")],
             default_input_modes=["text/plain"],
             default_output_modes=["text/markdown"],
             capabilities=SimpleNamespace(
@@ -707,7 +644,10 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
     )
 
     assert dict_snapshot.agent_id == "agent-1"
-    assert dict_snapshot.url == "https://agent.example/a2a"
+    assert dict_snapshot.url == "https://agent.example"
+    assert [item.url for item in dict_snapshot.interfaces] == [
+        "https://agent.example/a2a"
+    ]
     assert set(dict_snapshot.capabilities) >= {
         "streaming",
         "push_notifications",
@@ -716,6 +656,9 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
         "output:application/json",
     }
     assert object_snapshot.agent_id == "agent-2"
+    assert [item.url for item in object_snapshot.interfaces] == [
+        "https://two.example/a2a"
+    ]
     assert set(object_snapshot.capabilities) >= {
         "streaming",
         "push_notifications",
@@ -723,42 +666,6 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
         "input:text/plain",
         "output:text/markdown",
     }
-
-
-def test_transport_send_request_includes_accepted_output_modes():
-    from a2a_adapter.transport import _build_send_request
-
-    request = _build_send_request(
-        InternalAgentMessage(
-            agent_id="agent-1",
-            role=MessageRole.USER,
-            parts=[{"kind": "text", "text": "hello"}],
-        ),
-        streaming=False,
-        accepted_output_modes=["application/json"],
-    )
-
-    assert request["params"]["configuration"]["acceptedOutputModes"] == [
-        "application/json"
-    ]
-
-
-def test_transport_stream_request_includes_accepted_output_modes():
-    from a2a_adapter.transport import _build_send_request
-
-    request = _build_send_request(
-        InternalAgentMessage(
-            agent_id="agent-1",
-            role=MessageRole.USER,
-            parts=[{"kind": "text", "text": "hello"}],
-        ),
-        streaming=True,
-        accepted_output_modes=["text/markdown"],
-    )
-
-    assert request["params"]["configuration"]["acceptedOutputModes"] == [
-        "text/markdown"
-    ]
 
 
 @pytest.mark.asyncio
@@ -770,7 +677,13 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
             {
                 "name": "Card Agent",
                 "description": "Remote agent",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {
                     "streaming": True,
@@ -797,7 +710,7 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
         {
             "url": "https://agent.example/a2a",
             "protocolBinding": "JSONRPC",
-            "protocolVersion": "0.3.0",
+            "protocolVersion": "1.0",
         }
     ]
     assert "streaming" in first.capabilities
@@ -817,7 +730,13 @@ async def test_card_resolver_falls_back_to_legacy_agent_json_path():
         {
             "name": "Legacy Card Agent",
             "description": "Remote agent",
-            "url": "https://agent.example/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://agent.example/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ],
             "version": "1.0.0",
             "capabilities": {},
             "defaultInputModes": ["text/plain"],
@@ -853,7 +772,13 @@ async def test_card_resolver_retries_host_gateway_for_loopback_url():
                 {
                     "name": "Gateway Card Agent",
                     "description": "Remote agent",
-                    "url": "http://127.0.0.1:9060",
+                    "supportedInterfaces": [
+                        {
+                            "url": "http://127.0.0.1:9060",
+                            "protocolBinding": "JSONRPC",
+                            "protocolVersion": "1.0",
+                        }
+                    ],
                     "version": "1.0.0",
                     "capabilities": {},
                     "defaultInputModes": ["text/plain"],
@@ -887,7 +812,13 @@ async def test_card_resolver_expires_cached_card_after_ttl():
             {
                 "name": "Card Agent A",
                 "description": "A",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {},
                 "defaultInputModes": ["text/plain"],
@@ -897,7 +828,13 @@ async def test_card_resolver_expires_cached_card_after_ttl():
             {
                 "name": "Card Agent B",
                 "description": "B",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {},
                 "defaultInputModes": ["text/plain"],
@@ -916,6 +853,78 @@ async def test_card_resolver_expires_cached_card_after_ttl():
     assert first.agent_id == "Card Agent A"
     assert second.agent_id == "Card Agent B"
     assert len(client.requested_urls) == 2
+
+
+def test_v03_card_snapshot_keeps_versioned_interfaces_and_discovery_base():
+    """A 0.3 wire card needs no Hybro fallback: the SDK parser maps it."""
+    from a2a_adapter.card_data import build_agent_card
+    from a2a_adapter.translators import a2a_card_to_snapshot
+    from tests.fakes.a2a_v1 import make_v03_card_json
+
+    card = build_agent_card(
+        make_v03_card_json(
+            url="https://legacy.example/a2a",
+            additionalInterfaces=[
+                {"url": "https://legacy.example/rest", "transport": "HTTP+JSON"}
+            ],
+        )
+    )
+
+    snapshot = a2a_card_to_snapshot(card, "https://legacy.example")
+
+    assert snapshot.url == "https://legacy.example"
+    assert snapshot.raw_card["url"] == "https://legacy.example"
+    assert [
+        (item.url, item.protocol_binding, item.protocol_version)
+        for item in snapshot.interfaces
+    ] == [
+        ("https://legacy.example/a2a", "JSONRPC", "0.3.0"),
+        ("https://legacy.example/rest", "HTTP+JSON", "0.3.0"),
+    ]
+    assert {"streaming", "input:text/plain"} <= set(snapshot.capabilities)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("card_json", "versions"),
+    [
+        (None, ["0.3.0"]),
+        (
+            {
+                "name": "Mixed Agent",
+                "version": "1.0.0",
+                "capabilities": {"streaming": True},
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/v03",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "0.3",
+                    },
+                    {
+                        "url": "https://agent.example/v1",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    },
+                ],
+            },
+            ["0.3", "1.0"],
+        ),
+    ],
+    ids=["v03", "mixed"],
+)
+async def test_card_resolver_accepts_v03_and_mixed_cards(card_json, versions):
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+    from tests.fakes.a2a_v1 import make_v03_card_json
+
+    payload = card_json or make_v03_card_json(url="https://agent.example/a2a")
+    resolver = AgentCardResolverImpl(client=_FakeCardClient([payload]))
+
+    snapshot = await resolver.resolve_card("https://agent.example")
+
+    assert snapshot is not None
+    assert snapshot.url == "https://agent.example"
+    assert [item.protocol_version for item in snapshot.interfaces] == versions
+    assert await resolver.supports_streaming("https://agent.example") is True
 
 
 @pytest.mark.asyncio
@@ -985,295 +994,6 @@ async def test_card_resolver_aclose_leaves_injected_client_open():
 
 
 @pytest.mark.asyncio
-async def test_transport_send_message_posts_a2a_request_and_returns_task_result():
-    from a2a_adapter.transport import AgentTransportImpl
-
-    client = _FakePostClient(
-        {
-            "result": {
-                "id": "task-1",
-                "status": {"state": "completed"},
-                "message": {"parts": [{"text": "ok"}]},
-            }
-        }
-    )
-    transport = AgentTransportImpl(timeout=1, client=client)
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-        metadata={"trace_id": "trace-1"},
-    )
-
-    result = await transport.send_message("https://agent.example/a2a/", message)
-
-    assert result.task_id == "task-1"
-    assert result.agent_id == "agent-1"
-    assert result.status == "completed"
-    assert client.posts[0]["url"] == "https://agent.example/a2a"
-    # 1.0 negotiates the protocol version out of band and renames the JSON-RPC
-    # method; the message itself is ProtoJSON.
-    assert client.posts[0]["headers"] == {"A2A-Version": "1.0"}
-    payload = client.posts[0]["json"]
-    assert payload["method"] == "SendMessage"
-    assert payload["params"]["message"]["role"] == "ROLE_USER"
-    assert payload["params"]["message"]["metadata"]["agent_id"] == "agent-1"
-
-
-@pytest.mark.asyncio
-async def test_transport_send_message_preserves_jsonrpc_envelope_id():
-    from a2a_adapter.transport import AgentTransportImpl
-
-    client = _FakePostClient(
-        {
-            "jsonrpc": "2.0",
-            "id": "rpc-123",
-            "result": {
-                "id": "task-1",
-                "status": {"state": "completed"},
-            },
-        }
-    )
-    transport = AgentTransportImpl(timeout=1, client=client)
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    result = await transport.send_message("https://agent.example/a2a/", message)
-
-    assert result.task_id == "task-1"
-    assert result.result["raw"]["id"] == "rpc-123"
-    assert result.result["raw"]["result"]["id"] == "task-1"
-
-
-@pytest.mark.asyncio
-async def test_transport_send_message_returns_error_result_on_http_error():
-    from a2a_adapter.transport import AgentTransportImpl
-
-    client = _FakePostClient(httpx.RequestError("boom"))
-    transport = AgentTransportImpl(timeout=1, client=client)
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    result = await transport.send_message("https://agent.example/a2a", message)
-
-    assert result.task_id == ""
-    assert result.agent_id == "agent-1"
-    assert result.status == "error"
-    assert result.result == {}
-    assert "boom" in result.error
-
-
-@pytest.mark.asyncio
-async def test_transport_send_message_retries_host_gateway_for_loopback_url(caplog):
-    from a2a_adapter.transport import AgentTransportImpl
-
-    class _LoopbackPostClient:
-        def __init__(self):
-            self.posts = []
-
-        async def post(self, url, json, headers=None):
-            self.posts.append({"url": url, "json": json, "headers": headers})
-            if url == "http://127.0.0.1:9060/a2a":
-                raise httpx.ConnectError("All connection attempts failed")
-            return _FakeResponse(
-                {
-                    "result": {
-                        "id": "task-1",
-                        "status": {"state": "completed"},
-                    }
-                }
-            )
-
-    client = _LoopbackPostClient()
-    transport = AgentTransportImpl(timeout=1, client=client)
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        result = await transport.send_message(
-            "http://127.0.0.1:9060/a2a",
-            message,
-        )
-
-    assert result.task_id == "task-1"
-    assert [post["url"] for post in client.posts] == [
-        "http://127.0.0.1:9060/a2a",
-        "http://host.docker.internal:9060/a2a",
-    ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_transport_aclose_closes_owned_client(monkeypatch):
-    from a2a_adapter import transport as transport_module
-
-    client = SimpleNamespace(aclose=AsyncMock())
-    monkeypatch.setattr(
-        transport_module.httpx,
-        "AsyncClient",
-        lambda timeout=None: client,
-    )
-    transport = transport_module.AgentTransportImpl()
-
-    await transport.aclose()
-
-    client.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_transport_aclose_leaves_injected_client_open():
-    from a2a_adapter.transport import AgentTransportImpl
-
-    client = SimpleNamespace(aclose=AsyncMock())
-    transport = AgentTransportImpl(client=client)
-
-    await transport.aclose()
-
-    client.aclose.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_transport_stream_message_yields_one_event_per_sse_frame(monkeypatch):
-    from a2a_adapter import transport as transport_module
-
-    @asynccontextmanager
-    async def fake_aconnect_sse(client, method, url, **kwargs):
-        yield _FakeEventSource(
-            [
-                {"taskId": "task-1", "type": "delta", "message": {"text": "one"}},
-                {
-                    "taskId": "task-1",
-                    "type": "status",
-                    "status": {"state": "completed"},
-                },
-            ]
-        )
-
-    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
-    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    events = [
-        event
-        async for event in transport.stream_message(
-            "https://agent.example/a2a", message
-        )
-    ]
-
-    assert [event.event_type for event in events] == ["delta", "status"]
-    assert [event.final for event in events] == [False, True]
-
-
-@pytest.mark.asyncio
-async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch):
-    from a2a_adapter import transport as transport_module
-
-    @asynccontextmanager
-    async def fake_aconnect_sse(client, method, url, **kwargs):
-        yield _FakeEventSource(
-            [
-                {
-                    "jsonrpc": "2.0",
-                    "id": "rpc-1",
-                    "result": {
-                        "taskId": "task-1",
-                        "contextId": "ctx-1",
-                        "kind": "status-update",
-                        "status": {"state": "completed"},
-                        "final": True,
-                    },
-                }
-            ]
-        )
-
-    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
-    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    events = [
-        event
-        async for event in transport.stream_message(
-            "https://agent.example/a2a", message
-        )
-    ]
-
-    assert len(events) == 1
-    assert events[0].task_id == "task-1"
-    assert events[0].event_type == "status-update"
-    assert events[0].final is True
-    assert events[0].payload["raw"]["id"] == "rpc-1"
-    assert events[0].payload["raw"]["result"]["taskId"] == "task-1"
-
-
-@pytest.mark.asyncio
-async def test_transport_stream_message_retries_host_gateway_for_loopback_url(
-    monkeypatch,
-    caplog,
-):
-    from a2a_adapter import transport as transport_module
-
-    attempted_urls = []
-
-    @asynccontextmanager
-    async def fake_aconnect_sse(client, method, url, **kwargs):
-        attempted_urls.append(url)
-        if url == "http://127.0.0.1:9060/a2a":
-            raise httpx.ConnectError("All connection attempts failed")
-        yield _FakeEventSource(
-            [
-                {
-                    "taskId": "task-1",
-                    "type": "status",
-                    "status": {"state": "completed"},
-                }
-            ]
-        )
-
-    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
-    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        events = [
-            event
-            async for event in transport.stream_message(
-                "http://127.0.0.1:9060/a2a",
-                message,
-            )
-        ]
-
-    assert len(events) == 1
-    assert events[0].task_id == "task-1"
-    assert events[0].event_type == "status"
-    assert attempted_urls == [
-        "http://127.0.0.1:9060/a2a",
-        "http://host.docker.internal:9060/a2a",
-    ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_stream_with_docker_host_url_fallback_does_not_retry_after_yield():
     from a2a_adapter.docker_host_fallback import (
         stream_with_docker_host_url_fallback,
@@ -1339,10 +1059,8 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     assert [m.logical_name for m in registry.list_models("embedding")] == [
         "embedding_model"
     ]
-    assert len(registry.list_models()) == 5
+    assert len(registry.list_models()) == 4
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
-    assert registry.get_model("context_memory_json_model").model_id == "gpt-4o-mini"
-    assert registry.supports_capability("context_memory_json_model", "json_schema")
 
 
 def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
@@ -1360,7 +1078,6 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
     for logical_name in (
         "lead_ai_model",
         "classifier_ai_model",
-        "context_memory_json_model",
         "supervisor_model",
     ):
         model = registry.get_model(logical_name)
@@ -1427,20 +1144,14 @@ async def test_openai_provider_generates_structured_responses_and_embeddings():
     text = await provider.generate([{"role": "user", "content": "hello"}], "gpt-test")
     structured = await provider.generate_structured(
         [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "gpt-test",
-    )
-    keyword_structured = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
         model="gpt-test",
+        schema={"type": "object"},
     )
     embeddings = await provider.embed_batch(["a", "b"], "embed-test")
 
     assert text.content == '{"ok": true}'
     assert text.usage == LLMUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7)
     assert structured.data == {"ok": True}
-    assert keyword_structured.data == {"ok": True}
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
     structured_call = client.chat.completions.create.await_args_list[1].kwargs
     assert structured_call["response_format"]["type"] == "json_schema"
@@ -1470,8 +1181,8 @@ async def test_openai_provider_generate_structured_propagates_invalid_json():
     with pytest.raises(json.JSONDecodeError):
         await provider.generate_structured(
             [{"role": "user", "content": "hello"}],
-            {"type": "object"},
-            "gpt-test",
+            model="gpt-test",
+            schema={"type": "object"},
         )
 
 
@@ -1492,10 +1203,10 @@ async def test_openai_provider_schema_only_structured_call_requires_model():
     )
     provider = OpenAIProvider(client=client)
 
-    with pytest.raises(TypeError, match="model is required"):
-        await provider.generate_structured(
+    with pytest.raises(TypeError, match="keyword-only argument: 'model'"):
+        await provider.generate_structured(  # type: ignore[call-arg]
             [{"role": "user", "content": "hello"}],
-            {"type": "object"},
+            schema={"type": "object"},
         )
 
     client.chat.completions.create.assert_not_awaited()

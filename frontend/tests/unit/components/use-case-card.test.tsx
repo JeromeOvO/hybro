@@ -2,26 +2,12 @@ import { describe, it, expect, vi } from "vitest"
 import { render, fireEvent, within } from "@testing-library/react"
 import { UseCaseCard } from "@/components/use-case-card"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import { createAgent } from "../../fixtures"
 import type { Agent } from "@/lib/types/agent"
 import { Youtube } from "lucide-react"
 
 function makeAgent(id: string, name: string, iconUrl?: string): Agent {
-  return {
-    agent_id: id,
-    agent_card: {
-      name,
-      description: "",
-      url: `https://example.com/${id}`,
-      version: "1.0.0",
-      provider: { organization: "test", url: "https://test.com" },
-      capabilities: {},
-      protocolVersion: "1.0.0",
-      skills: [],
-      defaultInputModes: ["text"],
-      defaultOutputModes: ["text"],
-      ...(iconUrl ? { iconUrl } : {}),
-    },
-  }
+  return createAgent({ agent_id: id, name, icon_url: iconUrl ?? null })
 }
 
 const catalog: Agent[] = [

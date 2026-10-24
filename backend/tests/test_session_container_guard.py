@@ -23,7 +23,6 @@ from api_gateway.routes.room_routes import (
     inquiry_room_setting,
     reorder_pinned_rooms,
     send_message,
-    update_room_agent_set,
     update_room_history_item,
 )
 from api_gateway.routes.sse_routes import cancel_message
@@ -34,10 +33,8 @@ from common.dto import (
     MembershipSeed,
     RoomInfo,
 )
-from common.dto.runtime_store import RuntimeRoomRecord
 from conversation.repository.mongo import RoomMongoRepository
 from conversation.translators import create_room_doc, room_info_from_doc
-from dal.runtime_store.contracts import room_to_runtime
 from models.room import MessageContent, Room, RoomUserMessage
 from tests.test_room_facade import NOW, _facade
 
@@ -64,7 +61,7 @@ def _room(owner_product: str = "session", **overrides) -> Room:
 
 def _store(room: Room) -> MagicMock:
     store = MagicMock()
-    store.get_room_by_room_id = AsyncMock(return_value=room_to_runtime(room))
+    store.get_room_by_room_id = AsyncMock(return_value=room)
     return store
 
 
@@ -95,23 +92,15 @@ def test_models_default_to_chat_product():
         ).owner_product
         == "chat"
     )
-    assert RoomInfo(room_id="r", room_name="r", owner_id="o").owner_product == "chat"
     assert (
-        RuntimeRoomRecord(
-            room_id="r", room_name="r", room_owner_id="o", room_owner_name="O"
-        ).owner_product
+        RoomInfo(conversation_id="r", room_name="r", owner_id="o").owner_product
         == "chat"
     )
 
 
-def test_room_to_runtime_preserves_owner_product():
-    assert room_to_runtime(_room("session")).owner_product == "session"
-    assert room_to_runtime(_room("chat")).owner_product == "chat"
-
-
 def test_create_room_doc_and_room_info_thread_owner_product():
     doc = create_room_doc(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="o",
         owner_name="O",
         room_name="r",
@@ -171,9 +160,9 @@ async def test_send_message_refuses_session_container():
     engine.execute = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await send_message(
+            "room-1",
             _json_request(
                 {
-                    "room_id": "room-1",
                     "client_request_id": "cr-1",
                     "mode": "direct",
                     "message": {"message_content": {"message_text": "hi"}},
@@ -183,7 +172,7 @@ async def test_send_message_refuses_session_container():
             user=_user(),
             store=_store(_room()),
             engine=engine,
-            center=MagicMock(),
+            rooms=MagicMock(),
         )
 
     _assert_session_refused(exc_info)
@@ -191,88 +180,57 @@ async def test_send_message_refuses_session_container():
 
 
 @pytest.mark.asyncio
-async def test_update_room_agent_set_refuses_session_container():
-    center = MagicMock()
-    center.update_room_agent_set = AsyncMock()
-    with pytest.raises(HTTPException) as exc_info:
-        await update_room_agent_set(
-            _json_request({"room_id": "room-1", "room_agent_ids": ["a2"]}),
-            user=_user(),
-            store=_store(_room()),
-            center=center,
-        )
-
-    _assert_session_refused(exc_info)
-    center.update_room_agent_set.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_update_room_agent_set_still_serves_chat_rooms():
-    center = MagicMock()
-    center.update_room_agent_set = AsyncMock(return_value={"success": True})
-
-    result = await update_room_agent_set(
-        _json_request({"room_id": "room-1", "room_agent_ids": ["a2"]}),
-        user=_user(),
-        store=_store(_room("chat")),
-        center=center,
-    )
-
-    assert result == {"success": True}
-
-
-@pytest.mark.asyncio
 async def test_history_patch_refuses_session_container():
-    center = MagicMock()
-    center.update_room_name = AsyncMock()
+    rooms = MagicMock()
+    rooms.rename_room = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await update_room_history_item(
             "room-1",
             RoomHistoryUpdate(title="Renamed"),
             user=_user(),
             store=_store(_room()),
-            center=center,
+            rooms=rooms,
         )
 
     _assert_session_refused(exc_info)
-    center.update_room_name.assert_not_called()
+    rooms.rename_room.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_pinned_order_refuses_session_container():
-    center = MagicMock()
-    center.inquiry_rooms_by_room_owner_id = AsyncMock(
+    rooms = MagicMock()
+    rooms.list_rooms_for_owner = AsyncMock(
         return_value=SimpleNamespace(
             success=True,
             status_code=200,
             error=None,
-            room_list=[SimpleNamespace(room_id="room-1", is_pinned=True)],
+            room_list=[SimpleNamespace(conversation_id="room-1", is_pinned=True)],
         )
     )
-    center.update_room_history_fields = AsyncMock()
+    rooms.update_history_fields = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await reorder_pinned_rooms(
-            PinnedRoomOrderUpdate(room_ids=["room-1"]),
+            PinnedRoomOrderUpdate(conversation_ids=["room-1"]),
             user=_user(),
             store=_store(_room()),
-            center=center,
+            rooms=rooms,
         )
 
     _assert_session_refused(exc_info)
-    center.update_room_history_fields.assert_not_called()
+    rooms.update_history_fields.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_history_delete_refuses_session_container():
-    center = MagicMock()
-    center.delete_room_by_room_id = AsyncMock()
+    rooms = MagicMock()
+    rooms.delete_room = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await delete_room_history_item(
-            "room-1", user=_user(), store=_store(_room()), center=center
+            "room-1", user=_user(), store=_store(_room()), rooms=rooms
         )
 
     _assert_session_refused(exc_info)
-    center.delete_room_by_room_id.assert_not_called()
+    rooms.delete_room.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -280,13 +238,13 @@ async def test_sse_cancel_refuses_session_container():
     db = MagicMock()
     db.get_room_user_message_by_message_id = AsyncMock(
         return_value=RoomUserMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             user_id=OWNER,
             message_content=MessageContent(message_text="hi"),
         )
     )
-    db.get_room_by_room_id = AsyncMock(return_value=room_to_runtime(_room()))
+    db.get_room_by_room_id = AsyncMock(return_value=_room())
     engine = MagicMock()
     engine.cancel = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
@@ -307,7 +265,7 @@ async def test_file_upload_refuses_session_container():
     with pytest.raises(HTTPException) as exc_info:
         await upload_file(
             upload,
-            room_id="room-1",
+            conversation_id="room-1",
             user=_user(),
             storage=storage,
             room_ownership=ownership,
@@ -325,25 +283,25 @@ async def test_file_upload_refuses_session_container():
 async def test_read_routes_serve_session_containers():
     engine = MagicMock()
     engine.get_runs_for_room = AsyncMock(return_value=[])
-    center = MagicMock()
-    center.inquiry_room_setting = AsyncMock(
+    rooms = MagicMock()
+    rooms.get_room = AsyncMock(
         return_value=SimpleNamespace(success=True, active_runs=None)
     )
-    center.inquiry_room_messages_by_room_id = AsyncMock(return_value={"success": True})
+    rooms.read_messages = AsyncMock(return_value={"success": True})
     store = _store(_room())
 
     setting = await inquiry_room_setting(
-        _json_request({"room_id": "room-1"}),
+        "room-1",
         user=_user(),
         store=store,
         engine=engine,
-        center=center,
+        rooms=rooms,
     )
     messages = await inquiry_room_messages(
-        _json_request({"room_id": "room-1"}),
+        "room-1",
         user=_user(),
         store=store,
-        center=center,
+        rooms=rooms,
     )
 
     assert setting.success is True

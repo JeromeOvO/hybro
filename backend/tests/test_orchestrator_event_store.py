@@ -6,9 +6,9 @@ from copy import deepcopy
 
 from pymongo.errors import DuplicateKeyError
 
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from execution.orchestrator.in_memory import InMemoryOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorEvent
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorEventStore
 
 from ._orchestrator_helpers import NOW
 from .test_orchestrator_a2a_mongo_parity import FakeCollection
@@ -20,7 +20,7 @@ def event(event_id: str, sequence: int, state_version: int = 1) -> OrchestratorE
         event_type="turn_started",
         session_id="room-1",
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         sequence=sequence,
         state_version=state_version,

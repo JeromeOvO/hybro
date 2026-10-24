@@ -1,15 +1,14 @@
-"""Production composition root for the orchestrator runtime (dark launch).
+"""Production composition root for the orchestrator runtime.
 
 This module assembles the full ``execution.orchestrator`` runtime from Mongo
 stores, typed settings, and the existing product services. It is imported only
-by ``container.py`` (the composition root) and tests; no route, facade, or job
-may reach it until step 7 wires dual-routing ingress.
+by ``container.py`` (the composition root) and tests; routes, facades, and jobs
+reach the runtime through the container-built adapters.
 
-Construction is failure-isolated at the adapter boundary: missing model routes,
-missing prompt assets, or invalid profile parameters raise
-``OrchestratorCompositionError`` so ``container.py`` can log and continue
-serving the legacy product. Programming errors (broken wiring, wrong types,
-import failures) are intentionally *not* swallowed here.
+The canonical runtime is required. Missing model routes, missing prompt assets,
+or invalid profile parameters raise ``OrchestratorCompositionError``, which
+``container.py`` turns into a startup failure. Programming errors (broken
+wiring, wrong types, import failures) propagate unchanged.
 """
 
 from __future__ import annotations
@@ -33,20 +32,7 @@ from a2a_adapter.client_facade import stream_message as sdk_stream_message
 from a2a_adapter.orchestrator_direct_client import OrchestratorDirectA2AClient
 from a2a_adapter.remote_task import fetch_remote_task as sdk_fetch_remote_task
 from common.utils.logger import get_logger
-from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from dal.orchestrator.hitl import MongoHITLApplicationStore
-from dal.orchestrator.projection import (
-    MongoAppendEventProjector,
-    MongoFinalMessageProjector,
-)
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoAgentToolBindingStore,
-    MongoObservationConflictStore,
-    MongoObservationInboxStore,
-)
+from conversation.protocols import ConversationMessageWriter
 from execution.adapters.agent_candidates import AgentServiceCandidateSource
 from execution.adapters.authorization import MembershipAuthorizationRefresh
 from execution.adapters.hitl import DurableHITLApplicationPort
@@ -87,6 +73,11 @@ from execution.orchestrator.a2a_runtime.preparation import (
     RunBackedDispatchRecovery,
     RunPreparedInvocationSnapshotReader,
 )
+from execution.orchestrator.a2a_runtime.push import (
+    A2APushNotificationIngress,
+    A2APushRegistrar,
+    LedgerPushTokenAuthenticator,
+)
 from execution.orchestrator.a2a_runtime.recovery import (
     A2AArtifactRecoveryService,
     A2ACallRecoveryService,
@@ -109,7 +100,10 @@ from execution.orchestrator.models import (
     OrchestratorProfile,
     RecoveryClaim,
 )
-from execution.orchestrator.persistence import SUSPENDED_RUN_STATUSES
+from execution.orchestrator.persistence import (
+    SUSPENDED_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+)
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
 from execution.orchestrator.projection import (
     ProjectionListener,
@@ -122,12 +116,26 @@ from execution.orchestrator.session import (
     dormant_recovery_at,
     interrupted_run_needs_settlement,
 )
+from execution.repository.orchestrator.artifacts import GuardedRoomFileArtifactWriter
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from execution.repository.orchestrator.hitl import MongoHITLApplicationStore
+from execution.repository.orchestrator.projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
+)
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoAgentToolBindingStore,
+    MongoObservationConflictStore,
+    MongoObservationInboxStore,
+)
 
 logger = get_logger(__name__)
 
 
 class OrchestratorCompositionError(RuntimeError):
-    """Adapter-level composition failure; safe to degrade the dark launch."""
+    """Adapter-level composition failure; startup reports it and stops."""
 
 
 _GENERIC_RECOVERY_MAX_INVARIANT_FAILURES = 3
@@ -149,7 +157,7 @@ def _generic_recovery_next_attempt(status: str, *, now: datetime) -> datetime | 
     Terminal Runs need none; suspended Runs stay dormant until a resume re-arms
     them; any other Run is re-driven shortly.
     """
-    if status in {"completed", "failed", "canceled", "budget_exhausted"}:
+    if status in TERMINAL_RUN_STATUSES:
         return None
     if status in SUSPENDED_RUN_STATUSES:
         return dormant_recovery_at(now)
@@ -210,6 +218,7 @@ class OrchestratorRuntime:
     projection_worker: Any
     recovery_cycle: Any
     public_secret_values: tuple[str, ...]
+    push_ingress: A2APushNotificationIngress
 
 
 _RUNTIME_BINDINGS = (
@@ -239,6 +248,7 @@ _RUNTIME_BINDINGS = (
     "projection_worker",
     "recovery_cycle",
     "public_secret_values",
+    "push_ingress",
 )
 
 
@@ -338,6 +348,7 @@ def create_orchestrator_runtime(  # noqa: C901
     room_ownership_reader: Any,
     epoch_store: Any,
     room_files: Any,
+    message_writer: ConversationMessageWriter,
     observation_authenticator: Any | None = None,
     session_listener: Any | None = None,
     projection_listener: ProjectionListener | None = None,
@@ -423,8 +434,8 @@ def create_orchestrator_runtime(  # noqa: C901
     hitl_port = DurableHITLApplicationPort(hitl_store=hitl_store)
     terminal_finalizer = TerminalInteractionFinalizer(hitl_port)
 
-    # External ingress stays fully rejected until step 7 wires the per-source
-    # authenticators (webhook HMAC via a2a_adapter, relay identity).
+    # Generic external ingest() stays rejected. A2A push notifications are
+    # authenticated per call by A2APushNotificationIngress below.
     authenticator = observation_authenticator or RejectExternalIngressAuthenticator()
     observation_ingress = A2AObservationIngress(
         inbox=observation_inbox,
@@ -493,6 +504,14 @@ def create_orchestrator_runtime(  # noqa: C901
         run_store=run_store,
         canonical_hitl_control=canonical_hitl_control,
         public_secret_values=public_secret_values,
+        push_registrar=(
+            A2APushRegistrar(
+                callback_base_url=settings_obj.a2a_push_callback_base_url,
+                api_prefix=settings_obj.api_prefix,
+            )
+            if settings_obj.a2a_push_callback_base_url
+            else None
+        ),
     )
 
     model_runtime = GatewayModelRuntime(llm_gateway)
@@ -532,8 +551,7 @@ def create_orchestrator_runtime(  # noqa: C901
 
     async def project_terminal_run_status(intent, run):
         # Canonical Run state remains in the orchestrator aggregate. This
-        # outbox intent publishes run_settled but never mirrors status into the
-        # removed compatibility `runs`/task-card projection.
+        # outbox intent only publishes run_settled.
         if projection_listener is not None:
             # run_settled is part of this durable dependent intent. A failure
             # leaves the intent claimed/pending for lease-based retry; an append
@@ -544,7 +562,7 @@ def create_orchestrator_runtime(  # noqa: C901
     projectors = {
         "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
         "deliver_final_message": MongoFinalMessageProjector(
-            mongo.collection("room_agent_messages"),
+            message_writer,
             final_message_delivery,
             final_message_memory_projection,
         ).project,
@@ -580,6 +598,13 @@ def create_orchestrator_runtime(  # noqa: C901
     inbox_recovery = A2AInboxRecoveryService(
         processor=observation_processor,
         inbox=observation_inbox,
+    )
+    push_ingress = A2APushNotificationIngress(
+        ledger=call_ledger,
+        authenticator=LedgerPushTokenAuthenticator(call_ledger),
+        observations=observation_ingress,
+        processor=observation_processor,
+        read_push=direct_client.read_push_notification,
     )
 
     recover_dispatch = RunBackedDispatchRecovery(
@@ -646,10 +671,9 @@ def create_orchestrator_runtime(  # noqa: C901
                         sequence=current.state_version,
                         timestamp=datetime.now(UTC),
                         payload=payload,
-                        room_id=current.room_id,
+                        conversation_id=current.conversation_id,
                         user_message_id=current.request.user_message_id,
                         client_request_id=current.client_request_id,
-                        lifecycle_family=current.lifecycle_family,
                     )
                 )
                 if hasattr(result, "__await__"):
@@ -877,6 +901,7 @@ def create_orchestrator_runtime(  # noqa: C901
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,
         public_secret_values=public_secret_values,
+        push_ingress=push_ingress,
     )
 
 

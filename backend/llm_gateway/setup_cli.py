@@ -325,8 +325,10 @@ def _save_selection(
         console.write(
             "Image model saved; image API access was not verified (no image calls)."
         )
-    console.write("Not applied: restart backend with HYBRO_HOME set to this directory.")
-    console.write("Apply with hybro start --recreate using the same HYBRO_HOME.")
+    console.write(
+        "Running services still use the previous settings; apply with "
+        "hybro start --recreate."
+    )
 
 
 def _run(

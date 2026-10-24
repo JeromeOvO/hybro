@@ -11,9 +11,17 @@ from agent.selection_service import (
     AgentSelectionService,
     RoutingStrategy,
 )
+from common.dto import AgentInfo
 from common.types import AgentCapabilities, AgentCard
-from models.agent import Agent, AgentStatus
-from models.room import MessageContent, RoomUserMessage, UserAttachment
+
+
+def _info(agent_id: str, card: AgentCard) -> AgentInfo:
+    return AgentInfo(
+        agent_id=agent_id,
+        name=card.name,
+        description=card.description,
+        raw_card=card.model_dump(mode="json", by_alias=True),
+    )
 
 
 def _create_test_agent_card(name: str, description: str) -> AgentCard:
@@ -35,10 +43,8 @@ def mock_matched_agents():
     """Create mock MatchedAgent instances."""
     agents = []
     for i in range(3):
-        agent = Agent(
-            agent_id=f"agent-{i}",
-            agent_card=_create_test_agent_card(f"Agent {i}", f"Test agent {i}"),
-            agent_status=AgentStatus.active,
+        agent = _info(
+            f"agent-{i}", _create_test_agent_card(f"Agent {i}", f"Test agent {i}")
         )
         matched = MatchedAgent(
             agent=agent,
@@ -162,10 +168,8 @@ async def test_facade_empty_result():
 async def test_llm_reranks_only_head_and_preserves_lexical_tail():
     matched_agents = []
     for index in range(7):
-        agent = Agent(
-            agent_id=f"agent-{index}",
-            agent_card=_create_test_agent_card(f"Agent {index}", "Test"),
-            agent_status=AgentStatus.active,
+        agent = _info(
+            f"agent-{index}", _create_test_agent_card(f"Agent {index}", "Test")
         )
         matched_agents.append(
             MatchedAgent(
@@ -229,58 +233,6 @@ async def test_facade_passes_required_input_modes(mock_matched_agents):
         mock_matcher_instance.match.assert_called_once()
         call_kwargs = mock_matcher_instance.match.call_args[1]
         assert call_kwargs["required_input_modes"] == ["image/png", "image/jpeg"]
-
-
-def test_derive_required_input_modes_with_attachments():
-    """Test _derive_required_input_modes with attachments."""
-    from conversation.runtime import ConversationRuntime
-
-    user_message = RoomUserMessage(
-        room_id="room-123",
-        message_id="msg-123",
-        user_id="user-123",
-        message_content=MessageContent(
-            message_text="test",
-            attachments=[
-                UserAttachment(
-                    file_id="file-1",
-                    s3_key="key-1",
-                    mime_type="image/png",
-                    file_name="test.png",
-                    size_bytes=1024,
-                ),
-                UserAttachment(
-                    file_id="file-2",
-                    s3_key="key-2",
-                    mime_type="application/pdf",
-                    file_name="doc.pdf",
-                    size_bytes=2048,
-                ),
-            ],
-        ),
-    )
-
-    result = ConversationRuntime._derive_required_input_modes(user_message)
-    assert result is not None
-    assert result == ["image/png", "application/pdf"]
-
-
-def test_derive_required_input_modes_no_attachments():
-    """Test _derive_required_input_modes without attachments."""
-    from conversation.runtime import ConversationRuntime
-
-    user_message = RoomUserMessage(
-        room_id="room-123",
-        message_id="msg-123",
-        user_id="user-123",
-        message_content=MessageContent(
-            message_text="test",
-            attachments=None,
-        ),
-    )
-
-    result = ConversationRuntime._derive_required_input_modes(user_message)
-    assert result is None
 
 
 @pytest.mark.asyncio

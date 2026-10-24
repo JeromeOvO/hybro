@@ -20,7 +20,7 @@ describe('degraded HITL pending hydration', () => {
     store.setRoom('room-1')
     store.upsertMessage({
       id: 'agent-message-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: 'Which market?',
       senderName: 'Broker',
@@ -37,7 +37,7 @@ describe('degraded HITL pending hydration', () => {
     vi.mocked(fetchPendingHitlRequests).mockRejectedValue(new Error('database unavailable'))
 
     await expect(overlayHitlForRoom({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       hitlRequestIndex: { current: new Map() },
       getAgentName: async () => 'Broker',
       getAgentSource: () => 'cloud',
@@ -67,7 +67,7 @@ describe('degraded HITL pending hydration', () => {
     })
 
     await overlayHitlForRoom({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       hitlRequestIndex: { current: new Map() },
       getAgentName: async () => 'Broker',
       getAgentSource: () => 'cloud',
@@ -89,7 +89,7 @@ describe('degraded HITL pending hydration', () => {
     store.clearRoom()
     store.setRoom('room-1')
     store.upsertMessage({
-      id: 'agent-message-1', roomId: 'room-1', messageType: 'agent', content: '',
+      id: 'agent-message-1', conversationId: 'room-1', messageType: 'agent', content: '',
       senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
       taskStatus: 'input-required', relatedMessageId: 'user-1', clientRequestId: 'client-1',
     }, 'db')
@@ -115,7 +115,7 @@ describe('degraded HITL pending hydration', () => {
     const index = { current: new Map<string, string>() }
 
     const pendingIds = await overlayHitlForRoom({
-      roomId: 'room-1', hitlRequestIndex: index,
+      conversationId: 'room-1', hitlRequestIndex: index,
       getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
     })
 
@@ -136,13 +136,13 @@ describe('degraded HITL pending hydration', () => {
     expect(selectPendingHitls('room-1', restored.entities, restored.orderedIds)).toHaveLength(2)
 
     restored.upsertMessage({
-      id: trainingId, roomId: 'room-1', messageType: 'agent', content: 'Is training in place?',
+      id: trainingId, conversationId: 'room-1', messageType: 'agent', content: 'Is training in place?',
       senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
       hitlInteractionStatus: 'applying', hitlApplicationStatus: 'applying',
     }, 'optimistic')
     vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [requests[1]] })
     await overlayHitlForRoom({
-      roomId: 'room-1', hitlRequestIndex: index,
+      conversationId: 'room-1', hitlRequestIndex: index,
       getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
     })
 
@@ -173,14 +173,14 @@ describe('degraded HITL pending hydration', () => {
     vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [request] })
     const index = { current: new Map<string, string>() }
     await overlayHitlForRoom({
-      roomId: 'room-1', hitlRequestIndex: index,
+      conversationId: 'room-1', hitlRequestIndex: index,
       getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
     })
     const entityId = hitlQuestionEntityId(
       'agent-message-1', 'interaction-1', 'request-1', 1,
     )
     useMessageStore.getState().upsertMessage({
-      id: entityId, roomId: 'room-1', messageType: 'agent', content: 'Which market?',
+      id: entityId, conversationId: 'room-1', messageType: 'agent', content: 'Which market?',
       senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
       hitlResolved: true, hitlUserAnswer: 'London',
       hitlInteractionStatus: 'responded', hitlApplicationStatus: 'applied',
@@ -188,7 +188,7 @@ describe('degraded HITL pending hydration', () => {
     }, 'sse')
 
     const pendingIds = await overlayHitlForRoom({
-      roomId: 'room-1', hitlRequestIndex: index,
+      conversationId: 'room-1', hitlRequestIndex: index,
       getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
     })
 
@@ -203,7 +203,7 @@ describe('degraded HITL pending hydration', () => {
   it('clears local applying HITL when the pending set is empty', async () => {
     useMessageStore.getState().upsertMessage({
       id: 'agent-message-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: 'Which market?',
       senderName: 'Broker',
@@ -221,7 +221,7 @@ describe('degraded HITL pending hydration', () => {
     vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
 
     await overlayHitlForRoom({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       hitlRequestIndex: { current: new Map() },
       getAgentName: async () => 'Broker',
       getAgentSource: () => 'cloud',
@@ -237,7 +237,7 @@ describe('degraded HITL pending hydration', () => {
     vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
 
     await overlayHitlForRoom({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       hitlRequestIndex: { current: new Map() },
       getAgentName: async () => 'Broker',
       getAgentSource: () => 'cloud',

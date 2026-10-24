@@ -8,6 +8,7 @@ from hashlib import sha256
 from pydantic import BaseModel
 
 from ..models import ToolInvocation, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import OrchestratorRunStore
 from .models import (
     ACTIVE_AGENT_CALL_STATES,
@@ -58,11 +59,12 @@ class InMemoryAgentToolBindingStore:
             )
         ]
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         keys = [
             key
             for key, record in self._records.items()
-            if record.room_id == room_id and record.room_epoch == room_epoch
+            if record.conversation_id == conversation_id
+            and record.room_epoch == room_epoch
         ]
         for key in keys:
             del self._records[key]
@@ -346,11 +348,12 @@ class InMemoryAgentCallLedgerStore:
             for record in self._records.values()
         )
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         ids = [
             record.call_record_id
             for record in self._records.values()
-            if record.room_id == room_id and record.room_epoch == room_epoch
+            if record.conversation_id == conversation_id
+            and record.room_epoch == room_epoch
         ]
         for record_id in ids:
             record = self._records.pop(record_id)
@@ -547,11 +550,12 @@ class InMemoryObservationInboxStore:
             self._by_source.pop(record.source_identity, None)
         return len(ids)
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         ids = [
             record.observation_id
             for record in self._records.values()
-            if record.room_id == room_id and record.room_epoch == room_epoch
+            if record.conversation_id == conversation_id
+            and record.room_epoch == room_epoch
         ]
         for observation_id in ids:
             record = self._records.pop(observation_id)
@@ -583,11 +587,12 @@ class InMemoryObservationConflictStore:
             if record.source_identity == source_identity
         ]
 
-    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+    async def delete_by_epoch(self, conversation_id: str, room_epoch: int) -> int:
         ids = [
             record.conflict_id
             for record in self._records.values()
-            if record.room_id == room_id and record.room_epoch == room_epoch
+            if record.conversation_id == conversation_id
+            and record.room_epoch == room_epoch
         ]
         for conflict_id in ids:
             self._records.pop(conflict_id)
@@ -598,18 +603,18 @@ class InMemoryRoomEpochStore:
     def __init__(self) -> None:
         self._records: dict[str, RoomEpoch] = {}
 
-    async def read(self, room_id: str) -> RoomEpoch | None:
-        record = self._records.get(room_id)
+    async def read(self, conversation_id: str) -> RoomEpoch | None:
+        record = self._records.get(conversation_id)
         return _clone(record) if record is not None else None
 
-    async def read_active(self, room_id: str) -> RoomEpoch | None:
-        record = self._records.get(room_id)
+    async def read_active(self, conversation_id: str) -> RoomEpoch | None:
+        record = self._records.get(conversation_id)
         return _clone(record) if record is not None and record.active else None
 
     async def activate(
-        self, room_id: str, creation_id: str, *, activated_at: datetime
+        self, conversation_id: str, creation_id: str, *, activated_at: datetime
     ) -> tuple[str, RoomEpoch | None]:
-        current = self._records.get(room_id)
+        current = self._records.get(conversation_id)
         if current is not None and current.active:
             return (
                 ("replayed", _clone(current))
@@ -620,25 +625,25 @@ class InMemoryRoomEpochStore:
             return "conflict", _clone(current)
         epoch = 1 if current is None else current.high_water_mark + 1
         record = RoomEpoch(
-            room_id=room_id,
+            conversation_id=conversation_id,
             epoch=epoch,
             high_water_mark=epoch,
             active=True,
             creation_id=creation_id,
             updated_at=activated_at,
         )
-        self._records[room_id] = _clone(record)
+        self._records[conversation_id] = _clone(record)
         return "accepted", _clone(record)
 
     async def deactivate(
         self,
-        room_id: str,
+        conversation_id: str,
         epoch: int,
         deletion_id: str,
         *,
         deactivated_at: datetime,
     ) -> tuple[str, RoomEpoch | None]:
-        current = self._records.get(room_id)
+        current = self._records.get(conversation_id)
         if current is None or current.epoch != epoch:
             return "conflict", _clone(current) if current is not None else None
         if not current.active:
@@ -654,17 +659,17 @@ class InMemoryRoomEpochStore:
                 "updated_at": deactivated_at,
             }
         )
-        self._records[room_id] = _clone(record)
+        self._records[conversation_id] = _clone(record)
         return "accepted", _clone(record)
 
-    async def verify_active(self, room_id: str, epoch: int) -> bool:
-        record = self._records.get(room_id)
+    async def verify_active(self, conversation_id: str, epoch: int) -> bool:
+        record = self._records.get(conversation_id)
         return bool(record and record.active and record.epoch == epoch)
 
     async def verify_cleanup_epoch(
-        self, room_id: str, epoch: int, deletion_id: str
+        self, conversation_id: str, epoch: int, deletion_id: str
     ) -> bool:
-        record = self._records.get(room_id)
+        record = self._records.get(conversation_id)
         return bool(
             record
             and not record.active
@@ -718,12 +723,7 @@ class RunCheckpointReader:
 
     async def is_run_terminal(self, run_id: str) -> bool:
         run = await self.run_store.load(run_id)
-        return run is not None and run.status in {
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is not None and run.status in TERMINAL_RUN_STATUSES
 
     async def is_outcome_checkpointed(
         self, run_id: str, invocation_id: str, outcome_digest: str
@@ -769,7 +769,7 @@ def _inbox_evidence_identity(
         record.payload_digest,
         record.received_at,
         record.binding_scope,
-        record.room_id,
+        record.conversation_id,
         record.room_epoch,
         record.call_record_id,
         record.task_id,
@@ -783,7 +783,7 @@ def _inbox_evidence_identity(
 def _conflict_identity(record: A2AObservationConflictRecord) -> tuple[str, ...]:
     return (
         record.conflict_id,
-        record.room_id,
+        record.conversation_id,
         str(record.room_epoch),
         record.source_identity,
         record.accepted_observation_id,

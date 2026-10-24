@@ -1,6 +1,6 @@
 import asyncio
+import gc
 import inspect
-import json
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -69,6 +69,41 @@ def test_registry_rejects_non_models_and_mismatched_event_discriminators():
         registry.register("example", WrongDefault)
     with pytest.raises(ValueError, match="discriminator"):
         registry.register("example", NonLiteral)
+
+
+@pytest.fixture
+async def release_on_teardown():
+    """Set registered release events even when a test fails.
+
+    Cancellation-resistant fakes below loop until their release event is set,
+    so an assertion failure before the release would otherwise leave tasks that
+    event-loop teardown can never cancel.
+    """
+    events: list[asyncio.Event] = []
+
+    def register(event: asyncio.Event) -> asyncio.Event:
+        events.append(event)
+        return event
+
+    yield register
+    for event in events:
+        event.set()
+    # Let the released tasks observe the event before the loop is torn down.
+    await asyncio.sleep(0)
+
+
+async def _elapsed_without_gc(awaitable) -> float:
+    """Loop time an awaitable takes with the garbage collector paused."""
+    loop = asyncio.get_running_loop()
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        started = loop.time()
+        await awaitable
+        return loop.time() - started
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def make_bus(
@@ -399,7 +434,9 @@ async def test_failed_transport_start_has_no_handler_or_fanout_side_effects():
 
 
 @pytest.mark.asyncio
-async def test_failed_start_rollback_is_bounded_when_transport_stop_resists_cancel():
+async def test_failed_start_rollback_is_bounded_when_transport_stop_resists_cancel(
+    release_on_teardown,
+):
     class FailingStartupTransport(RecordingTransport):
         def __init__(self):
             super().__init__()
@@ -418,6 +455,7 @@ async def test_failed_start_rollback_is_bounded_when_transport_stop_resists_canc
                     continue
 
     transport = FailingStartupTransport()
+    release_on_teardown(transport.release_stop)
     bus = make_bus(transport=transport, shutdown_timeout=0.02)
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -582,10 +620,12 @@ async def test_cancelled_publisher_collects_cancellable_transport_publish():
 
 
 @pytest.mark.asyncio
-async def test_auxiliary_task_is_registered_before_wait_and_survives_double_cancel():
+async def test_auxiliary_task_is_registered_before_wait_and_survives_double_cancel(
+    release_on_teardown,
+):
     bus = make_bus()
     entered = asyncio.Event()
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def cancellation_resistant():
         entered.set()
@@ -620,10 +660,12 @@ async def test_auxiliary_task_is_registered_before_wait_and_survives_double_canc
 
 
 @pytest.mark.asyncio
-async def test_auxiliary_capacity_closes_unstarted_coroutine_and_records_dlt():
+async def test_auxiliary_capacity_closes_unstarted_coroutine_and_records_dlt(
+    release_on_teardown,
+):
     bus = make_bus(auxiliary_task_maxsize=1)
     entered = asyncio.Event()
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def cancellation_resistant():
         entered.set()
@@ -673,10 +715,12 @@ async def test_auxiliary_capacity_closes_unstarted_coroutine_and_records_dlt():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_lifecycle_bypasses_saturated_auxiliary_capacity():
+async def test_shutdown_lifecycle_bypasses_saturated_auxiliary_capacity(
+    release_on_teardown,
+):
     transport = RecordingTransport()
     ingress_calls = 0
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def stop_ingress():
         nonlocal ingress_calls
@@ -721,10 +765,12 @@ def test_eventing_config_rejects_non_positive_auxiliary_capacity():
 
 
 @pytest.mark.asyncio
-async def test_malicious_transport_publish_remains_tracked_and_stop_is_bounded():
+async def test_malicious_transport_publish_remains_tracked_and_stop_is_bounded(
+    release_on_teardown,
+):
     transport = RecordingTransport()
     entered = asyncio.Event()
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def malicious_publish(_message):
         entered.set()
@@ -757,10 +803,12 @@ async def test_malicious_transport_publish_remains_tracked_and_stop_is_bounded()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_is_bounded_when_handler_swallows_cancelled_error():
+async def test_shutdown_is_bounded_when_handler_swallows_cancelled_error(
+    release_on_teardown,
+):
     bus = make_bus()
     entered = asyncio.Event()
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def malicious(_event):
         entered.set()
@@ -797,10 +845,12 @@ async def test_shutdown_is_bounded_when_handler_swallows_cancelled_error():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_resistant_worker_ownership_prevents_duplicate_restart():
+async def test_cancellation_resistant_worker_ownership_prevents_duplicate_restart(
+    release_on_teardown,
+):
     bus = make_bus()
     entered = asyncio.Event()
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def malicious(_event):
         entered.set()
@@ -838,12 +888,14 @@ async def test_cancellation_resistant_worker_ownership_prevents_duplicate_restar
 
 
 @pytest.mark.asyncio
-async def test_restart_rejects_lingering_auxiliary_task_until_it_finishes():
+async def test_restart_rejects_lingering_auxiliary_task_until_it_finishes(
+    release_on_teardown,
+):
     bus = make_bus()
     await bus.start()
     await bus.stop()
 
-    release = asyncio.Event()
+    release = release_on_teardown(asyncio.Event())
 
     async def linger():
         while not release.is_set():
@@ -867,9 +919,11 @@ async def test_restart_rejects_lingering_auxiliary_task_until_it_finishes():
 
 
 @pytest.mark.asyncio
-async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadline():
+async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadline(
+    release_on_teardown,
+):
     transport = RecordingTransport()
-    transport_release = asyncio.Event()
+    transport_release = release_on_teardown(asyncio.Event())
     transport_entered = asyncio.Event()
 
     async def malicious_publish(_message):
@@ -887,7 +941,7 @@ async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadli
         auxiliary_task_maxsize=128,
         shutdown_timeout=0.05,
     )
-    handler_release = asyncio.Event()
+    handler_release = release_on_teardown(asyncio.Event())
     handler_entered = [asyncio.Event() for _ in range(24)]
 
     for entered in handler_entered:
@@ -909,11 +963,10 @@ async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadli
     await asyncio.gather(*(entered.wait() for entered in handler_entered))
     await transport_entered.wait()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    await bus.stop()
-    elapsed = loop.time() - started
-    await asyncio.wait_for(publisher, timeout=0.1)
+    # The margin below distinguishes one shared deadline (~0.05s) from two
+    # sequential ones, so a collector pause must not count against it.
+    elapsed = await _elapsed_without_gc(bus.stop())
+    await asyncio.wait_for(publisher, timeout=1.0)
 
     workers = bus.worker_tasks
     assert len(workers) == len(handler_entered)
@@ -927,39 +980,13 @@ async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadli
 
     handler_release.set()
     transport_release.set()
-    await asyncio.wait_for(asyncio.gather(*workers), timeout=0.2)
+    await asyncio.wait_for(asyncio.gather(*workers), timeout=1.0)
     for _ in range(10):
         if not bus.worker_tasks and not bus._auxiliary_tasks:
             break
         await asyncio.sleep(0)
     assert bus.worker_tasks == ()
     assert bus._auxiliary_tasks == {}
-
-
-def test_event_envelope_accepts_legacy_missing_timestamp():
-    internal_timestamp = "2025-01-02T03:04:05Z"
-    envelope = EventEnvelope.model_validate(
-        {
-            "origin": "legacy-worker",
-            "event_type": "example",
-            "event": {
-                "event_type": "example",
-                "value": 1,
-                "timestamp": internal_timestamp,
-            },
-        }
-    )
-    assert envelope.timestamp == datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
-    assert "timestamp" in json.loads(envelope.model_dump_json())
-
-    fallback = EventEnvelope.model_validate(
-        {
-            "origin": "older-worker",
-            "event_type": "example",
-            "event": {"event_type": "example", "value": 2},
-        }
-    )
-    assert fallback.timestamp.tzinfo is not None
 
 
 @pytest.mark.asyncio

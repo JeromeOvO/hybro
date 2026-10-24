@@ -42,15 +42,15 @@ async def test_user_input_uses_reference_codex_content_parts(operation):
             -1
         ].finish_reason == "stop"
     elif operation == "stream":
-        assert [s async for s in adapter.generate_stream(messages, "gpt-5.4")] == [
+        assert [s async for s in adapter.generate_stream(messages, "gpt-6-sol")] == [
             '{"ok":true}'
         ]
     elif operation == "structured":
         assert (
-            await adapter.generate_structured(messages, "gpt-5.4", json_mode=True)
+            await adapter.generate_structured(messages, "gpt-6-sol", json_mode=True)
         ).data == {"ok": True}
     else:
-        assert (await adapter.generate(messages, "gpt-5.4")).content == '{"ok":true}'
+        assert (await adapter.generate(messages, "gpt-6-sol")).content == '{"ok":true}'
     assert len(calls) == 1
     assert messages == [{"role": "user", "content": "hello"}]
 
@@ -122,7 +122,7 @@ async def test_http_400_retains_only_known_facts_and_closes(envelope, code, para
         oauth_credential(), transport=httpx.MockTransport(handle)
     )
     with pytest.raises(LLMProviderFailure) as caught:
-        await adapter.generate([{"role": "user", "content": "hello"}], "gpt-5.4")
+        await adapter.generate([{"role": "user", "content": "hello"}], "gpt-6-sol")
     diagnostic = caught.value._diagnostic
     assert diagnostic.status == 400 and diagnostic.category == "invalid_request"
     assert (diagnostic.code, diagnostic.parameter) == (code, parameter)
@@ -141,7 +141,7 @@ async def test_unparseable_or_oversized_http_body_still_reports_status(raw):
         transport=httpx.MockTransport(lambda _: httpx.Response(400, stream=body)),
     )
     with pytest.raises(LLMProviderFailure) as caught:
-        await adapter.generate([], "gpt-5.4")
+        await adapter.generate([], "gpt-6-sol")
     assert caught.value._diagnostic.status == 400
     assert caught.value._diagnostic.code is None
     assert body.closed

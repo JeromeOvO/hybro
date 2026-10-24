@@ -41,9 +41,9 @@ from execution.orchestrator.a2a_runtime.recovery import (
     A2AInboxRecoveryService,
     A2ARecoveryCycle,
 )
-from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.kernel import KernelConflict
 from execution.orchestrator.models import TextPart, ToolResult
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW, make_run
@@ -219,15 +219,15 @@ class ActivationEpochStore(InMemoryRoomEpochStore):
         super().__init__()
         self.deactivate_on_verify = False
 
-    async def verify_active(self, room_id, epoch):
+    async def verify_active(self, conversation_id, epoch):
         if self.deactivate_on_verify:
             self.deactivate_on_verify = False
             assert (
                 await self.deactivate(
-                    room_id, epoch, "delete-activation", deactivated_at=NOW
+                    conversation_id, epoch, "delete-activation", deactivated_at=NOW
                 )
             )[0] == "accepted"
-        return await super().verify_active(room_id, epoch)
+        return await super().verify_active(conversation_id, epoch)
 
 
 class ActivationEpochHITL(InMemoryHITLApplicationPort):
@@ -409,7 +409,7 @@ async def test_ingress_rows_are_deletable_before_processing_by_room_epoch(source
         call_record_id=ledger_record().call_record_id,
     )
     _, persisted = await ingress.record(item)
-    assert persisted.room_id == "room-1" and persisted.room_epoch == 1
+    assert persisted.conversation_id == "room-1" and persisted.room_epoch == 1
     assert await inbox.delete_by_epoch("room-1", 1) == 1
     assert await inbox.load(item.observation_id) is None
 
@@ -430,7 +430,7 @@ async def test_conflict_rows_are_deletable_before_processing_by_room_epoch():
         "conflict"
     )
     row = (await conflicts.list_for_source(first.source_identity))[0]
-    assert row.room_id == "room-1" and row.room_epoch == 1
+    assert row.conversation_id == "room-1" and row.room_epoch == 1
     assert await conflicts.delete_by_epoch("room-1", 1) == 1
     assert await inbox.delete_by_epoch("room-1", 1) == 1
 
@@ -924,7 +924,7 @@ async def test_executor_observation_reroutes_to_sink_after_late_suspension():
         payload_digest="digest",
         received_at=NOW,
         binding_scope="endpoint",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         event_kind=obs.event_kind,
         observation=obs,
@@ -998,7 +998,7 @@ async def test_executor_observation_reroutes_to_sink_after_late_hitl_suspension(
         payload_digest="digest",
         received_at=NOW,
         binding_scope="endpoint",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         event_kind=obs.event_kind,
         observation=obs,
@@ -1398,3 +1398,58 @@ async def test_absent_interaction_abandon_is_idempotent_noop():
     assert (await inbox.load(item.observation_id)).state == "completed"
     assert sink.values[-1][1].outcome.status == "canceled"
     assert hitl.read_interaction_for_test("interaction-1") is None
+
+
+def test_resumed_call_observation_carries_the_users_answers():
+    from common.dto.hitl import HITLQuestionAnswer
+    from execution.orchestrator.a2a_runtime.ingress import _to_tool_observation
+    from execution.orchestrator.a2a_runtime.models import A2AContinuationCommand
+
+    record = ledger_record()
+    result = ToolResult(
+        call_id=record.invocation_id,
+        tool_name="agent",
+        status="completed",
+        content=[TextPart(text="Drafts signed by Morgan Reyes")],
+        artifact_refs=[],
+    )
+    plain = _to_tool_observation(
+        record.model_copy(update={"terminal_result": result}), observation()
+    )
+    assert plain.interaction_answers is None
+
+    command = A2AContinuationCommand(
+        command_id="continuation-1",
+        transport_kind="direct",
+        call_record_id=record.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        answer_digest="digest",
+        answers=[
+            HITLQuestionAnswer.model_validate(
+                {
+                    "question_id": "agent_question",
+                    "answer": {"kind": "text", "text": "Morgan Reyes, CEO"},
+                }
+            )
+        ],
+        binding_id=record.binding_id,
+        binding_digest=record.binding_digest,
+        requesting_subject_digest=record.requesting_subject_digest,
+        task_id="task-1",
+        context_id="context-1",
+        conversation_id=record.conversation_id,
+        room_epoch=record.room_epoch,
+        created_at=NOW,
+    )
+    resumed = _to_tool_observation(
+        record.model_copy(
+            update={"terminal_result": result, "continuation_command": command}
+        ),
+        observation(),
+    )
+    assert resumed.interaction_answers is not None
+    assert resumed.interaction_answers.interaction_id == "interaction-1"
+    assert [
+        (item.question_id, item.answer) for item in resumed.interaction_answers.answers
+    ] == [("agent_question", "Morgan Reyes, CEO")]

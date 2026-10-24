@@ -88,7 +88,7 @@ class MockEpochOwner:
     async def commit(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         source_message_id: str,
         origin_key: str,
@@ -101,7 +101,7 @@ class MockEpochOwner:
         file_id = f"file-{len(self.commits) + 1}"
         self.commits.append(
             {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "room_epoch": room_epoch,
                 "source_message_id": source_message_id,
                 "origin_key": origin_key,
@@ -655,7 +655,7 @@ async def test_epoch_fenced_file_with_bytes_materialization():
     await _materialize_task_artifacts_epoch_fenced(
         task,
         epoch_owner=epoch_owner,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         call_record_id="call-1",
         message_id="msg-1",
@@ -729,7 +729,7 @@ async def test_materialization_fails_closed_when_epoch_owner_missing():
         await _materialize_task_artifacts_epoch_fenced(
             task,
             epoch_owner=None,
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             call_record_id="call-1",
             message_id="msg-1",
@@ -766,7 +766,7 @@ async def test_materialization_invalid_base64_raises():
         await _materialize_task_artifacts_epoch_fenced(
             task,
             epoch_owner=epoch_owner,
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             call_record_id="call-1",
             message_id="msg-1",
@@ -800,8 +800,8 @@ async def test_failed_materialization_observation_kwargs_creates_valid_normalize
 async def test_bounded_resource_materializer_passes_owned_content_url_and_rejects_malformed():
     """Test that BoundedResourceMaterializer accepts /api/v1/files/... durable room content URLs and rejects malformed."""
 
-    async def verify_owned(room_id: str, file_id: str) -> None:
-        assert room_id == ""
+    async def verify_owned(conversation_id: str, file_id: str) -> None:
+        assert conversation_id == ""
         assert file_id == "durable-123"
 
     materializer = BoundedResourceMaterializer(

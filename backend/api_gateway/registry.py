@@ -40,6 +40,8 @@ def route_group_for_path(path: str) -> str:
 
     if matches("/internal/llm"):
         return "llm_proxy"
+    if matches("/a2a/push"):
+        return "a2a_push"
     if matches("/local-agents"):
         return "agent"
     if matches("/agentGroups"):
@@ -50,18 +52,14 @@ def route_group_for_path(path: str) -> str:
         return "files"
     if matches("/inspectionCenter"):
         return "inspection"
-    if matches("/roomCenter"):
-        return "room"
-    if matches("/rooms") and "/agent-calls" in normalized:
-        return "room"
     if matches("/rooms") and "/hitl" in normalized:
         return "hitl"
+    if matches("/rooms") or matches("/agent-suggestions"):
+        return "room"
     if matches("/sessions"):
         return "session"
     if matches("/sse"):
         return "sse"
-    if matches("/webhooks"):
-        return "webhook"
     return "unknown"
 
 

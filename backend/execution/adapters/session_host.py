@@ -3,8 +3,7 @@
 The host resolves the active Room epoch from the bound epoch store and builds a
 ``RoomAgentSession`` with a frozen profile/catalog/scope snapshot before Run
 creation. Lifecycle ``SessionEvent`` values are forwarded to an injected
-listener (the step-6 listener will write to the projection outbox; during the
-step-5b dark launch a no-op/recording listener is used).
+listener.
 
 The host is deliberately unreachable from routes: it exposes only the builder
 surface used by the composition root and tests.
@@ -85,7 +84,7 @@ class RoomSessionHost:
     async def create_session(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         profile: OrchestratorProfile,
         candidate_scope: CandidateScopeSnapshot,
         requesting_subject_id: str,
@@ -94,14 +93,14 @@ class RoomSessionHost:
         conversation_history: tuple[ModelMessage, ...] = (),
         run_factory: RunFactory | None = None,
     ) -> RoomAgentSession:
-        if room_id in self._sessions:
+        if conversation_id in self._sessions:
             raise SessionConflict("a session is already active for this Room")
-        epoch = await self._epoch_store.read_active(room_id)
+        epoch = await self._epoch_store.read_active(conversation_id)
         if epoch is None:
             raise SessionConflict("Room epoch is not active")
         config = RoomAgentSessionConfig(
-            session_id=f"room:{room_id}:epoch:{epoch.epoch}",
-            room_id=room_id,
+            session_id=f"room:{conversation_id}:epoch:{epoch.epoch}",
+            conversation_id=conversation_id,
             profile=profile,
             candidate_scope=candidate_scope,
             room_epoch=epoch.epoch,
@@ -120,35 +119,35 @@ class RoomSessionHost:
             lifecycle=lifecycle,
             clock=self._clock,
         )
-        self._sessions[room_id] = session
+        self._sessions[conversation_id] = session
         return session
 
-    def get_session(self, room_id: str) -> RoomAgentSession | None:
-        return self._sessions.get(room_id)
+    def get_session(self, conversation_id: str) -> RoomAgentSession | None:
+        return self._sessions.get(conversation_id)
 
-    def drop_session(self, room_id: str) -> None:
-        self._sessions.pop(room_id, None)
+    def drop_session(self, conversation_id: str) -> None:
+        self._sessions.pop(conversation_id, None)
 
     async def prompt(
         self,
-        room_id: str,
+        conversation_id: str,
         message: UserMessage,
         *,
         client_request_id: str | None = None,
     ) -> KernelRunResult:
-        session = self._require_session(room_id)
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(
             session, session.prompt(message, client_request_id=client_request_id)
         )
 
-    async def continue_run(self, room_id: str) -> KernelRunResult:
-        session = self._require_session(room_id)
+    async def continue_run(self, conversation_id: str) -> KernelRunResult:
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(session, session.continue_run())
 
     async def observe_tool(
-        self, room_id: str, observation: ToolObservation
+        self, conversation_id: str, observation: ToolObservation
     ) -> KernelRunResult:
-        session = self._require_session(room_id)
+        session = self._require_session(conversation_id)
         return await self._await_recoverable(session, session.observe_tool(observation))
 
     async def _await_recoverable(
@@ -162,13 +161,13 @@ class RoomSessionHost:
             now=self._clock.now,
         )
 
-    async def abort(self, room_id: str) -> None:
-        await self._require_session(room_id).abort()
+    async def abort(self, conversation_id: str) -> None:
+        await self._require_session(conversation_id).abort()
 
     async def signal_run_cancellation(self, run, cancellation_command_id: str) -> None:
         """Signal a matching hosted Run without waiting for it to stop."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is None or not session.owns_run(run.run_id):
             return
         await session.signal_interrupt(run.run_id, cancellation_command_id)
@@ -176,7 +175,7 @@ class RoomSessionHost:
     async def interrupt_run(self, run, cancellation_command_id: str) -> bool:
         """Signal a matching hosted Run and wait briefly for it to stop."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is None or not session.owns_run(run.run_id):
             return True
         return await session.interrupt(run.run_id, cancellation_command_id)
@@ -200,12 +199,10 @@ class RoomSessionHost:
                     sequence=current.state_version,
                     timestamp=self._clock.now(),
                     payload=payload,
-                    room_id=current.room_id,
+                    conversation_id=current.conversation_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
-                    lifecycle_family=current.lifecycle_family,
-                ),
-                terminal=True,
+                )
             )
 
         return await self._kernel_factory(run.tool_catalog).terminalize(
@@ -219,7 +216,7 @@ class RoomSessionHost:
     async def abort_run(self, run) -> None:
         """Signal a durably canceling Run, then reconcile terminal settlement."""
 
-        session = self._sessions.get(run.room_id)
+        session = self._sessions.get(run.conversation_id)
         if session is not None and session.owns_run(run.run_id):
             await session.abort()
             await self.reconcile_cancellation(run)
@@ -238,12 +235,10 @@ class RoomSessionHost:
                     sequence=current.state_version,
                     timestamp=self._clock.now(),
                     payload=payload,
-                    room_id=current.room_id,
+                    conversation_id=current.conversation_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
-                    lifecycle_family=current.lifecycle_family,
-                ),
-                terminal=True,
+                )
             )
 
         await self._kernel_factory(run.tool_catalog).terminalize(
@@ -266,18 +261,9 @@ class RoomSessionHost:
             emitter = self._new_lifecycle_emitter()
 
             async def emit(event_type, run, payload):
-                if run.lifecycle_family == "legacy" and not (
-                    (
-                        event_type == "message_completed"
-                        and payload.get("message_kind") == "tool_result"
-                    )
-                    or event_type == "tool_execution_completed"
-                ):
-                    return
-                # Canonical re-entry forwards every lifecycle boundary and
-                # awaits the durable listener before the Kernel checkpoints a
-                # public Tool terminal as emitted. Legacy retains its narrow
-                # compatibility projection.
+                # Re-entry forwards every lifecycle boundary and awaits the
+                # durable listener before the Kernel checkpoints a public Tool
+                # terminal as emitted.
                 # The observation checkpoint version is durable and monotonic.
                 # call_id is also included in downstream delivery identity, so
                 # parallel results at the same version cannot collide.
@@ -290,12 +276,10 @@ class RoomSessionHost:
                         sequence=run.state_version,
                         timestamp=self._clock.now(),
                         payload=payload,
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         user_message_id=run.request.user_message_id,
                         client_request_id=run.client_request_id,
-                        lifecycle_family=run.lifecycle_family,
-                    ),
-                    terminal=True,
+                    )
                 )
 
             return emit
@@ -310,9 +294,8 @@ class RoomSessionHost:
 
     def _new_lifecycle_emitter(self) -> LifecycleEmitter:
         # Agent-card terminal projection performs durable Run/binding reads,
-        # Mongo replacement, and room-event append. Keep the short timeout for
-        # ordinary lifecycle noise, but allow this settled boundary to finish
-        # under transient local/replica-set latency.
+        # Mongo replacement, and room-event append. Allow it to finish under
+        # transient local/replica-set latency.
         emitter = LifecycleEmitter(
             settlement_timeout_seconds=30.0,
             error_hook=lambda exc: logger.warning(
@@ -336,8 +319,8 @@ class RoomSessionHost:
             await session.shutdown()
         self._sessions.clear()
 
-    def _require_session(self, room_id: str) -> RoomAgentSession:
-        session = self._sessions.get(room_id)
+    def _require_session(self, conversation_id: str) -> RoomAgentSession:
+        session = self._sessions.get(conversation_id)
         if session is None:
             raise SessionConflict("no active session for this Room")
         return session

@@ -11,7 +11,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   counter++
   return {
     id: `msg-${counter}`,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: `Content ${counter}`,
     senderName: 'Agent',

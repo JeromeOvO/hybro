@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from agent.repository.documents import _safe_parse_agent
 from agent.routing_safety import sanitize_routing_agent_ids
-from dal.runtime_store.parts.parsing import _safe_parse_agent
 
 
 @pytest.mark.asyncio

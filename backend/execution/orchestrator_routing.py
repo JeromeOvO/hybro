@@ -2,17 +2,17 @@
 
 This module is the *only* orchestrator surface the product entry points
 (``execution/facade.py`` and ``api_gateway/routes``) are allowed to import. It
-owns the ingress concerns that translate between the legacy
-``OrchestrationRequest`` envelope and the orchestrator runtime:
+owns the ingress concerns between ``ExecutionRequest`` and the orchestrator
+runtime:
 
 * **Run-creation** — ``process_room_user_message`` prepares a Run and drives
   the orchestrator ``RoomSessionHost`` prompt for every new user message.
-* **Ingress routing** — webhook observations, HITL answers, and cancellation
+* **Ingress routing** — HITL answers and cancellation
   are dispatched to the orchestrator runtime (the only runtime).
 
-The heavy translation between the ``OrchestrationRequest`` envelope and the
-orchestrator's ``RoomSessionHost`` inputs also lives here, so
-``execution/facade.py`` stays orchestrator-import-free.
+Building the orchestrator's ``RoomSessionHost`` inputs from the request and
+the persisted user message also lives here, so ``execution/facade.py`` stays
+orchestrator-import-free.
 """
 
 from __future__ import annotations
@@ -25,7 +25,12 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from common.dto.execution import CancellationAck, HITLRequest
+from approval import (
+    HITLConflictError,
+    HITLDeliveryUncertainError,
+    HITLRoomMismatchError,
+)
+from common.dto.execution import CancellationAck, ExecutionRequest, HITLRequest
 from common.dto.hitl import (
     A2AInteractionSpec,
     HITLAnswerKind,
@@ -41,11 +46,6 @@ from common.dto.hitl import (
 from common.utils.context_utils import split_agent_mentions
 from common.utils.logger import get_logger
 from context_memory.translators import normalize_room_memory
-from execution.hitl.exceptions import (
-    HITLConflictError,
-    HITLDeliveryUncertainError,
-    HITLRoomMismatchError,
-)
 from execution.orchestrator.a2a_runtime.hitl_prompt import (
     prompt_type_for_question,
     public_question_fields,
@@ -56,7 +56,6 @@ from execution.orchestrator.a2a_runtime.interaction_outcome import (
     public_agent_label,
 )
 from execution.orchestrator.a2a_runtime.ledger import TERMINAL_AGENT_CALL_STATES
-from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
 from execution.orchestrator.models import (
     AuthorizationBasis,
     CandidateScopeSnapshot,
@@ -67,21 +66,20 @@ from execution.orchestrator.models import (
     TextPart,
     UserMessage,
 )
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from execution.orchestrator.public_text import sanitize_public_text
 from execution.orchestrator.session import (
     DefaultRunFactory,
     RunFactory,
     SessionConflict,
 )
-from models.request import OrchestrationRequest
+from execution.orchestrator.transcript import resolved_user_answers
 from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
 
 MODE_PROFILE_MAP = {
-    "fast": "fast",
     "direct": "fast",
-    "ultimate": "ultimate",
     "supervisor": "ultimate",
     "passthrough": "passthrough",
 }
@@ -90,6 +88,9 @@ _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
 _MAX_ROOM_HISTORY_MESSAGES = 10
 _MAX_ROOM_HISTORY_CHARS_PER_MESSAGE = 4_000
+# Earlier attachments and Agent artifacts a follow-up Run may select by ref.
+_MAX_EARLIER_RESOURCES = 20
+_MAX_EARLIER_RESOURCE_TURNS = 50
 
 RoomMemoryReader = Callable[[str], Awaitable[dict[str, Any] | None]]
 
@@ -128,7 +129,7 @@ async def request_run_cancellation(
 
 
 class UnsupportedEnvelopeError(ValueError):
-    """The legacy envelope requests something the orchestrator cannot serve yet."""
+    """The request envelope asks for something the orchestrator cannot serve."""
 
 
 class OrchestratorRoutingError(RuntimeError):
@@ -139,18 +140,9 @@ class OrchestratorHITLNotOwnedError(OrchestratorRoutingError):
     """The interaction is not owned by the orchestrator A2A ingress.
 
     Supervisor ``ask_user`` interactions materialize through the unified
-    Execution HITL service and must fall back to the legacy manager instead
+    Execution HITL service and must fall back to its HITL manager instead
     of the orchestrator call-ledger ingress.
     """
-
-
-class WebhookAuthenticationError(RuntimeError):
-    """Webhook auth failure carrying the HTTP status the legacy route would use."""
-
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,25 +179,23 @@ class RoomMessageEnvelope:
     addressed_agents: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class RoomContext:
+    history: tuple[ModelMessage, ...] = ()
+    earlier_refs: tuple[PreparedResourceRef, ...] = ()
+
+
 class RoomEnvelopeSource(Protocol):
     async def load_envelope(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> RoomMessageEnvelope: ...
 
 
-class WebhookTokenVerifier(Protocol):
-    """Legacy ``verify_webhook_token_for_task``-shaped verifier."""
-
-    async def __call__(self, message_id: str, token: str) -> tuple[bool, str]: ...
-
-
 class RoomMessageEnvelopeResolver:
-    """Resolve the orchestrator inputs from the persisted legacy user message.
+    """Resolve the orchestrator inputs for one persisted user message.
 
-    ``agent_scope``/``execution_mode`` are written by ``ExecutionFacade`` into
-    the user message ``extend_info`` before orchestration is scheduled, so this
-    reader reconstructs the mode and candidate scope without importing the
-    legacy executor.
+    The route-validated ``ExecutionRequest`` supplies the mode and candidate
+    scope; the persisted message supplies the text and attachments.
     """
 
     def __init__(
@@ -226,12 +216,9 @@ class RoomMessageEnvelopeResolver:
         self._list_all_active_agent_ids = list_all_active_agent_ids
         self._attachment_text_reader = attachment_text_reader
 
-    async def load_envelope(self, request: OrchestrationRequest) -> RoomMessageEnvelope:
-        message_id = request.room_user_message_id
-        if not message_id:
-            raise UnsupportedEnvelopeError(
-                "orchestrator requires a room_user_message_id"
-            )
+    async def load_envelope(
+        self, request: ExecutionRequest, *, message_id: str
+    ) -> RoomMessageEnvelope:
         message = await self._get_user_message(message_id)
         if message is None:
             raise UnsupportedEnvelopeError(
@@ -244,63 +231,10 @@ class RoomMessageEnvelopeResolver:
                 "orchestrator requires a non-empty user message"
             )
 
-        extend_info = getattr(message, "extend_info", None)
-        # The live request carries the route-validated mode and scope; they
-        # are authoritative for Run creation. The persisted extend_info is the
-        # fallback for recovery/re-entry paths without a live request (and for
-        # the legacy supervisor preflight's whitelist rewrite).
-        live_mode = getattr(request, "mode", None)
-        mode = (
-            live_mode
-            if isinstance(live_mode, str) and live_mode.strip()
-            else (
-                extend_info.get("execution_mode")
-                if isinstance(extend_info, dict)
-                else None
-            )
-        )
-        if not isinstance(mode, str) or not mode.strip():
-            raise UnsupportedEnvelopeError(
-                "orchestrator envelope is missing execution_mode"
-            )
-
-        live_scope = getattr(request, "agent_scope", None)
-        scope = (
-            live_scope
-            if isinstance(live_scope, dict)
-            else (
-                extend_info.get("agent_scope")
-                if isinstance(extend_info, dict)
-                else None
-            )
-        )
-        if not isinstance(scope, dict):
-            # The legacy supervisor preflight whitelists extend_info keys and
-            # persists the candidate scope under its own names, so
-            # supervisor-mode messages never carry ``agent_scope``.
-            # Reconstruct the canonical scope from those fields.
-            source = (
-                extend_info.get("candidate_scope_source")
-                if isinstance(extend_info, dict)
-                else None
-            )
-            agent_ids = (
-                extend_info.get("candidate_agent_ids")
-                if isinstance(extend_info, dict)
-                else None
-            )
-            if source in {"mention", "saved_group", "all_agents", "room_default"}:
-                scope = {"source": source}
-                if source == "mention" and isinstance(agent_ids, list):
-                    scope["agent_ids"] = [
-                        str(agent_id) for agent_id in agent_ids if agent_id
-                    ]
-                if source == "saved_group":
-                    group_id = extend_info.get("candidate_scope_group_id")
-                    if isinstance(group_id, str) and group_id.strip():
-                        scope["group_id"] = group_id.strip()
+        mode = request.mode
+        scope = request.agent_scope.model_dump(mode="json")
         candidate_agent_ids = await self._resolve_candidate_agent_ids(
-            request.room_id, scope, user_id=request.user_id
+            request.conversation_id, scope, user_id=request.sender_id
         )
         scope_source = str(scope.get("source") or "explicit_selection")
         group_id = (
@@ -309,7 +243,7 @@ class RoomMessageEnvelopeResolver:
 
         attachments = _attachments_from_message(content)
         attachment_texts = await self._resolve_attachment_texts(attachments)
-        requesting_subject_id = request.user_id
+        requesting_subject_id = request.sender_id
         model_text, mentions = split_agent_mentions(message_text)
         # Only a mention that survived scope resolution names an Agent this Run
         # can actually call; a mention outside the candidate scope is dropped
@@ -350,7 +284,7 @@ class RoomMessageEnvelopeResolver:
         return blocks
 
     async def _resolve_candidate_agent_ids(
-        self, room_id: str | None, scope: Any, *, user_id: str | None = None
+        self, conversation_id: str | None, scope: Any, *, user_id: str | None = None
     ) -> list[str]:
         if not isinstance(scope, dict):
             raise UnsupportedEnvelopeError(
@@ -361,11 +295,11 @@ class RoomMessageEnvelopeResolver:
             agent_ids = scope.get("agent_ids") or []
             return [str(agent_id) for agent_id in agent_ids if agent_id]
         if source == "room_default":
-            if room_id is None:
+            if conversation_id is None:
                 raise UnsupportedEnvelopeError(
-                    "orchestrator room scope requires room_id"
+                    "orchestrator room scope requires conversation_id"
                 )
-            return await self._list_room_agent_ids(room_id)
+            return await self._list_room_agent_ids(conversation_id)
         if source == "all_agents":
             if self._list_all_active_agent_ids is None:
                 raise UnsupportedEnvelopeError(
@@ -447,7 +381,7 @@ _SCOPE_AUTHORIZATION_KINDS = {
 
 def _build_candidate_scope(
     *,
-    room_id: str,
+    conversation_id: str,
     agent_ids: list[str],
     scope_source: str = "explicit_selection",
     group_id: str | None = None,
@@ -455,14 +389,14 @@ def _build_candidate_scope(
 ) -> CandidateScopeSnapshot:
     basis = AuthorizationBasis(
         kind=_SCOPE_AUTHORIZATION_KINDS.get(scope_source, "explicit_selection"),
-        room_id=room_id,
+        conversation_id=conversation_id,
         group_id=group_id,
         selected_by_user_id=requesting_subject_id or None,
     )
     return CandidateScopeSnapshot(
-        snapshot_id=f"scope-{_sha256_hex(json.dumps([room_id, sorted(agent_ids), scope_source, group_id or '']))}",
+        snapshot_id=f"scope-{_sha256_hex(json.dumps([conversation_id, sorted(agent_ids), scope_source, group_id or '']))}",
         source=scope_source,
-        room_id=room_id,
+        conversation_id=conversation_id,
         group_id=group_id,
         agent_ids=list(dict.fromkeys(agent_ids)),
         authorization_basis=basis,
@@ -484,6 +418,7 @@ def _build_resource_manifest(
     source_message_id: str,
     user_text: str | None,
     attachments: list[AttachmentEnvelope] | None,
+    earlier_refs: tuple[PreparedResourceRef, ...] = (),
 ) -> RunResourceManifestSnapshot:
     from context_memory.resources import (
         AttachmentResource,
@@ -517,6 +452,8 @@ def _build_resource_manifest(
         )
         for entry in entries
     ]
+    current = {ref.ref_id for ref in refs}
+    refs.extend(ref for ref in earlier_refs if ref.ref_id not in current)
     return RunResourceManifestSnapshot(
         manifest_id=f"manifest-{_sha256_hex(json.dumps([ref.model_dump(mode='json') for ref in refs]))}",
         refs=refs,
@@ -526,11 +463,128 @@ def _build_resource_manifest(
     )
 
 
+def _attach_turn_records(messages: list[ModelMessage], records: dict[int, str]) -> None:
+    """Append each earlier turn's record after that turn's answer.
+
+    Keyed by the user message index; attaching to the following assistant
+    message keeps the history alternating.
+    """
+    for index, record in records.items():
+        target = (
+            index + 1
+            if index + 1 < len(messages) and messages[index + 1].role == "assistant"
+            else index
+        )
+        messages[target] = ModelMessage(
+            role=messages[target].role,
+            content=[*messages[target].content, ModelTextPart(text=record)],
+        )
+
+
+def _history_entries(
+    state: Any, current_turn_id: str
+) -> tuple[list[tuple[str | None, ModelMessage]], list[str]]:
+    """Recent history as ``(user turn id or None, message)`` plus all user turns.
+
+    The window keeps the most recent messages and starts with a user turn.
+    """
+    user_turn_ids: list[str] = []
+    # (user turn id or None for an answer, message) in history order.
+    entries: list[tuple[str | None, ModelMessage]] = []
+    for turn in state.conversation_history:
+        if turn.turn_id == current_turn_id:
+            continue
+        content = turn.content or turn.brief_summary
+        if not isinstance(content, str) or not content.strip():
+            continue
+        content = content.strip()[:_MAX_ROOM_HISTORY_CHARS_PER_MESSAGE]
+        if turn.role == "user":
+            user_turn_ids.append(turn.turn_id)
+            entries.append(
+                (
+                    turn.turn_id,
+                    ModelMessage(role="user", content=[ModelTextPart(text=content)]),
+                )
+            )
+        elif turn.role == "supervisor" or (
+            turn.role == "agent" and turn.agent_id == "system:hybro"
+        ):
+            entries.append(
+                (
+                    None,
+                    ModelMessage(
+                        role="assistant", content=[ModelTextPart(text=content)]
+                    ),
+                )
+            )
+    entries = entries[-_MAX_ROOM_HISTORY_MESSAGES:]
+    while entries and entries[0][1].role != "user":
+        entries.pop(0)
+    return entries, user_turn_ids
+
+
+def _run_resources(run: Any) -> list[tuple[PreparedResourceRef, str]]:
+    """A finished Run's attachments and Agent artifacts, with short labels."""
+    manifest = run.resource_manifest
+    if manifest is None:
+        return []
+    agent_names = {
+        entry.definition.name: entry.agent_display_name or entry.definition.label
+        for entry in (run.tool_catalog.entries if run.tool_catalog else [])
+    }
+    producers: dict[str, str] = {}
+    for message in run.transcript:
+        name = agent_names.get(getattr(message, "tool_name", ""))
+        if name is None or getattr(message, "kind", None) != "tool_result":
+            continue
+        for ref_id in message.artifact_refs:
+            producers.setdefault(ref_id, name)
+    resources: list[tuple[PreparedResourceRef, str]] = []
+    for ref in manifest.refs:
+        mime = ref.mime_type or "unknown type"
+        if ref.kind == "attachment":
+            resources.append((ref, f"attachment the user uploaded ({mime})"))
+        elif ref.kind == "artifact":
+            producer = producers.get(ref.ref_id)
+            label = f"Artifact ({mime})"
+            resources.append(
+                (ref, f"{label} produced by {producer}" if producer else label)
+            )
+    return resources
+
+
+def _earlier_turn_record(
+    answers: list[tuple[str, str]],
+    resources: list[tuple[str, PreparedResourceRef, str]],
+    *,
+    header: str,
+) -> str | None:
+    """Platform note with a turn's user answers and still-selectable files."""
+    if not answers and not resources:
+        return None
+    lines = [header]
+    if answers:
+        lines.append("The user gave these answers; treat them as user-supplied facts:")
+        lines.extend(
+            f"- Question: {question}\n  Answer: {answer}"
+            for question, answer in answers
+        )
+    if resources:
+        lines.append(
+            "Files that Agents can still receive by reference "
+            "(pass the id through attachment_refs or artifact_refs):"
+        )
+        lines.extend(
+            f"- {ref.ref_id}: {label}" for _turn, ref, label in reversed(resources)
+        )
+    return "\n".join(lines)
+
+
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _map_legacy_answers(
+def _map_interaction_answers(
     spec: A2AInteractionSpec, answers: list[dict[str, str]]
 ) -> list[HITLQuestionAnswer]:
     questions = {question.question_id: question for question in spec.questions}
@@ -598,266 +652,6 @@ def _answer_for_question(question: HITLQuestionSpec, user_input: str) -> Any:
     )
 
 
-def _webhook_event_body(payload: dict[str, Any]) -> dict[str, Any]:
-    result = payload.get("result")
-    return result if isinstance(result, dict) else payload
-
-
-def _first_mapping(*values: Any) -> dict[str, Any] | None:
-    for value in values:
-        if isinstance(value, dict):
-            return value
-    return None
-
-
-def _protocol_message_id_from_mapping(raw: dict[str, Any] | None) -> str | None:
-    if raw is None:
-        return None
-    return _first_str(raw.get("messageId"), raw.get("message_id"))
-
-
-def _webhook_protocol_message_id(
-    payload: dict[str, Any], *, task: Any | None = None
-) -> str | None:
-    """Prefer a protocol messageId over synthetic parser/task IDs."""
-    if task is not None:
-        status_message = getattr(getattr(task, "status", None), "message", None)
-        message_id = getattr(status_message, "message_id", None)
-        if isinstance(message_id, str) and message_id.strip():
-            return message_id.strip()
-
-    body = _webhook_event_body(payload)
-    status = body.get("status") if isinstance(body.get("status"), dict) else {}
-    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
-    status_update_status = (
-        status_update.get("status")
-        if isinstance(status_update, dict)
-        and isinstance(status_update.get("status"), dict)
-        else {}
-    )
-    message = _first_mapping(
-        body if body.get("kind") in {"message", "MESSAGE"} else None,
-        body.get("message"),
-        status.get("message") if isinstance(status, dict) else None,
-        status_update_status.get("message")
-        if isinstance(status_update_status, dict)
-        else None,
-    )
-    return _protocol_message_id_from_mapping(message)
-
-
-def _webhook_protocol_task_id(payload: dict[str, Any]) -> str | None:
-    body = _webhook_event_body(payload)
-    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
-    task = body.get("task") if isinstance(body.get("task"), dict) else None
-    return _first_str(
-        body.get("taskId"),
-        body.get("task_id"),
-        body.get("id") if body.get("kind") == "task" else None,
-        task.get("id") if isinstance(task, dict) else None,
-        status_update.get("taskId") if isinstance(status_update, dict) else None,
-        status_update.get("task_id") if isinstance(status_update, dict) else None,
-    )
-
-
-def _webhook_event_cursor(payload: dict[str, Any], *, task: Any | None = None) -> str:
-    """Stable per-event discriminator for webhook ingress identity."""
-    message_id = _webhook_protocol_message_id(payload, task=task)
-    if message_id is not None:
-        return f"msg:{message_id}"
-
-    if task is not None:
-        status_message = getattr(getattr(task, "status", None), "message", None)
-        metadata = getattr(status_message, "metadata", None)
-        if isinstance(metadata, dict):
-            interaction = metadata.get("hybro.ai/a2a/interaction")
-            if isinstance(interaction, dict):
-                interaction_id = interaction.get("interaction_id")
-                if isinstance(interaction_id, str) and interaction_id.strip():
-                    return f"interaction:{interaction_id.strip()}"
-
-    body = _webhook_event_body(payload)
-    return f"fp:{_sha256_hex(json.dumps(body, sort_keys=True, default=str))}"
-
-
-def _deterministic_observed_at(cursor: str) -> datetime:
-    """Stable observed_at for webhook event identity / payload digests.
-
-    Wall-clock arrival remains on the inbox ``received_at`` field. Using a
-    cursor-derived timestamp keeps identical webhook replays idempotent.
-    """
-    seconds = int(_sha256_hex(cursor)[:8], 16) % 1_700_000_000
-    return datetime.fromtimestamp(seconds, tz=UTC)
-
-
-def _observation_from_webhook_payload(
-    payload: dict[str, Any], call: Any
-) -> NormalizedA2AObservation:
-    """Normalize orchestrator webhook payloads into durable observations.
-
-    Prefer the shared StreamResponse parser so typed HITL metadata on
-    ``status.message`` survives asynchronous ``status-update`` envelopes.
-    Fall back to the legacy minimal extractor when the payload is not a
-    recognized A2A stream frame.
-    """
-    from a2a_adapter.orchestrator_direct_client import _task_to_observation_kwargs
-    from a2a_adapter.webhook_payloads import parse_stream_response_payload
-
-    message_id = getattr(call, "assistant_message_id", None) or call.call_record_id
-    try:
-        task = parse_stream_response_payload(payload, message_id)
-        # Prefer the ledger-bound task id (and protocol taskId) over parser
-        # UUIDs synthesized for kind=message frames so replays stay idempotent.
-        task_id = (
-            call.a2a_task_id
-            or _webhook_protocol_task_id(payload)
-            or task.id
-            or message_id
-        )
-        context_id = task.context_id or call.a2a_context_id
-        cursor = _webhook_event_cursor(payload, task=task)
-        observation = NormalizedA2AObservation(
-            **_task_to_observation_kwargs(
-                task,
-                source_kind="webhook",
-                call_record_id=call.call_record_id,
-                binding_scope=call.endpoint_scope_digest,
-                agent_id=call.agent_id,
-                task_id=task_id,
-                context_id=context_id,
-                cursor=cursor,
-            )
-        )
-        return observation.model_copy(
-            update={"observed_at": _deterministic_observed_at(cursor)}
-        )
-    except (TypeError, ValueError):
-        pass
-
-    source = _webhook_event_body(payload)
-    task_id, context_id, status, text = _extract_webhook_identity(source)
-    event_kind = _event_kind_for_status(status)
-    content = [TextPart(text=text)] if text else []
-    resolved_task_id = task_id or call.a2a_task_id
-    cursor = _webhook_event_cursor(payload)
-    return NormalizedA2AObservation(
-        observation_id=(
-            f"webhook-{call.call_record_id}-{resolved_task_id or ''}"
-            f"-{event_kind}-{cursor}"
-        ),
-        call_record_id=call.call_record_id,
-        source_kind="webhook",
-        source_identity=(
-            f"webhook:{call.endpoint_scope_digest}:{resolved_task_id or ''}:"
-            f"{event_kind}:{cursor}"
-        ),
-        binding_scope=call.endpoint_scope_digest,
-        event_kind=event_kind,
-        observed_at=_deterministic_observed_at(cursor),
-        task_id=resolved_task_id,
-        context_id=context_id or call.a2a_context_id,
-        agent_id=call.agent_id,
-        status=status if event_kind == "terminal" else None,
-        content=content,
-        artifact_refs=[],
-        interaction_spec=None,
-        error_code=None,
-        error_message=None,
-        cursor=cursor,
-    )
-
-
-def _extract_webhook_identity(
-    source: dict[str, Any],
-) -> tuple[str | None, str | None, str | None, str]:
-    if isinstance(source.get("task"), dict):
-        task = source["task"]
-        status = _status_value(task.get("status"))
-        text = _extract_webhook_text(task)
-        return (
-            _first_str(task.get("id"), task.get("task_id"), task.get("taskId")),
-            _first_str(
-                task.get("context_id"), task.get("contextId"), task.get("contextId")
-            ),
-            status,
-            text,
-        )
-    raw = source.get("statusUpdate") or source.get("status_update")
-    if isinstance(raw, dict):
-        status = _status_value(raw.get("status"))
-        text = _extract_webhook_text(raw.get("status"))
-        return (
-            _first_str(raw.get("task_id"), raw.get("taskId")),
-            _first_str(raw.get("context_id"), raw.get("contextId")),
-            status,
-            text,
-        )
-    message = source.get("message")
-    if isinstance(message, dict):
-        return (
-            _first_str(message.get("task_id"), message.get("taskId")),
-            _first_str(message.get("context_id"), message.get("contextId")),
-            "completed",
-            _extract_webhook_text(message),
-        )
-    return None, None, None, ""
-
-
-def _status_value(status: Any) -> str | None:
-    if not isinstance(status, dict):
-        return None
-    value = status.get("state")
-    if not isinstance(value, str):
-        return None
-    return value
-
-
-def _first_str(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
-
-
-def _extract_webhook_text(value: Any) -> str:  # noqa: C901
-    if not isinstance(value, dict):
-        return ""
-    message = value.get("message")
-    if isinstance(message, dict):
-        parts = message.get("parts") or message.get("content")
-        if isinstance(parts, list):
-            texts = []
-            for part in parts:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str) and text.strip():
-                        texts.append(text)
-            if texts:
-                return "".join(texts)
-        text = message.get("text")
-        if isinstance(text, str):
-            return text
-    artifacts = value.get("artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts:
-            if not isinstance(artifact, dict):
-                continue
-            text = _extract_webhook_text(artifact)
-            if text:
-                return text
-    return ""
-
-
-def _event_kind_for_status(status: str | None) -> str:
-    if status in {"input-required", "input_required"}:
-        return "input_required"
-    if status in {"auth-required", "auth_required"}:
-        return "auth_required"
-    if status in {"completed", "failed", "canceled", "rejected", "expired"}:
-        return "terminal"
-    return "working"
-
-
 class _PreparedRunFactory:
     """Run factory that pins the Run id the catalog was prepared against."""
 
@@ -882,8 +676,8 @@ class DualRuntimeRouter:
     """Thin orchestrator ingress adapter for the single execution path.
 
     Construction is cheap and non-IO. ``runtime`` is the composed orchestrator
-    runtime; every ingress (message, cancellation, HITL answer, webhook) is
-    served by the orchestrator directly.
+    runtime; every ingress (message, cancellation, HITL answer) is served by
+    the orchestrator directly.
     """
 
     def __init__(
@@ -892,23 +686,14 @@ class DualRuntimeRouter:
         runtime: Any | None = None,
         envelope_source: RoomEnvelopeSource | None = None,
         run_factory: RunFactory | None = None,
-        webhook_token_verifier: WebhookTokenVerifier | None = None,
         room_memory_reader: RoomMemoryReader | None = None,
     ) -> None:
         self._runtime = runtime
         self._envelope_source = envelope_source
         self._run_factory = run_factory or DefaultRunFactory()
-        self._webhook_token_verifier = webhook_token_verifier
         self._room_memory_reader = room_memory_reader
 
     # -- Ingress routing -------------------------------------------------
-
-    async def record_observation(
-        self, observation: NormalizedA2AObservation
-    ) -> tuple[str, Any]:
-        if self._runtime is None:
-            raise OrchestratorRoutingError("orchestrator ingress is not bound")
-        return await self._runtime.observation_ingress.record(observation)
 
     async def route_cancellation_by_user_message(
         self,
@@ -989,7 +774,7 @@ class DualRuntimeRouter:
         interaction_id: str,
         answers: list[dict[str, str]],
         responder_id: str,
-        room_id: str,
+        conversation_id: str,
     ) -> str:
         if self._runtime is None:
             raise OrchestratorRoutingError("orchestrator HITL ingress is not bound")
@@ -997,18 +782,12 @@ class DualRuntimeRouter:
         if read is None:
             raise OrchestratorHITLNotOwnedError(interaction_id)
         spec, route, _fingerprint = read
-        if route.room_id != room_id:
+        if route.conversation_id != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         run = await self._runtime.run_store.load(route.orchestration_run_id)
-        if run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return "canceled"
-        mapped = _map_legacy_answers(spec, answers)
+        mapped = _map_interaction_answers(spec, answers)
         try:
             state = await self._runtime.continuation.resume(
                 call_record_id=route.call_record_id,
@@ -1070,7 +849,7 @@ class DualRuntimeRouter:
     async def cancel_hitl_interaction(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         interaction_id: str,
         expected_version: int,
     ) -> int:
@@ -1080,7 +859,7 @@ class DualRuntimeRouter:
         if read is None:
             raise KeyError(interaction_id)
         spec, route, _fingerprint = read
-        if route.room_id != room_id:
+        if route.conversation_id != conversation_id:
             raise HITLRoomMismatchError("Room mismatch")
         if route.interaction_revision != expected_version:
             raise HITLConflictError("HITL interaction changed before cancellation")
@@ -1114,7 +893,7 @@ class DualRuntimeRouter:
         # Close the public interaction before settling the owning Run; a
         # terminal run_settled event is invalid while HITL remains active.
         await self._emit_hitl_resolved_events(
-            room_id=room_id,
+            conversation_id=conversation_id,
             spec=spec,
             route=route,
             status="canceled",
@@ -1127,7 +906,7 @@ class DualRuntimeRouter:
         hitl_port = getattr(self._runtime, "hitl_port", None)
         if hitl_port is None:
             return
-        interactions = await hitl_port.get_eligible_interactions(run.room_id)
+        interactions = await hitl_port.get_eligible_interactions(run.conversation_id)
         for spec, route, _fingerprint in interactions:
             if route.orchestration_run_id != run.run_id:
                 continue
@@ -1139,7 +918,7 @@ class DualRuntimeRouter:
             if abandoned not in {"accepted", "replayed", "absent"}:
                 raise HITLConflictError("HITL interaction could not be canceled")
             await self._emit_hitl_resolved_events(
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 spec=spec,
                 route=route,
                 status="canceled",
@@ -1214,7 +993,7 @@ class DualRuntimeRouter:
     async def _emit_hitl_resolved_events(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         spec: A2AInteractionSpec,
         route: Any,
         status: str,
@@ -1222,7 +1001,7 @@ class DualRuntimeRouter:
         if self._runtime is None:
             return
         run = await self._runtime.run_store.load(route.orchestration_run_id)
-        canonical = getattr(run, "lifecycle_family", None) == "canonical"
+        canonical = run is not None
         delivery = getattr(self._runtime, "hitl_delivery", None)
         if delivery is None:
             if canonical:
@@ -1249,11 +1028,13 @@ class DualRuntimeRouter:
             ),
         )
 
-    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
+    async def get_pending_hitl(self, conversation_id: str) -> list[HITLRequest]:
         if self._runtime is None:
             return []
 
-        interactions = await self._runtime.hitl_port.get_published_interactions(room_id)
+        interactions = await self._runtime.hitl_port.get_published_interactions(
+            conversation_id
+        )
         requests: list[HITLRequest] = []
         for spec, route, _fingerprint in interactions:
             run = await self._runtime.run_store.load(route.orchestration_run_id)
@@ -1294,7 +1075,7 @@ class DualRuntimeRouter:
                 requests.append(
                     HITLRequest(
                         request_id=question.question_id,
-                        room_id=room_id,
+                        conversation_id=conversation_id,
                         user_message_id=user_message_id,
                         source="agent",
                         prompt=sanitize_public_text(
@@ -1318,59 +1099,10 @@ class DualRuntimeRouter:
                 )
         return requests
 
-    async def _authenticate_webhook(self, message_id: str, token: str) -> None:
-        """Authenticate an orchestrator webhook exactly like the legacy route."""
-        if self._webhook_token_verifier is None:
-            raise OrchestratorRoutingError(
-                "orchestrator webhook token verifier is not bound"
-            )
-        if not token:
-            raise WebhookAuthenticationError(401, "Missing authorization token")
-        is_valid, error_reason = await self._webhook_token_verifier(message_id, token)
-        if not is_valid:
-            if error_reason == "task_not_found":
-                raise WebhookAuthenticationError(
-                    404, "Task not found. The task may not have been created yet."
-                )
-            if error_reason == "invalid_token":
-                raise WebhookAuthenticationError(401, "Invalid token")
-            raise WebhookAuthenticationError(500, "Token verification failed")
-
-    async def _resolve_webhook_call(self, message_id: str) -> Any | None:
-        """Resolve a webhook by A2A task id first, then by call record id."""
-        ledger = self._runtime.call_ledger
-        call = await ledger.find_by_task_id(message_id)
-        if call is None:
-            call = await ledger.load_by_record_id(message_id)
-        return call
-
-    async def route_webhook(
-        self, *, message_id: str, payload: dict[str, Any], token: str
-    ) -> None:
-        """Record an authenticated orchestrator-owned webhook.
-
-        Correlation resolves the A2A ``task_id`` alias first and then falls
-        back to the orchestrator ``call_record_id``. Webhooks authenticate
-        against the call's room-scoped assistant message id through the
-        injected token verifier (``verify_webhook_token_for_task``). A webhook
-        that does not correlate to an orchestrator call is a hard error; there
-        is no legacy executor left to fall back to.
-        """
-        if self._runtime is None:
-            raise OrchestratorRoutingError("orchestrator webhook ingress is not bound")
-        call = await self._resolve_webhook_call(message_id)
-        if call is None:
-            raise WebhookAuthenticationError(
-                404, "Task not found. The task may not have been created yet."
-            )
-        await self._authenticate_webhook(call.assistant_message_id, token)
-        observation = _observation_from_webhook_payload(payload, call)
-        await self._runtime.observation_ingress.record(observation)
-
     # -- Room message adapter ------------------------------------
 
     async def _resolve_envelope_and_profile(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> tuple[RoomMessageEnvelope, Any]:
         """Resolve and validate the envelope without any orchestrator side effect."""
         if self._runtime is None:
@@ -1379,11 +1111,9 @@ class DualRuntimeRouter:
             raise UnsupportedEnvelopeError(
                 "orchestrator message adapter is not bound to a room envelope source"
             )
-        room_id = request.room_id
-        if not room_id:
-            raise UnsupportedEnvelopeError("orchestrator requires room_id")
-
-        envelope = await self._envelope_source.load_envelope(request)
+        envelope = await self._envelope_source.load_envelope(
+            request, message_id=message_id
+        )
         profile_id = map_mode_to_profile(envelope.mode)
         profile = self._runtime.profiles.get(profile_id)
         if profile is None:
@@ -1400,58 +1130,55 @@ class DualRuntimeRouter:
             )
         return envelope, profile
 
-    async def preflight_room_user_message(self, request: OrchestrationRequest) -> None:
-        """Validate servability before Run assignment side effects.
-
-        Resolves the persisted envelope, profile, and candidate scope without
-        creating a session, epoch, or Run. ``UnsupportedEnvelopeError`` means
-        the legacy engine must serve the message.
-        """
-        await self._resolve_envelope_and_profile(request)
-
     async def process_room_user_message(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> OrchestrationResponse:
-        envelope, profile = await self._resolve_envelope_and_profile(request)
-        room_id = request.room_id
+        envelope, profile = await self._resolve_envelope_and_profile(
+            request, message_id=message_id
+        )
+        conversation_id = request.conversation_id
 
-        requesting_subject_id = envelope.requesting_subject_id or request.user_id or ""
+        requesting_subject_id = envelope.requesting_subject_id or request.sender_id
         candidate_scope = _build_candidate_scope(
-            room_id=room_id,
+            conversation_id=conversation_id,
             agent_ids=envelope.candidate_agent_ids,
             scope_source=envelope.scope_source,
             group_id=envelope.group_id,
             requesting_subject_id=requesting_subject_id,
         )
         if not candidate_scope.agent_ids:
-            # An empty scope cannot produce a meaningful kernel run; keep the
-            # legacy executor's empty-scope behavior until the seam grows a
-            # zero-candidate synthesis path.
+            # An empty scope cannot produce a meaningful kernel run; reject it
+            # until the seam grows a zero-candidate synthesis path.
             raise UnsupportedEnvelopeError(
                 "orchestrator candidate scope resolved to zero agents"
             )
-        resource_manifest = _build_resource_manifest(
-            source_message_id=request.room_user_message_id or "",
-            user_text=envelope.message_text,
-            attachments=envelope.attachments,
-        )
-
         session_host = self._runtime.session_host
-        session = session_host.get_session(room_id)
+        session = session_host.get_session(conversation_id)
         if session is not None:
             if await session.has_active_run():
                 raise SessionConflict("a Run is already active for this Room")
             # A session pins ONE Run id and ONE frozen catalog, so an idle
             # (terminal) session is replaced by a freshly prepared one for
             # every new message instead of replaying the stale Run id.
-            session_host.drop_session(room_id)
-        epoch = await self._runtime.epoch_store.read_active(room_id)
+            session_host.drop_session(conversation_id)
+        epoch = await self._runtime.epoch_store.read_active(conversation_id)
         if epoch is None:
             raise UnsupportedEnvelopeError("Room epoch is not active")
+        room_context = await self._load_room_context(
+            conversation_id,
+            current_message_id=message_id,
+            room_epoch=epoch.epoch,
+        )
+        resource_manifest = _build_resource_manifest(
+            source_message_id=message_id,
+            user_text=envelope.message_text,
+            attachments=envelope.attachments,
+            earlier_refs=room_context.earlier_refs,
+        )
         run_id = f"run-{uuid4().hex}"
         prepared = await self._runtime.catalog_assembler.prepare(
             run_id=run_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_epoch=epoch.epoch,
             requesting_subject_id=requesting_subject_id,
             candidate_scope=candidate_scope,
@@ -1464,23 +1191,19 @@ class DualRuntimeRouter:
             ),
             created_at=datetime.now(UTC),
         )
-        conversation_history = await self._load_conversation_history(
-            room_id,
-            current_message_id=request.room_user_message_id or "",
-        )
         await session_host.create_session(
-            room_id=room_id,
+            conversation_id=conversation_id,
             profile=profile,
             candidate_scope=candidate_scope,
             requesting_subject_id=requesting_subject_id,
             frozen_catalog=prepared.snapshot,
             resource_manifest=resource_manifest,
-            conversation_history=conversation_history,
+            conversation_history=room_context.history,
             run_factory=_PreparedRunFactory(run_id, self._run_factory),
         )
 
         message = UserMessage(
-            message_id=request.room_user_message_id or f"user-{uuid4().hex}",
+            message_id=message_id,
             content=[
                 *(
                     [TextPart(text=_addressed_agents_note(envelope.addressed_agents))]
@@ -1499,59 +1222,117 @@ class DualRuntimeRouter:
             created_at=datetime.now(UTC),
         )
         result = await session_host.prompt(
-            room_id,
+            conversation_id,
             message,
             client_request_id=request.client_request_id,
         )
         return OrchestrationResponse(
             task_id=result.run.run_id if getattr(result, "run", None) else None,
-            room_id=room_id,
+            conversation_id=conversation_id,
             success=True,
             status_code=200,
         )
 
-    async def _load_conversation_history(
+    async def _load_room_context(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         current_message_id: str,
-    ) -> tuple[ModelMessage, ...]:
+        room_epoch: int | None = None,
+    ) -> RoomContext:
+        """Load earlier turns' history and the files they left for follow-ups.
+
+        Room memory keeps only each turn's message and final answer. Each
+        earlier turn's Run supplies what memory drops: answers the user gave
+        during the turn, and the attachments and Agent artifacts it holds,
+        which stay selectable by reference in the new Run (same Room epoch,
+        most recent first, bounded).
+        """
         if self._room_memory_reader is None:
-            return ()
-        document = await self._room_memory_reader(room_id)
+            return RoomContext()
+        document = await self._room_memory_reader(conversation_id)
         if not document:
-            return ()
-        state = normalize_room_memory(document)
-        current_turn_id = f"message:{current_message_id}"
-        messages: list[ModelMessage] = []
-        for turn in state.conversation_history:
-            if turn.turn_id == current_turn_id:
+            return RoomContext()
+        entries, user_turn_ids = _history_entries(
+            normalize_room_memory(document), f"message:{current_message_id}"
+        )
+        runs: dict[str, Any] = {}
+        earlier = await self._earlier_resources(
+            user_turn_ids, runs, room_epoch=room_epoch
+        )
+        kept = {turn_id for turn_id, _ in entries if turn_id is not None}
+        messages = [message for _, message in entries]
+        records: dict[int, str] = {}
+        for index, (turn_id, _message) in enumerate(entries):
+            if turn_id is None:
                 continue
-            content = turn.content or turn.brief_summary
-            if not isinstance(content, str) or not content.strip():
+            run = await self._turn_run(turn_id, runs)
+            record = _earlier_turn_record(
+                resolved_user_answers(run.transcript) if run is not None else [],
+                [item for item in earlier if item[0] == turn_id],
+                header="[platform record of this earlier turn]",
+            )
+            if record:
+                records[index] = record
+        older = _earlier_turn_record(
+            [],
+            [item for item in earlier if item[0] not in kept],
+            header="[platform record of older turns in this room]",
+        )
+        if older and messages:
+            messages[0] = ModelMessage(
+                role=messages[0].role,
+                content=[*messages[0].content, ModelTextPart(text=older)],
+            )
+        _attach_turn_records(messages, records)
+        return RoomContext(
+            history=tuple(messages),
+            earlier_refs=tuple(ref for _, ref, _label in reversed(earlier)),
+        )
+
+    async def _earlier_resources(
+        self,
+        user_turn_ids: list[str],
+        runs: dict[str, Any],
+        *,
+        room_epoch: int | None,
+    ) -> list[tuple[str, PreparedResourceRef, str]]:
+        """Most recent earlier attachments and artifacts, newest first."""
+        if room_epoch is None:
+            return []
+        found: list[tuple[str, PreparedResourceRef, str]] = []
+        seen: set[str] = set()
+        for turn_id in reversed(user_turn_ids[-_MAX_EARLIER_RESOURCE_TURNS:]):
+            run = await self._turn_run(turn_id, runs)
+            if run is None or run.request.room_epoch != room_epoch:
                 continue
-            content = content.strip()[:_MAX_ROOM_HISTORY_CHARS_PER_MESSAGE]
-            if turn.role == "user":
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=[ModelTextPart(text=content)],
-                    )
+            for ref, label in reversed(_run_resources(run)):
+                if ref.ref_id in seen:
+                    continue
+                seen.add(ref.ref_id)
+                found.append((turn_id, ref, label))
+                if len(found) >= _MAX_EARLIER_RESOURCES:
+                    return found
+        return found
+
+    async def _turn_run(self, turn_id: str, runs: dict[str, Any]) -> Any | None:
+        if turn_id in runs:
+            return runs[turn_id]
+        run_store = getattr(self._runtime, "run_store", None)
+        run = None
+        if run_store is not None and turn_id.startswith("message:"):
+            try:
+                run = await run_store.load_by_user_message_id(
+                    turn_id.removeprefix("message:")
                 )
-                continue
-            if turn.role == "supervisor" or (
-                turn.role == "agent" and turn.agent_id == "system:hybro"
-            ):
-                messages.append(
-                    ModelMessage(
-                        role="assistant",
-                        content=[ModelTextPart(text=content)],
-                    )
+            except Exception:
+                logger.warning(
+                    "earlier turn Run is unavailable",
+                    extra={"turn_id": turn_id},
+                    exc_info=True,
                 )
-        messages = messages[-_MAX_ROOM_HISTORY_MESSAGES:]
-        while messages and messages[0].role != "user":
-            messages.pop(0)
-        return tuple(messages)
+        runs[turn_id] = run
+        return run
 
 
 __all__ = [
@@ -1563,7 +1344,5 @@ __all__ = [
     "RoomMessageEnvelope",
     "RoomMessageEnvelopeResolver",
     "UnsupportedEnvelopeError",
-    "WebhookAuthenticationError",
-    "WebhookTokenVerifier",
     "map_mode_to_profile",
 ]

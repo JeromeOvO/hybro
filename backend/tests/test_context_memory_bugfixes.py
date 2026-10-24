@@ -3,33 +3,21 @@ Unit tests for context & memory bug fixes and new functionality.
 
 Covers:
 - CompactionSweep: fail-closed safety gate and worker lifecycle
-- extract_turn_notes_llm: LLM path and heuristic fallback
-- Memory search result hydration: _hydrate_results_from_storage
 
 See docs/System-Architecture.md for the current design.
 """
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
 import pytest
 
-from common.dto import CompactionResult, MemorySearchResult
-from common.types import MessageRole
+from common.dto import CompactionResult
 from common.utils.context_utils import estimate_tokens, get_context_stats
-from context_memory import search
-from context_memory.config import TokenBudgetConfig
-from context_memory.models import SearchRankingRecord
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    MemoryContent,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
+from context_memory.models import ConversationTurnData
 
 # =============================================================================
 # Fixtures
@@ -44,27 +32,22 @@ def mock_compaction_config():
         mock.compaction_max_total_tokens = 80000
         mock.compaction_preserve_recent = 10
         mock.compaction_content_ttl_days = 0
-        mock.memory_search_enabled = True
-        mock.memory_search_temporal_decay_enabled = True
-        mock.memory_search_half_life_days = 30
-        mock.memory_search_max_results = 10
-        mock.memory_search_max_snippet_chars = 500
         yield mock
 
 
-def _make_turn(content="Test", role=TurnRole.USER, **kwargs) -> ConversationTurn:
+def _make_turn(content="Test", role="user", **kwargs) -> ConversationTurnData:
     defaults = dict(
         turn_id=str(uuid4()),
         role=role,
         content=content,
-        content_type=ContentType.TEXT,
-        representation=TurnRepresentation.FULL,
+        content_type="text",
+        representation="full",
         estimated_tokens_full=estimate_tokens(content),
         estimated_tokens_compact=20,
         timestamp=datetime(2026, 2, 20),
     )
     defaults.update(kwargs)
-    return ConversationTurn(**defaults)
+    return ConversationTurnData(**defaults)
 
 
 def test_context_stats_use_canonical_history_and_nested_summary_only():
@@ -72,14 +55,13 @@ def test_context_stats_use_canonical_history_and_nested_summary_only():
     canonical_full = _make_turn(content="canonical full", estimated_tokens_full=3)
     canonical_compact = _make_turn(
         content=None,
-        representation=TurnRepresentation.COMPACT,
+        representation="compact",
         brief_summary="canonical compact",
         estimated_tokens_full=50,
         estimated_tokens_compact=12,
     )
-    room_memory = RoomMemory(
-        room_id="room-1",
-        memory_content=MemoryContent(
+    room_memory = SimpleNamespace(
+        memory_content=SimpleNamespace(
             summary=summary,
             conversation_history=[_make_turn(content="nested history is ignored")],
         ),
@@ -134,7 +116,7 @@ class TestCompactionSweep:
         sweep = CompactionSweep(interval_minutes=60)
 
         mock_result = CompactionResult(
-            room_id="room_1",
+            conversation_id="room_1",
             compacted_count=3,
             tokens_saved=500,
         )
@@ -165,7 +147,7 @@ class TestCompactionSweep:
         sweep = CompactionSweep(interval_minutes=60)
 
         mock_result = CompactionResult(
-            room_id="idle_room",
+            conversation_id="idle_room",
             compacted_count=1,
             tokens_saved=100,
         )
@@ -287,7 +269,7 @@ class TestCompactionSweep:
         release_workers = asyncio.Event()
         started_count = 0
 
-        async def blocking_compaction(_room_id: str):
+        async def blocking_compaction(_conversation_id: str):
             nonlocal started_count
             started_count += 1
             if started_count == MAX_CONCURRENT_COMPACTIONS:
@@ -334,11 +316,11 @@ class TestCompactionSweep:
 
         sweep = CompactionSweep(interval_minutes=60)
 
-        async def compact_room(room_id: str):
-            if room_id == "bad_room":
+        async def compact_room(conversation_id: str):
+            if conversation_id == "bad_room":
                 raise RuntimeError("compaction failed")
             return CompactionResult(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 compacted_count=1,
                 tokens_saved=100,
             )
@@ -377,7 +359,7 @@ class TestCompactionSweep:
         in_flight = 0
         max_in_flight = 0
 
-        async def track_concurrency(_room_id: str):
+        async def track_concurrency(_conversation_id: str):
             nonlocal in_flight, max_in_flight
             in_flight += 1
             max_in_flight = max(max_in_flight, in_flight)
@@ -401,238 +383,3 @@ class TestCompactionSweep:
 
         assert stats["scanned"] == len(room_ids)
         assert max_in_flight == MAX_CONCURRENT_COMPACTIONS
-
-
-# =============================================================================
-# extract_turn_notes_llm Tests
-# =============================================================================
-
-
-class TestExtractTurnNotesLLM:
-    """Tests for LLM-based turn note extraction."""
-
-    @pytest.mark.asyncio
-    async def test_returns_none_for_empty_content(self):
-        from common.utils.context_utils import extract_turn_notes_llm
-
-        result = await extract_turn_notes_llm("")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_for_short_content(self):
-        from common.utils.context_utils import extract_turn_notes_llm
-
-        result = await extract_turn_notes_llm("hi")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_calls_llm_and_parses_result(self):
-        from common.dto import LLMStructuredResponse
-        from common.utils import context_utils
-
-        long_content = "Discuss the deployment of React application " * 50
-        mock_response = {
-            "keywords": ["React", "deployment", "application"],
-            "entities": ["React"],
-            "tags": ["deployment"],
-            "one_liner": "Discussion about deploying React app",
-        }
-
-        mock_gateway = MagicMock()
-        mock_gateway.generate_structured = AsyncMock(
-            return_value=LLMStructuredResponse(
-                data=mock_response,
-                model="gpt-4o-mini",
-            )
-        )
-
-        result = await context_utils.extract_turn_notes_llm(
-            long_content, provider=mock_gateway
-        )
-
-        assert result is not None
-        assert "keywords" in result
-        assert len(result["keywords"]) <= 10
-        mock_gateway.generate_structured.assert_awaited_once()
-        assert (
-            mock_gateway.generate_structured.await_args.kwargs["model"]
-            == "context_memory_json_model"
-        )
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_heuristic_on_llm_failure(self):
-        from common.utils import context_utils
-
-        long_content = "Discuss deployment of the application system " * 50
-
-        mock_gateway = MagicMock()
-        mock_gateway.generate_structured = AsyncMock(side_effect=Exception("LLM error"))
-
-        result = await context_utils.extract_turn_notes_llm(
-            long_content, provider=mock_gateway
-        )
-
-        assert result is not None
-        assert "keywords" in result
-
-
-# =============================================================================
-# Memory Search Hydration Tests
-# =============================================================================
-
-
-class TestMemorySearchHydration:
-    """Tests for keyword ranking records used by two-stage hydration."""
-
-    def test_keyword_ranking_record_uses_keyword_relevance_fields(
-        self, mock_compaction_config
-    ):
-        results = [
-            SearchRankingRecord(
-                turn_id="turn_1",
-                content="",
-                room_id="room_1",
-                keyword_score=0.95,
-                timestamp=datetime(2026, 2, 20),
-            ),
-        ]
-
-        ranked = search.rank_keyword_results(
-            results,
-            temporal_decay_enabled=False,
-            half_life_days=30,
-        )
-
-        assert ranked[0].keyword_score == 1.0
-        assert ranked[0].relevance_score == 1.0
-        assert ranked[0].temporal_decay_factor == 1.0
-
-    def test_keyword_ranking_preserves_existing_content(self, mock_compaction_config):
-        results = [
-            SearchRankingRecord(
-                turn_id="turn_1",
-                content="Already has content",
-                room_id="room_1",
-                keyword_score=0.95,
-                timestamp=datetime(2026, 2, 20),
-                metadata={"content_preview": "Already has content"},
-            ),
-        ]
-
-        ranked = search.rank_keyword_results(
-            results,
-            temporal_decay_enabled=False,
-            half_life_days=30,
-        )
-
-        assert ranked[0].content == "Already has content"
-
-
-# =============================================================================
-# Legacy Turn Token Fallback Tests
-# =============================================================================
-
-
-class TestLegacyTokenFallback:
-    """Tests that estimated_tokens_full=0 falls back to estimate_tokens()."""
-
-    def test_select_turns_within_budget_handles_zero_tokens(
-        self, mock_compaction_config
-    ):
-        from context_memory.assembly import select_turns_within_budget
-        from context_memory.translators import turn_from_dict
-
-        mock_compaction_config.context_model_window = 32000
-        mock_compaction_config.context_system_prompt_tokens = 2000
-        mock_compaction_config.context_tool_schema_tokens = 3000
-        mock_compaction_config.context_response_reserve_tokens = 4000
-        mock_compaction_config.context_room_pct = 0.15
-        mock_compaction_config.context_history_pct = 0.60
-        mock_compaction_config.context_task_pct = 0.25
-
-        legacy_turn = _make_turn(
-            content="A " * 500,
-            estimated_tokens_full=0,  # Legacy turn with no token estimate
-        )
-        recent_turn = _make_turn(content="Recent message")
-
-        selected, truncated = select_turns_within_budget(
-            [
-                turn_from_dict(legacy_turn.model_dump(mode="json")),
-                turn_from_dict(recent_turn.model_dump(mode="json")),
-            ],
-            budget_tokens=50,
-        )
-
-        # Legacy turn with 0 estimated tokens should be correctly measured
-        # at ~250 tokens (1000 chars / 4), exceeding the 50-token budget.
-        # The selector should truncate the legacy turn and keep only the recent one.
-        assert truncated == 1
-        assert len(selected) == 1
-        assert selected[0].content == "Recent message"
-
-
-# =============================================================================
-# Integration: Search → Context Pipeline Test
-# =============================================================================
-
-
-class TestSearchToContextIntegration:
-    """Verify memory search results flow through to supervisor context output."""
-
-    def test_search_results_appear_in_supervisor_context(self):
-        from context_memory.assembly import assemble_supervisor_context_from_memory
-
-        search_results = [
-            MemorySearchResult(
-                content="User asked about deploying the React frontend",
-                room_id="room_1",
-                keyword_score=0.92,
-                relevance_score=0.92,
-                temporal_decay_factor=1.0,
-                source_message_id="turn_abc",
-                metadata={
-                    "content_preview": "User asked about deploying the React frontend",
-                    "role": MessageRole.USER,
-                },
-            ),
-            MemorySearchResult(
-                content="",
-                room_id="room_1",
-                keyword_score=0.85,
-                relevance_score=0.85,
-                temporal_decay_factor=1.0,
-                source_message_id="turn_def",
-                metadata={"role": MessageRole.AGENT, "agent_name": "DevAgent"},
-            ),
-        ]
-
-        room_memory = RoomMemory(
-            room_id="room_1",
-            memory_content=MemoryContent(
-                conversation_history=[
-                    _make_turn(content="Hello"),
-                ],
-            ),
-        )
-
-        result = assemble_supervisor_context_from_memory(
-            room_memory.model_dump(mode="json"),
-            "Deploy the app",
-            token_budget=TokenBudgetConfig(
-                model_context_window=32000,
-                system_prompt=2000,
-                tool_schemas=3000,
-                response_reserve=4000,
-                room_context_pct=0.15,
-                conversation_history_pct=0.60,
-                current_task_pct=0.25,
-            ),
-            memory_search_results=search_results,
-        )
-
-        context = result.metadata["context"]
-        assert "deploying the React frontend" in context
-        assert "[Relevant Memory]" in context
-        # Empty-content result should NOT appear (no preview)
-        assert "DevAgent" not in context

@@ -39,7 +39,7 @@ def to_sse_frame(
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "processing_status",
             data,
             frame_timestamp,
@@ -54,17 +54,13 @@ def to_sse_frame(
             "run_id": event.run_id,
             "seq": event.seq,
             "type": event.run_event_type,
-            "payload": (
-                event.payload
-                if isinstance(event.payload, dict)
-                else event.payload.model_dump(mode="json")
-            ),
+            "payload": event.payload.model_dump(mode="json"),
             "correlation_id": event.correlation_id,
         }
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "run_event",
             data,
             frame_timestamp,
@@ -81,7 +77,7 @@ def to_sse_frame(
         }
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "agent_response_partial",
             data,
             frame_timestamp,
@@ -98,7 +94,7 @@ def to_sse_frame(
         data.update(_without_reserved_keys(event.content))
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "agent_response",
             data,
             frame_timestamp,
@@ -125,7 +121,7 @@ def to_sse_frame(
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "task_submitted",
             data,
             frame_timestamp,
@@ -158,7 +154,7 @@ def to_sse_frame(
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "task_update",
             data,
             frame_timestamp,
@@ -178,7 +174,7 @@ def to_sse_frame(
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "artifact_update",
             data,
             frame_timestamp,
@@ -200,7 +196,7 @@ def to_sse_frame(
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "error",
             data,
             frame_timestamp,
@@ -216,7 +212,7 @@ def to_sse_frame(
         }
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "cancellation",
             data,
             frame_timestamp,
@@ -263,7 +259,7 @@ def to_sse_frame(
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "hitl_request",
             data,
             frame_timestamp,
@@ -294,7 +290,7 @@ def to_sse_frame(
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
-            event.room_id,
+            event.conversation_id,
             "hitl_response",
             data,
             frame_timestamp,
@@ -307,7 +303,7 @@ def to_sse_frame(
 
 
 def snapshot_frame(
-    room_id: str,
+    conversation_id: str,
     snapshot_data: dict[str, Any],
     *,
     timestamp: datetime,
@@ -315,7 +311,7 @@ def snapshot_frame(
     """Build the ``snapshot`` frame (Room Stream Snapshot plan §4)."""
 
     return _frame(
-        room_id,
+        conversation_id,
         "snapshot",
         snapshot_data,
         timestamp.isoformat(),
@@ -323,7 +319,7 @@ def snapshot_frame(
 
 
 def _frame(
-    room_id: str,
+    conversation_id: str,
     event_type: str,
     data: dict[str, Any],
     timestamp: str,
@@ -341,7 +337,7 @@ def _frame(
     return {
         "type": event_type,
         "timestamp": timestamp,
-        "room_id": room_id,
+        "conversation_id": conversation_id,
         "data": data,
     }
 

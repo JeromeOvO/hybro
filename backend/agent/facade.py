@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Protocol, runtime_checkable
 
 from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.matching import (
@@ -31,10 +31,112 @@ from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentCardResolver,
     AgentExclusionReader,
-    AgentRepository,
 )
 
+
+@runtime_checkable
+class AgentRepository(Protocol):
+    async def get_by_id(self, agent_id: str) -> dict | None: ...
+    async def get_by_ids(self, agent_ids: list[str]) -> list[dict]: ...
+    async def get_by_provider(self, provider_id: str) -> list[dict]: ...
+    async def get_by_source(self, source: str) -> list[dict]: ...
+    async def get_public(self, limit: int = 50) -> list[dict]: ...
+    async def list_active_agents(
+        self, agent_ids: list[str] | None = None
+    ) -> list[dict]: ...
+    async def upsert(self, agent_id: str, data: dict) -> None: ...
+    async def delete(self, agent_id: str) -> bool: ...
+    async def update_health(self, agent_id: str, healthy: bool) -> None: ...
+    async def mark_agents_inactive(
+        self, agent_ids: list[str], *, source: str
+    ) -> int: ...
+    async def delete_inactive_ownerless(
+        self, *, source: str, inactive_before: datetime
+    ) -> int: ...
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool
+    ) -> None: ...
+    async def find_by_normalized_url(
+        self, normalized_url: str, provider_id: str | None = None
+    ) -> dict | None: ...
+    async def list_visible(
+        self,
+        *,
+        user_id: str | None = None,
+        active_only: bool = False,
+        agent_ids: list[str] | None = None,
+        query: dict | None = None,
+        limit: int = 0,
+        exhaust: bool = False,
+    ) -> list[dict]: ...
+    async def text_search(
+        self, agent_ids: list[str], query: str, limit: int
+    ) -> list[dict]: ...
+    async def update(self, agent_id: str, updates: dict) -> dict | None: ...
+    async def update_where(
+        self, agent_id: str, conditions: dict, updates: dict
+    ) -> bool: ...
+    async def public_url_exists(self, subdomain: str, base_domain: str) -> bool: ...
+    async def activate_agents(self, agent_ids: list[str]) -> int: ...
+
+
 logger = logging.getLogger(__name__)
+
+# An ownerless discovery record that stays inactive this long is deleted.
+LOCAL_AGENT_INACTIVE_RETENTION = timedelta(days=7)
+
+
+class AgentRegistrationConflict(ValueError):
+    """The agent URL already belongs to a record registration cannot take over.
+
+    ``code`` is one of ``already_registered`` (the requester owns it),
+    ``owned_by_another_provider``, or ``active_local_discovery`` (an ownerless
+    record whose agent local discovery currently sees running).
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _registration_conflict(
+    existing: dict, provider_id: str
+) -> AgentRegistrationConflict | None:
+    """Return why ``existing`` blocks registration, or None to take it over.
+
+    Only an ownerless discovery record that discovery has marked inactive is
+    taken over: nobody owns it and nothing is serving it any more.
+    """
+
+    owner = existing.get("provider_id")
+    if owner == provider_id:
+        return AgentRegistrationConflict(
+            "already_registered", "You have already registered an agent at this URL"
+        )
+    if owner:
+        return AgentRegistrationConflict(
+            "owned_by_another_provider",
+            "Another provider has already registered an agent at this URL",
+        )
+    if existing.get("source", "cloud") != "local":
+        return AgentRegistrationConflict(
+            "owned_by_another_provider",
+            "Another agent record already holds this URL",
+        )
+    if _status_value(existing.get("agent_status"), default=None) != "inactive":
+        return AgentRegistrationConflict(
+            "active_local_discovery",
+            "Local discovery already lists a running agent at this URL",
+        )
+    return None
+
+
+# Registration takes over only a record that is still ownerless and inactive.
+_TAKEOVER_CONDITIONS = {
+    "source": "local",
+    "provider_id": None,
+    "agent_status": "inactive",
+}
 
 _ALLOWED_UPDATE_KEYS = frozenset(
     {
@@ -184,9 +286,15 @@ class AgentFacade:
             provider_id=None,
         )
         if existing is not None:
-            raise ValueError("Agent with this URL is already registered")
-
-        agent_id = self._id_factory()
+            conflict = _registration_conflict(existing, provider_id)
+            if conflict is not None:
+                raise conflict
+            agent_id = existing["agent_id"]
+            logger.info(
+                "agent_registration_took_over_local_record agent_id=%s", agent_id
+            )
+        else:
+            agent_id = self._id_factory()
         public_url = await self._public_url_generator().generate_public_url(
             agent_name=card.name,
             agent_id=agent_id,
@@ -203,9 +311,27 @@ class AgentFacade:
             rate_limit_per_user_per_hour=kwargs.get("rate_limit_per_user_per_hour"),
             rate_limit_system_per_hour=kwargs.get("rate_limit_system_per_hour"),
         )
+        if existing is not None:
+            doc["inactive_since"] = None
 
         self._validate_rate_limits(doc)
-        await self._repository.upsert(agent_id, doc)
+        if existing is None:
+            await self._repository.upsert(agent_id, doc)
+        elif not await self._repository.update_where(
+            agent_id, _TAKEOVER_CONDITIONS, doc
+        ):
+            # The record changed after the read: discovery reactivated it or
+            # someone registered it first.
+            current = await self._repository.find_by_normalized_url(
+                normalized_url, provider_id=None
+            )
+            raise (
+                (current and _registration_conflict(current, provider_id))
+                or AgentRegistrationConflict(
+                    "active_local_discovery",
+                    "The local discovery record at this URL changed; try again",
+                )
+            )
         return agent_info_from_doc(doc)
 
     async def upsert_local_agent(
@@ -241,15 +367,22 @@ class AgentFacade:
             was_inactive = (
                 _status_value(existing.get("agent_status"), default=None) != "active"
             )
-            await self._repository.update(
+            # Registration may have taken the record over since the read.
+            if not await self._repository.update_where(
                 existing["agent_id"],
+                {"source": "local"},
                 {
                     "agent_card": merged_card,
                     "capabilities": list(card.capabilities),
                     "agent_status": "active",
+                    "inactive_since": None,
                     "updated_at": now,
                 },
-            )
+            ):
+                return LocalAgentUpsertResult(
+                    agent_id=existing["agent_id"],
+                    managed=False,
+                )
             return LocalAgentUpsertResult(
                 agent_id=existing["agent_id"],
                 managed=True,
@@ -293,6 +426,12 @@ class AgentFacade:
         return await self._repository.mark_agents_inactive(
             agent_ids,
             source="local",
+        )
+
+    async def prune_inactive_local_agents(self) -> int:
+        return await self._repository.delete_inactive_ownerless(
+            source="local",
+            inactive_before=self._now() - LOCAL_AGENT_INACTIVE_RETENTION,
         )
 
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool:

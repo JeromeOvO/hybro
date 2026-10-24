@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from api_gateway.routes import (
+    a2a_push_routes,
     agent_group_routes,
     agent_network_routes,
     agent_routes,
@@ -13,7 +14,6 @@ from api_gateway.routes import (
     room_routes,
     session_routes,
     sse_routes,
-    webhook_routes,
 )
 from common.auth import get_current_user
 
@@ -34,8 +34,8 @@ def build_api_gateway_router() -> APIRouter:
     gateway_router.include_router(sse_routes.router, tags=["sse"])
     gateway_router.include_router(agent_group_routes.router, tags=["agent_group"])
     gateway_router.include_router(files_routes.router, tags=["files"])
-    gateway_router.include_router(webhook_routes.router, tags=["webhooks"])
     gateway_router.include_router(llm_proxy_routes.router, tags=["internal_llm"])
+    gateway_router.include_router(a2a_push_routes.router, tags=["a2a_push"])
 
     return gateway_router
 

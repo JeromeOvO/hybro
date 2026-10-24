@@ -103,6 +103,9 @@ export type ToolExecutionEndPayload = {
       outcome: 'failed'
       is_error: true
       failure_reason?: 'rejected' | 'expired' | 'validation' | 'authorization' | 'execution' | null
+      /** The failing Agent's own reason, when it reported one. */
+      error_code?: string | null
+      error_message?: string | null
     }
   | { outcome: 'canceled'; is_error: false; failure_reason?: null }
 )
@@ -262,6 +265,8 @@ export type TurnActivityItem =
       targetName?: string
       requestSummary: string
       detailAvailable: boolean
+      errorCode?: string
+      errorMessage?: string
       order: number
     }
   | {
@@ -311,7 +316,7 @@ export interface HITLInteractionProjection {
 export interface TurnProjection {
   id: string
   runId: string
-  roomId: string
+  conversationId: string
   userMessageId: string
   clientRequestId: string
   state: TurnLifecycleState
@@ -368,6 +373,8 @@ export type RoomSnapshotActivityItem =
       target_name?: string | null
       request_summary?: string
       detail_available?: boolean
+      error_code?: string | null
+      error_message?: string | null
       order: number
     }
   | {
@@ -456,6 +463,10 @@ export interface CanonicalHITLRequestData {
   choices?: string[] | null
   source: 'agent' | 'supervisor' | 'system'
   agent_label?: string | null
+  header?: string | null
+  required?: boolean
+  allow_other?: boolean
+  choice_options?: Array<{ value: string; label?: string | null; description?: string | null }> | null
 }
 
 export interface CanonicalHITLResponseData {
@@ -475,4 +486,5 @@ export interface CanonicalHITLResponseData {
   source: string
   status: 'responded' | 'expired' | 'canceled' | 'error'
   answer_ref?: string | null
+  answer_text?: string | null
 }

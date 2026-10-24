@@ -1,4 +1,4 @@
-import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
+import { inquiryRoomMessagesByConversationId } from '@/lib/api/room'
 import {
   convertApiMessageToIncoming,
   detectAndMarkStaleTasks,
@@ -12,24 +12,24 @@ import { applyDbMessages } from './apply-db-messages'
 import { overlayHitlForRoom } from './hitl-overlay'
 import type { HydrateRoomOptions, HydrateRoomResult } from './types'
 
-function markInitialHydrationComplete(targetRoomId: string): boolean {
+function markInitialHydrationComplete(targetConversationId: string): boolean {
   const store = useMessageStore.getState()
-  if (store.roomId !== targetRoomId) return false
+  if (store.conversationId !== targetConversationId) return false
 
   store.markDbSynced()
-  useRoomUiStore.getState().markInitialHydrated(targetRoomId)
+  useRoomUiStore.getState().markInitialHydrated(targetConversationId)
   return true
 }
 
-function pruneStaleProcessingPlaceholder(targetRoomId: string): void {
+function pruneStaleProcessingPlaceholder(targetConversationId: string): void {
   const store = useMessageStore.getState()
-  if (store.roomId !== targetRoomId) return
+  if (store.conversationId !== targetConversationId) return
 
-  const placeholderId = `processing-placeholder-${targetRoomId}`
+  const placeholderId = `processing-placeholder-${targetConversationId}`
   if (!store.entities[placeholderId]) return
 
   const hasActiveTask = Object.values(store.entities).some(
-    e => e.roomId === targetRoomId
+    e => e.conversationId === targetConversationId
       && !e.isEphemeral
       && e.taskStatus
       && !isTerminalState(e.taskStatus),
@@ -40,11 +40,11 @@ function pruneStaleProcessingPlaceholder(targetRoomId: string): void {
 }
 
 async function fetchAndNormalizeMessages(
-  targetRoomId: string,
+  targetConversationId: string,
   options: HydrateRoomOptions,
 ): Promise<{ filtered: IncomingMessage[]; rawCount: number } | { fetchFailed: true }> {
   const { getToken, userId, userName, getAgentName, getAgentSource } = options
-  const response = await inquiryRoomMessagesByRoomId(targetRoomId, getToken)
+  const response = await inquiryRoomMessagesByConversationId(targetConversationId, getToken)
   if (!response.success || !response.message_list) {
     return { fetchFailed: true }
   }
@@ -74,7 +74,7 @@ const EMPTY_RESULT: HydrateRoomResult = {
  * React hooks own gates (hydratedFromDb, inflight dedupe, retries).
  */
 export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<HydrateRoomResult> {
-  const { roomId, phase } = options
+  const { conversationId, phase } = options
 
   if (phase === 'hitl_overlay') {
     if (!options.hitlRequestIndex) {
@@ -83,7 +83,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
     }
     try {
       const pending = await overlayHitlForRoom({
-        roomId,
+        conversationId,
         getToken: options.getToken,
         hitlRequestIndex: options.hitlRequestIndex,
         getAgentName: options.getAgentName,
@@ -97,17 +97,17 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
   }
 
   try {
-    const fetched = await fetchAndNormalizeMessages(roomId, options)
+    const fetched = await fetchAndNormalizeMessages(conversationId, options)
     if ('fetchFailed' in fetched) {
-      console.error(`❌ [room-sync] Failed to load messages for room ${roomId}`)
+      console.error(`❌ [room-sync] Failed to load messages for room ${conversationId}`)
       if (phase === 'initial') {
-        markInitialHydrationComplete(roomId)
+        markInitialHydrationComplete(conversationId)
       }
       return { ...EMPTY_RESULT, fetchFailed: true }
     }
 
     const { filtered, rawCount } = fetched
-    const applyResult = applyDbMessages(roomId, filtered)
+    const applyResult = applyDbMessages(conversationId, filtered)
 
     if (!applyResult) {
       return {
@@ -121,10 +121,10 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
     }
 
     if (phase === 'initial') {
-      markInitialHydrationComplete(roomId)
+      markInitialHydrationComplete(conversationId)
     } else {
       useMessageStore.getState().markDbSynced()
-      pruneStaleProcessingPlaceholder(roomId)
+      pruneStaleProcessingPlaceholder(conversationId)
     }
 
     let pendingHitlCount = 0
@@ -133,7 +133,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
       try {
         const hydratedIds = new Set(filtered.map(m => m.id))
         const pending = await overlayHitlForRoom({
-          roomId,
+          conversationId,
           getToken: options.getToken,
           hitlRequestIndex: options.hitlRequestIndex,
           getAgentName: options.getAgentName,
@@ -156,9 +156,9 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
       hitlFetchFailed,
     }
   } catch (error) {
-    console.error(`❌ [room-sync] ${phase} failed for room ${roomId}:`, error)
+    console.error(`❌ [room-sync] ${phase} failed for room ${conversationId}:`, error)
     if (phase === 'initial') {
-      markInitialHydrationComplete(roomId)
+      markInitialHydrationComplete(conversationId)
     }
     return { ...EMPTY_RESULT, fetchFailed: true }
   }

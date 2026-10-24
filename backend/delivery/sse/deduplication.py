@@ -121,21 +121,25 @@ class TerminalStatusDeduplicator:
 
     @staticmethod
     def _dedup_key(
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         delivery_id: str | None,
     ) -> str:
-        return f"delivery:{delivery_id}" if delivery_id else f"{room_id}:{message_id}"
+        return (
+            f"delivery:{delivery_id}"
+            if delivery_id
+            else f"{conversation_id}:{message_id}"
+        )
 
     async def reserve(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         status: str,
         delivery_id: str | None = None,
     ) -> DeliveryReservation:
-        dedup_key = self._dedup_key(room_id, message_id, delivery_id)
+        dedup_key = self._dedup_key(conversation_id, message_id, delivery_id)
         # Lock creation and acquisition happen without an intervening await.
         # Keeping the Redis call inside the per-key critical section also makes
         # the L1 fallback a real provisional owner when Redis raises.
@@ -309,38 +313,10 @@ class TerminalStatusDeduplicator:
         except Exception:
             return
 
-    async def should_deliver(
-        self,
-        *,
-        room_id: str,
-        message_id: str | None,
-        status: str,
-        delivery_id: str | None = None,
-    ) -> bool:
-        """Compatibility preflight API; new publishers must use two phases."""
-        normalized_status = status.strip().lower()
-        if (
-            not message_id
-            or normalized_status not in self.config.terminal_processing_statuses
-        ):
-            return True
-        reservation = await self.reserve(
-            room_id=room_id,
-            message_id=message_id,
-            status=status,
-            delivery_id=delivery_id,
-        )
-        if reservation.status != DeliveryReservationStatus.RESERVED:
-            return False
-        # Historical callers use this as a one-stage "mark delivered" API and
-        # never call confirm. Preserve that long-TTL behavior while the checked
-        # publisher uses reserve/confirm directly.
-        return await self.confirm(reservation)
-
     async def release(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         message_id: str | None,
         status: str,
         delivery_id: str | None = None,
@@ -348,7 +324,7 @@ class TerminalStatusDeduplicator:
     ) -> None:
         """Release only the caller's unconfirmed reservation."""
         normalized_status = status.strip().lower()
-        dedup_key = self._dedup_key(room_id, message_id, delivery_id)
+        dedup_key = self._dedup_key(conversation_id, message_id, delivery_id)
         claim = self.reservations.get(dedup_key)
         claim_id = reservation.claim_id if reservation is not None else None
         if (

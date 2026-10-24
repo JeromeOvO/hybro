@@ -14,13 +14,13 @@ def fixed_now():
 
 def test_connection_exposes_legacy_public_attributes():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
     )
 
-    assert connection.room_id == "room-1"
+    assert connection.conversation_id == "room-1"
     assert connection.connection_id == "conn-1"
     assert connection.is_active is True
 
@@ -28,13 +28,13 @@ def test_connection_exposes_legacy_public_attributes():
 @pytest.mark.asyncio
 async def test_send_frame_queues_dict_frame():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
     )
 
-    frame = {"type": "update", "room_id": "room-1", "data": {"x": 1}}
+    frame = {"type": "update", "conversation_id": "room-1", "data": {"x": 1}}
     assert await connection.send_frame(frame) is True
 
     assert await connection.queue.get() == frame
@@ -47,7 +47,7 @@ async def test_full_bounded_queue_marks_resync_instead_of_closing():
     # dropped, the connection stays alive, and gap detection recovers the
     # client via a snapshot re-request.
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         queue_maxsize=1,
@@ -65,7 +65,7 @@ async def test_full_bounded_queue_marks_resync_instead_of_closing():
 @pytest.mark.asyncio
 async def test_droppable_snapshot_frame_skipped_without_blocking_deltas():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         queue_maxsize=1,
@@ -87,7 +87,7 @@ async def test_droppable_snapshot_frame_skipped_without_blocking_deltas():
 @pytest.mark.asyncio
 async def test_send_message_builds_legacy_frame_but_keeps_internal_dict():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -99,7 +99,7 @@ async def test_send_message_builds_legacy_frame_but_keeps_internal_dict():
     assert frame == {
         "type": "agent_response",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {"content": "hi"},
     }
 
@@ -107,7 +107,7 @@ async def test_send_message_builds_legacy_frame_but_keeps_internal_dict():
 @pytest.mark.asyncio
 async def test_send_methods_return_false_when_inactive():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -121,7 +121,7 @@ async def test_send_methods_return_false_when_inactive():
 @pytest.mark.asyncio
 async def test_get_message_serializes_queued_dict_for_legacy_adapter():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -134,7 +134,7 @@ async def test_get_message_serializes_queued_dict_for_legacy_adapter():
     assert json.loads(raw) == {
         "type": "ping",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {"ok": True},
     }
 
@@ -142,23 +142,23 @@ async def test_get_message_serializes_queued_dict_for_legacy_adapter():
 @pytest.mark.asyncio
 async def test_next_frame_returns_dict_for_transport_path():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
     )
-    await connection.send_frame({"type": "custom", "room_id": "room-1"})
+    await connection.send_frame({"type": "custom", "conversation_id": "room-1"})
 
     assert await connection.next_frame(timeout=0.01) == {
         "type": "custom",
-        "room_id": "room-1",
+        "conversation_id": "room-1",
     }
 
 
 @pytest.mark.asyncio
 async def test_timeout_returns_heartbeat_frame():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -169,19 +169,19 @@ async def test_timeout_returns_heartbeat_frame():
     assert frame == {
         "type": "heartbeat",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {},
     }
 
 
 @pytest.mark.asyncio
 async def test_heartbeat_carries_latest_room_seq_when_reader_bound():
-    async def reader(room_id):
-        assert room_id == "room-1"
+    async def reader(conversation_id):
+        assert conversation_id == "room-1"
         return 42
 
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -193,18 +193,18 @@ async def test_heartbeat_carries_latest_room_seq_when_reader_bound():
     assert frame == {
         "type": "heartbeat",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {"room_seq": 42},
     }
 
 
 @pytest.mark.asyncio
 async def test_resync_enqueues_fresh_snapshot_from_provider():
-    async def provider(room_id):
+    async def provider(conversation_id):
         return {"room_seq": 7, "messages": []}
 
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         queue_maxsize=2,
@@ -231,7 +231,7 @@ async def test_resync_enqueues_fresh_snapshot_from_provider():
 @pytest.mark.asyncio
 async def test_get_message_serializes_heartbeat_on_timeout():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,
@@ -242,14 +242,14 @@ async def test_get_message_serializes_heartbeat_on_timeout():
     assert json.loads(raw) == {
         "type": "heartbeat",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {},
     }
 
 
 def test_close_marks_inactive():
     connection = SSEConnection(
-        room_id="room-1",
+        conversation_id="room-1",
         connection_id="conn-1",
         heartbeat_interval=3.0,
         now=fixed_now,

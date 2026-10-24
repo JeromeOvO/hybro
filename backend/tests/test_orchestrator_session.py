@@ -7,14 +7,6 @@ import pytest
 
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import KernelRunResult, OrchestratorKernel
 from execution.orchestrator.lifecycle import LifecycleEmitter
 from execution.orchestrator.models import TextPart, ToolObservation, ToolResult
@@ -34,6 +26,14 @@ from tests._orchestrator_helpers import (
     session_config,
     tool_events,
     user_message,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 
@@ -466,7 +466,7 @@ async def test_session_events_carry_delivery_correlation_fields():
 
     assert observed
     for event in observed:
-        assert event.room_id == "room-1"
+        assert event.conversation_id == "room-1"
         assert event.client_request_id == "request-run-1"
         assert event.user_message_id
 

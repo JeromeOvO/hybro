@@ -93,20 +93,20 @@ class CrossInstanceEventBus:
         except Exception:
             self._redis_reachable = False
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
+    async def publish_sse(self, conversation_id: str, frame: dict[str, Any]) -> bool:
         if self.redis_pubsub is None:
             return False
         envelope = {
             "kind": "sse_event",
             "origin": self.instance_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "type": frame.get("type"),
             "data": frame.get("data"),
             "frame": frame,
             "trace_id": get_current_trace_id(),
         }
         await self.redis_pubsub.publish(
-            self._room_channel(room_id),
+            self._room_channel(conversation_id),
             json.dumps(envelope),
         )
         return True
@@ -119,12 +119,12 @@ class CrossInstanceEventBus:
             json.dumps(envelope),
         )
 
-    async def subscribe_room(self, room_id: str) -> None:
+    async def subscribe_room(self, conversation_id: str) -> None:
         if self._stopped:
             raise RuntimeError("Cross-instance event bus is stopped")
         if self.redis_pubsub is None:
             return
-        channel = self._room_channel(room_id)
+        channel = self._room_channel(conversation_id)
         readiness = self._room_readiness.get(channel)
         if readiness is None:
             if (
@@ -136,7 +136,7 @@ class CrossInstanceEventBus:
                 )
             readiness = asyncio.get_running_loop().create_future()
             generation = object()
-            self._room_channels[room_id] = channel
+            self._room_channels[conversation_id] = channel
             self._room_readiness[channel] = readiness
             self._channel_generations[channel] = generation
             self._room_tasks[channel] = self._task_runner(
@@ -145,26 +145,36 @@ class CrossInstanceEventBus:
                     "sse",
                     generation=generation,
                     readiness=readiness,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                 ),
-                name=f"delivery-redis-room-{room_id}",
+                name=f"delivery-redis-room-{conversation_id}",
             )
 
         await asyncio.shield(readiness)
 
-    async def unsubscribe_room(self, room_id: str) -> None:
-        channel = self._room_channels.get(room_id, self._room_channel(room_id))
+    async def unsubscribe_room(self, conversation_id: str) -> None:
+        channel = self._room_channels.get(
+            conversation_id, self._room_channel(conversation_id)
+        )
         readiness = self._room_readiness.get(channel)
-        await self._cleanup_room_subscription(room_id, channel, readiness)
+        await self._cleanup_room_subscription(conversation_id, channel, readiness)
 
     async def handle_sse_message(self, message: str) -> None:
         envelope = self._decode(message, "sse_event")
         if not envelope or envelope.get("origin") == self.instance_id:
             return
-        room_id = envelope.get("room_id")
-        if not isinstance(room_id, str):
+        # Older instances publish only ``room_id``; this writer keeps emitting it
+        # until every reader accepts ``conversation_id``.
+        conversation_id = envelope.get("conversation_id") or envelope.get("room_id")
+        if not isinstance(conversation_id, str):
             return
         frame = envelope.get("frame")
+        if isinstance(frame, dict) and "room_id" in frame:
+            # Frames relayed from an older instance still carry ``room_id``.
+            frame = {
+                ("conversation_id" if key == "room_id" else key): value
+                for key, value in frame.items()
+            }
         if not isinstance(frame, dict):
             event_type = envelope.get("type")
             data = envelope.get("data")
@@ -173,12 +183,12 @@ class CrossInstanceEventBus:
             frame = {
                 "type": event_type,
                 "timestamp": self._now().isoformat(),
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "data": data,
             }
         if self._sse_callback is not None:
             with trace_id_context(envelope.get("trace_id")):
-                await self._call(self._sse_callback, room_id, frame)
+                await self._call(self._sse_callback, conversation_id, frame)
 
     async def _subscription_loop(
         self,
@@ -187,7 +197,7 @@ class CrossInstanceEventBus:
         *,
         generation: object,
         readiness: asyncio.Future[None] | None = None,
-        room_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         delay = self.config.redis_reconnect_delay
         while not self._stopped and self._subscription_desired(channel, generation):
@@ -210,9 +220,9 @@ class CrossInstanceEventBus:
                 if readiness is not None and not readiness.done():
                     readiness.set_exception(exc)
                     readiness.exception()
-                    if room_id is not None:
+                    if conversation_id is not None:
                         await self._cleanup_room_subscription(
-                            room_id, channel, readiness
+                            conversation_id, channel, readiness
                         )
                     return
                 await self._sleeper(delay)
@@ -226,8 +236,10 @@ class CrossInstanceEventBus:
                 RuntimeError("Room subscription stopped before becoming ready")
             )
             readiness.exception()
-            if room_id is not None:
-                await self._cleanup_room_subscription(room_id, channel, readiness)
+            if conversation_id is not None:
+                await self._cleanup_room_subscription(
+                    conversation_id, channel, readiness
+                )
 
     async def _handle_subscription_message(self, kind: str, message: str) -> None:
         if kind == "sse":
@@ -247,7 +259,7 @@ class CrossInstanceEventBus:
 
     async def _cleanup_room_subscription(
         self,
-        room_id: str,
+        conversation_id: str,
         channel: str,
         readiness: asyncio.Future[None] | None,
     ) -> None:
@@ -255,7 +267,7 @@ class CrossInstanceEventBus:
             return
         if readiness is not None and not readiness.done():
             readiness.cancel()
-        self._room_channels.pop(room_id, None)
+        self._room_channels.pop(conversation_id, None)
         self._room_readiness.pop(channel, None)
         task = self._room_tasks.pop(channel, None)
         generation = self._channel_generations.pop(channel, None)
@@ -286,8 +298,8 @@ class CrossInstanceEventBus:
         self._active_generations.pop(channel, None)
         self._active_channels.discard(channel)
 
-    def _room_channel(self, room_id: str) -> str:
-        return f"{self.config.redis_sse_channel_prefix}{room_id}"
+    def _room_channel(self, conversation_id: str) -> str:
+        return f"{self.config.redis_sse_channel_prefix}{conversation_id}"
 
     def _decode(self, message: str, expected_kind: str) -> dict[str, Any] | None:
         try:

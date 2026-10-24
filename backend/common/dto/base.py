@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from copy import deepcopy as _deepcopy_value
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class FrozenDict(dict):
@@ -97,4 +98,60 @@ class FrozenDTO(BaseModel):
         return self
 
 
-__all__ = ["FrozenDTO", "FrozenDict", "FrozenList"]
+STORED_CONVERSATION_ID_KEY = "room_id"
+_CONVERSATION_ID_CHOICES = AliasChoices("conversation_id", STORED_CONVERSATION_ID_KEY)
+
+
+def _default_args(default: Any, kwargs: dict[str, Any]) -> tuple[Any, ...]:
+    return () if "default_factory" in kwargs else (default,)
+
+
+def stored_conversation_id(default: Any = ..., **kwargs: Any) -> Any:
+    """Field for ``conversation_id`` persisted under the legacy ``room_id`` key.
+
+    Mongo documents and retained internal transport payloads keep the stored key
+    ``room_id``. The owning model must set ``serialize_by_alias=True`` so every
+    ``model_dump`` writes ``room_id``; validation accepts either name.
+    """
+
+    return Field(
+        *_default_args(default, kwargs),
+        validation_alias=_CONVERSATION_ID_CHOICES,
+        serialization_alias=STORED_CONVERSATION_ID_KEY,
+        **kwargs,
+    )
+
+
+def accepts_stored_conversation_id(default: Any = ..., **kwargs: Any) -> Any:
+    """Field for ``conversation_id`` that also reads the stored ``room_id`` key.
+
+    Use it on models that are both persisted and returned on the wire: they
+    serialize as ``conversation_id``, and their repositories rename the key with
+    ``to_stored_conversation_keys`` before writing to Mongo.
+    """
+
+    return Field(
+        *_default_args(default, kwargs),
+        validation_alias=_CONVERSATION_ID_CHOICES,
+        **kwargs,
+    )
+
+
+def to_stored_conversation_keys(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a copy whose ``conversation_id`` key is renamed to ``room_id``."""
+
+    return {
+        (STORED_CONVERSATION_ID_KEY if key == "conversation_id" else key): value
+        for key, value in document.items()
+    }
+
+
+__all__ = [
+    "STORED_CONVERSATION_ID_KEY",
+    "accepts_stored_conversation_id",
+    "to_stored_conversation_keys",
+    "FrozenDTO",
+    "FrozenDict",
+    "FrozenList",
+    "stored_conversation_id",
+]

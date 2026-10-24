@@ -36,14 +36,6 @@ from common.auth import ClerkUser
 from common.dto.hitl import HITLApplicationRoute, HITLEvidenceOrigin, HITLPublicSource
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    MemoryContent,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
@@ -158,13 +150,8 @@ def mock_db_service():
     mock.create_room_user_message = AsyncMock(return_value=True)
     mock.create_room_agent_message = AsyncMock(return_value=True)
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
-    mock.get_task_messages_for_room = AsyncMock(return_value=[])
-    mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
-    mock.update_task_state_on_message = AsyncMock(return_value=(True, None))
-    mock.is_message_cancelled = AsyncMock(return_value=False)
 
     # Memory operations
-    mock.get_room_memory_by_room_id = AsyncMock(return_value=None)
     mock.create_room_memory = AsyncMock(return_value=True)
     mock.update_room_memory = AsyncMock(return_value=True)
     mock.compact_turns_bulk = AsyncMock(return_value=True)
@@ -246,18 +233,16 @@ def sample_private_agent(sample_agent_card, mock_user) -> Agent:
 def sample_room(mock_user, sample_agent) -> Room:
     """Create a sample room with all fields populated (normal/non-debate mode)."""
     return Room(
-        room_id="test-room-001",
+        conversation_id="test-room-001",
         room_name="Test Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
         room_agent_set={sample_agent.agent_id: sample_agent.agent_card.name},
         room_created_at=FROZEN_TIME,
-        applied_from_group="test-group-001",
         extend_info={
             "debateMode": False,
             "use_supervisor": False,
         },
-        processing_message_id=None,
     )
 
 
@@ -265,7 +250,7 @@ def sample_room(mock_user, sample_agent) -> Room:
 def sample_debate_room(mock_user, sample_agent) -> Room:
     """Create a sample room with debate mode enabled."""
     return Room(
-        room_id="test-debate-room-001",
+        conversation_id="test-debate-room-001",
         room_name="Debate Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
@@ -282,7 +267,7 @@ def sample_debate_room(mock_user, sample_agent) -> Room:
 def sample_supervisor_room(mock_user, sample_agent) -> Room:
     """Create a sample room with supervisor mode enabled."""
     return Room(
-        room_id="test-supervisor-room-001",
+        conversation_id="test-supervisor-room-001",
         room_name="Supervisor Room",
         room_owner_id=mock_user.user_id,
         room_owner_name="Test User",
@@ -299,7 +284,7 @@ def sample_supervisor_room(mock_user, sample_agent) -> Room:
 def sample_user_message(sample_room, mock_user) -> RoomUserMessage:
     """Create a sample user message."""
     return RoomUserMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-user-msg-001",
         user_id=mock_user.user_id,
         message_content=MessageContent(message_text="Hello, this is a test message"),
@@ -312,7 +297,7 @@ def sample_agent_message(
 ) -> RoomAgentMessage:
     """Create a sample agent message."""
     return RoomAgentMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-agent-msg-001",
         agent_id=sample_agent.agent_id,
         related_message_id=sample_user_message.message_id,
@@ -336,7 +321,7 @@ def sample_agent_message_with_task(
 ) -> RoomAgentMessage:
     """Create a sample agent message with task tracking."""
     return RoomAgentMessage(
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         message_id="test-agent-task-msg-001",
         agent_id=sample_agent.agent_id,
         related_message_id=sample_user_message.message_id,
@@ -352,43 +337,6 @@ def sample_agent_message_with_task(
 
 
 @pytest.fixture
-def sample_room_memory(sample_room) -> RoomMemory:
-    """Create a sample room memory with conversation history."""
-    turns = [
-        ConversationTurn(
-            turn_id="test-turn-001",
-            role=TurnRole.USER,
-            content="Hello, can you help me?",
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.FULL,
-            estimated_tokens_full=20,
-            estimated_tokens_compact=10,
-            timestamp=FROZEN_TIME,
-        ),
-        ConversationTurn(
-            turn_id="test-turn-002",
-            role=TurnRole.AGENT,
-            agent_id="agent-123",
-            agent_name="TestAgent",
-            content="Of course! How can I assist you today?",
-            content_type=ContentType.AGENT_RESPONSE,
-            representation=TurnRepresentation.FULL,
-            estimated_tokens_full=30,
-            estimated_tokens_compact=15,
-            timestamp=FROZEN_TIME,
-        ),
-    ]
-
-    memory_content = MemoryContent(conversation_history=turns)
-
-    return RoomMemory(
-        room_id=sample_room.room_id,
-        memory_id="test-memory-001",
-        memory_content=memory_content,
-    )
-
-
-@pytest.fixture
 def sample_hitl_request(sample_room, sample_user_message) -> HITLRequest:
     """Create a sample HITL request."""
     return HITLRequest(
@@ -397,7 +345,7 @@ def sample_hitl_request(sample_room, sample_user_message) -> HITLRequest:
         interaction_id="test-hitl-req-001",
         question_index=0,
         question_count=1,
-        room_id=sample_room.room_id,
+        conversation_id=sample_room.conversation_id,
         user_message_id=sample_user_message.message_id,
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,
         public_source=HITLPublicSource.SUPERVISOR,
@@ -437,7 +385,6 @@ def mock_sse_transport():
     transport.cancel_message = MagicMock()
     transport.cancel_message_and_broadcast = AsyncMock()
     transport.clear_cancellation = MagicMock()
-    transport.send_processing_status = AsyncMock()
     transport.get_room_status = MagicMock(return_value={"connections": 0})
     return transport
 
@@ -446,7 +393,6 @@ def mock_sse_transport():
 def mock_hitl_service():
     """Create a mock HITL service."""
     mock = MagicMock()
-    mock.handle_response = AsyncMock(return_value={"success": True})
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
@@ -474,95 +420,31 @@ def mock_room_message_center():
 
 
 @pytest.fixture
-def mock_agent_center():
-    """Create a mock agent center."""
+def mock_agent_catalog():
+    """Create a mock agent catalog."""
     mock = MagicMock()
-    mock.register_agent = AsyncMock()
-    mock.get_agent_card_from_url = AsyncMock()
-    mock.query_agent_by_agent_id = AsyncMock()
-    mock.get_agents_by_provider_id = AsyncMock()
-    mock.get_all_agents = AsyncMock()
-    mock.get_all_active_agents = AsyncMock()
-    mock.remove_agent = AsyncMock()
-    mock.finalize_agent_response_for_route = MagicMock(
-        side_effect=lambda response: response
-    )
-
-    async def register_agent_from_route(*, agent_url: str, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.register_agent(
-            AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
-        )
-
-    async def get_agents_by_provider_for_route(*, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.get_agents_by_provider_id(
-            AgentCenterRequest(provider_id=provider_id)
-        )
-
-    async def delete_agent_from_route(*, agent_id: str, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.remove_agent(
-            AgentCenterRequest(agent_id=agent_id, provider_id=provider_id)
-        )
-
-    async def get_agent_card_from_url_for_route(*, agent_url: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.get_agent_card_from_url(
-            AgentCenterRequest(agent_url=agent_url)
-        )
-
-    async def get_visible_agent_for_route(*, agent_id: str, user_id: str | None):
-        from models.request import AgentCenterRequest
-
-        return await mock.query_agent_by_agent_id(
-            AgentCenterRequest(agent_id=agent_id, user_id=user_id)
-        )
-
-    async def list_visible_agents_for_route(
-        *, user_id: str | None, active_only: bool = False
-    ):
-        from models.request import AgentCenterRequest
-
-        request = AgentCenterRequest(user_id=user_id)
-        if active_only:
-            return await mock.get_all_active_agents(request)
-        return await mock.get_all_agents(request)
-
-    mock.register_agent_from_route = AsyncMock(side_effect=register_agent_from_route)
-    mock.get_agents_by_provider_for_route = AsyncMock(
-        side_effect=get_agents_by_provider_for_route
-    )
-    mock.delete_agent_from_route = AsyncMock(side_effect=delete_agent_from_route)
-    mock.get_agent_card_from_url_for_route = AsyncMock(
-        side_effect=get_agent_card_from_url_for_route
-    )
-    mock.get_visible_agent_for_route = AsyncMock(
-        side_effect=get_visible_agent_for_route
-    )
-    mock.list_visible_agents_for_route = AsyncMock(
-        side_effect=list_visible_agents_for_route
-    )
+    mock.register = AsyncMock()
+    mock.list_for_provider = AsyncMock()
+    mock.delete = AsyncMock()
+    mock.resolve_card = AsyncMock()
+    mock.get_visible = AsyncMock()
+    mock.list_visible = AsyncMock()
     return mock
 
 
 @pytest.fixture
-def mock_room_center():
-    """Create a mock room center."""
+def mock_chat_rooms():
+    """Create a mock ChatRooms port."""
     mock = MagicMock()
-    mock.create_new_room = AsyncMock()
-    mock.inquiry_room_setting = AsyncMock()
-    mock.inquiry_active_runs = AsyncMock()
-    mock.inquiry_rooms_by_room_owner_id = AsyncMock()
-    mock.update_room_agent_set = AsyncMock()
-    mock.update_room_name = AsyncMock()
+    mock.create_room = AsyncMock()
+    mock.get_room = AsyncMock()
+    mock.list_rooms_for_owner = AsyncMock()
+    mock.list_room_history = AsyncMock()
+    mock.rename_room = AsyncMock()
+    mock.update_history_fields = AsyncMock()
     mock.update_room_default_mode = AsyncMock(return_value=True)
-    mock.inquiry_room_messages_by_room_id = AsyncMock()
-    mock.send_message_to_room = AsyncMock()
+    mock.delete_room = AsyncMock()
+    mock.read_messages = AsyncMock()
     return mock
 
 
@@ -579,19 +461,11 @@ def mock_settings():
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"
         mock.openai_api_key = "test_openai_key"
-        mock.context_model_window = 128000
-        mock.context_system_prompt_tokens = 2000
-        mock.context_tool_schema_tokens = 3000
-        mock.context_response_reserve_tokens = 4000
-        mock.context_room_pct = 0.15
-        mock.context_history_pct = 0.60
-        mock.context_task_pct = 0.25
         mock.compaction_enabled = True
         mock.compaction_max_full_turns = 20
         mock.compaction_max_total_tokens = 80000
         mock.compaction_preserve_recent = 10
         mock.compaction_content_ttl_days = 0
-        mock.memory_search_enabled = True
         yield mock
 
 
@@ -618,8 +492,8 @@ def create_mock_response(success: bool = True, data: Any = None, error: str = No
 @pytest.fixture
 def make_api_gateway_deps(
     mock_db_service,
-    mock_agent_center,
-    mock_room_center,
+    mock_agent_catalog,
+    mock_chat_rooms,
     mock_sse_transport,
     mock_hitl_service,
     mock_s3_service,
@@ -656,17 +530,16 @@ def make_api_gateway_deps(
         agent_selection_service.suggest_agents = AsyncMock()
 
         defaults = {
-            "agent_center": mock_agent_center,
+            "agent_catalog": mock_agent_catalog,
             "agent_service": agent_service,
             "agent_matcher": MagicMock(),
             "capability_issue_service": capability_issue_service,
-            "agent_liveness_checker": AsyncMock(side_effect=lambda agent: agent),
             "agent_group_store": mock_db_service,
             "file_storage": mock_s3_service,
             "room_ownership_reader": room_ownership_reader,
             "hitl_manager": mock_hitl_service,
             "inspection_center": MagicMock(),
-            "room_center": mock_room_center,
+            "chat_rooms": mock_chat_rooms,
             "room_store": mock_db_service,
             "agent_selection_service": agent_selection_service,
             "execution_engine": execution_engine,
@@ -707,8 +580,8 @@ def patch_sse_deps(
 
 
 @pytest.fixture
-def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_deps):
-    """Return explicit room center endpoint dependencies."""
+def patch_chat_rooms_deps(mock_db_service, mock_chat_rooms, make_api_gateway_deps):
+    """Return explicit room endpoint dependencies."""
     from common.dto import ExecutionAck
 
     execution_engine = MagicMock()
@@ -720,23 +593,20 @@ def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_d
     execution_engine.cancel = AsyncMock(return_value=True)
     return {
         "db_service": mock_db_service,
-        "room_center": mock_room_center,
+        "chat_rooms": mock_chat_rooms,
         "execution_engine": execution_engine,
         "deps": make_api_gateway_deps(
             room_store=mock_db_service,
-            room_center=mock_room_center,
+            chat_rooms=mock_chat_rooms,
             execution_engine=execution_engine,
         ),
     }
 
 
 @pytest.fixture
-def patch_agent_deps(mock_agent_center):
-    """Return agent center endpoint dependency with auto-masking."""
-    mock_agent_center._mask_sensitive_information = MagicMock(
-        side_effect=lambda r, _: r
-    )
-    return mock_agent_center
+def patch_agent_deps(mock_agent_catalog):
+    """Return the agent catalog dependency used by the agent routes."""
+    return mock_agent_catalog
 
 
 # =============================================================================
@@ -768,7 +638,7 @@ def sample_file_upload_metadata():
 
     def _make(
         file_id="f_test_001",
-        room_id="room_test_123",
+        conversation_id="room_test_123",
         user_id="user_test_123",
         mime_type="image/png",
         file_name="test.png",
@@ -776,9 +646,9 @@ def sample_file_upload_metadata():
     ):
         return {
             "file_id": file_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "user_id": user_id,
-            "s3_key": f"uploads/{room_id}/{file_id}/{file_name}",
+            "s3_key": f"uploads/{conversation_id}/{file_id}/{file_name}",
             "mime_type": mime_type,
             "file_name": file_name,
             "size_bytes": size_bytes,

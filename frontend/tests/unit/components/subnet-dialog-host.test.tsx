@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '../../utils/test-utils'
 import userEvent from '@testing-library/user-event'
 import type { Agent } from '@/lib/types/agent'
+import { createAgent } from '../../fixtures'
 import type { AgentGroup } from '@/lib/types/agent-group'
 
 const createAgentGroup = vi.fn()
@@ -25,7 +26,7 @@ vi.stubGlobal('ResizeObserver', class {
 
 afterEach(cleanup)
 
-const agent = { agent_id: 'a', agent_status: 'active', agent_card: { name: 'writer', description: '', skills: [] } } as unknown as Agent
+const agent: Agent = createAgent({ agent_id: 'a', name: 'writer' })
 const group = { group_id: 'g', name: 'Research', description: '', agents: ['a'], type: 'user', owner_id: 'u' } as AgentGroup
 const base = { open: true, onOpenChange: vi.fn(), availableAgents: [agent], loadingAgents: false, userId: 'u', onSaved: vi.fn(), onDeleted: vi.fn() }
 

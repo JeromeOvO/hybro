@@ -592,3 +592,66 @@ describe('canonical model_decision contract validation', () => {
     expect(validateCanonicalRunEventData(event)).toMatchObject({ canonical: true, valid: false })
   })
 })
+
+describe('Agent error codes on failed tool executions', () => {
+  function startedTool(): TurnProjectionMap {
+    let turns: TurnProjectionMap = {}
+    turns = apply(turns, runEvent(1, 'run_started', {
+      hybro_turn_id: 'run-1', user_message_id: 'user-1', started_at: TS, mode: 'direct',
+    }))
+    turns = apply(turns, runEvent(2, 'turn_start', { internal_turn_id: 'turn-1', attempt: 1 }))
+    return apply(turns, runEvent(3, 'tool_execution_start', {
+      internal_turn_id: 'turn-1', tool_call_id: 'inv_weather_0001', tool_name: 'Weather Agent', input: {},
+    }))
+  }
+
+  const failedEnd = (extra: Record<string, unknown>) => runEvent(4, 'tool_execution_end', {
+    internal_turn_id: 'turn-1', tool_call_id: 'inv_weather_0001', tool_name: 'Weather Agent',
+    outcome: 'failed', result: '', is_error: true, duration_ms: 3, failure_reason: 'execution', ...extra,
+  })
+
+  it('folds the code and message onto the failed tool item', () => {
+    const turns = apply(startedTool(), failedEnd({
+      error_code: 'llm_quota_exceeded', error_message: 'Quota exceeded',
+    }))
+    expect(turns['run-1'].activity.find((item) => item.kind === 'tool')).toMatchObject({
+      status: 'failed', errorCode: 'llm_quota_exceeded', errorMessage: 'Quota exceeded',
+    })
+  })
+
+  it('accepts null as absent and rejects error details outside a failure', () => {
+    expect(validateCanonicalRunEventData(failedEnd({ error_code: null, error_message: null })))
+      .toMatchObject({ valid: true })
+    expect(validateCanonicalRunEventData(failedEnd({ error_code: 'bad code' })))
+      .toMatchObject({ valid: false })
+    expect(validateCanonicalRunEventData(runEvent(4, 'tool_execution_end', {
+      internal_turn_id: 'turn-1', tool_call_id: 'inv_weather_0001', tool_name: 'Weather Agent',
+      outcome: 'completed', result: 'ok', is_error: false, duration_ms: 3, error_code: 'x',
+    }))).toMatchObject({ valid: false })
+  })
+
+  it('restores the code from a snapshot tool row', () => {
+    const snapshot: RoomSnapshotTurn = {
+      hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1', client_request_id: 'client-1',
+      state: 'active', started_at: TS, settled_at: null, duration_ms: null,
+      terminal_code: null, terminal_summary: null,
+      internal_turns: [{
+        internal_turn_id: 'turn-1', attempt: 1, message_ids: [],
+        tool_call_ids: ['inv_weather_0001'], status: 'active',
+      }],
+      activity: [{
+        kind: 'tool', id: 'inv_weather_0001', internal_turn_id: 'turn-1',
+        tool_call_id: 'inv_weather_0001', label: 'Weather Agent', input: {},
+        partial_result: '', result: '', is_error: true, duration_ms: 10,
+        status: 'failed', update_index: 0, order: 1, failure_reason: 'execution',
+        error_code: 'llm_quota_exceeded', error_message: 'Quota exceeded',
+      }],
+      current_assistant: null, final_answer: null, final_committed: false,
+      hitl_interactions: [], active_interaction_id: null, agent_call_message_ids: [],
+    }
+    expect(validateCanonicalSnapshotTurns({ turn_lifecycle_schema: 1, turns: [snapshot] })).not.toBeNull()
+    expect(snapshotTurnToProjection('room-1', snapshot).activity[0]).toMatchObject({
+      errorCode: 'llm_quota_exceeded', errorMessage: 'Quota exceeded',
+    })
+  })
+})

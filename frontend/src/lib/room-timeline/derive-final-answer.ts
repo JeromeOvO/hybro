@@ -8,7 +8,6 @@ import type {
 } from './types'
 import {
   hasActiveSynthesisGap,
-  hasSynthesisSignalInProcessingLogs,
   isMultiAgentTurnReadyForDeterministicDone,
   isPreSynthesisGap,
   shouldShowSynthesizingPhase,
@@ -99,7 +98,7 @@ function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResult
   if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') {
     return false
   }
-  if (turn.turnTerminalStatus === 'completed' && turn.turnCompletionKind !== 'synthesis') {
+  if (turn.turnTerminalStatus === 'completed') {
     return false
   }
 
@@ -112,21 +111,7 @@ function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResult
     return false
   }
 
-  if (hasActiveSynthesisGap(turn)) return true
-
-  if (turn.turnCompletionKind === 'synthesis') {
-    const llmSummary = turn.agentResults.find(
-      r => r.isSummaryAgent && r.summaryOrigin !== 'deterministic',
-    )
-    if (
-      llmSummary?.status === 'working'
-      && llmSummary.content.trim().length === 0
-    ) {
-      return true
-    }
-  }
-
-  return false
+  return hasActiveSynthesisGap(turn)
 }
 
 function isTurnTerminal(status: TurnViewModel['status']): boolean {
@@ -423,17 +408,6 @@ export function deriveFinalAnswer(
 
   if (shouldHoldPendingForSynthesisGap(turn, real)) {
     return { kind: "pending", label: "Working" }
-  }
-
-  if (
-    turn.turnCompletionKind === "synthesis" &&
-    real.length >= 2 &&
-    allRealTerminal(real) &&
-    !hasActiveSynthesisGap(turn) &&
-    !hasSynthesisSignalInProcessingLogs(turn) &&
-    !hasLlmSynthesisContent(summary)
-  ) {
-    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
   }
 
   if (real.some(r => r.status === "working")) {

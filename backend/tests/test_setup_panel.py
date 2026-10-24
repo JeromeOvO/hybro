@@ -36,7 +36,7 @@ def contents(store):
 def test_model_only_edit_reuses_auth_and_does_not_save_until_requested(
     tmp_path, monkeypatch
 ):
-    console = console_with("gpt-5.5")
+    console = console_with("gpt-6.1-sol")
     verifier = AsyncMock()
     panel, store = configured(tmp_path, console, verifier)
     before = contents(store)
@@ -52,16 +52,16 @@ def test_model_only_edit_reuses_auth_and_does_not_save_until_requested(
     panel.console = SetupConsole(select, console.read_secret, console.write)
     panel.edit("model")
     assert [title for title, _ in seen] == ["Text model"]
-    assert next(option.value for option in seen[0][1] if option.current) == "gpt-5.4"
-    assert panel.draft.models.text == "gpt-5.5" and panel.dirty
+    assert next(option.value for option in seen[0][1] if option.current) == "gpt-6-sol"
+    assert panel.draft.models.text == "gpt-6.1-sol" and panel.dirty
     assert contents(store) == before
     verifier.assert_not_awaited()
     previous_signal = signal.getsignal(signal.SIGINT)
     panel.edit("save")
     assert signal.getsignal(signal.SIGINT) == previous_signal
     verifier.assert_awaited_once()
-    assert store.load({}).config.models.text == "gpt-5.5"
-    assert not panel.dirty and "backend was not restarted" in panel.notice
+    assert store.load({}).config.models.text == "gpt-6.1-sol"
+    assert not panel.dirty and "Start services" in panel.notice
     assert next(option.value for option in panel.options() if option.current) == "model"
     login.assert_not_awaited()
     console.read_secret.assert_not_called()
@@ -79,7 +79,7 @@ def test_model_picker_escape_preserves_focus_and_saved_values(tmp_path):
 
 
 def test_failed_verification_keeps_draft_and_files_and_restores_signal(tmp_path):
-    console = console_with("gpt-5.5")
+    console = console_with("gpt-6.1-sol")
     verifier = AsyncMock(side_effect=RuntimeError("private-provider-content"))
     panel, store = configured(tmp_path, console, verifier)
     before = contents(store)
@@ -89,7 +89,7 @@ def test_failed_verification_keeps_draft_and_files_and_restores_signal(tmp_path)
         panel.edit("save")
     assert "private-provider-content" not in str(exc.value)
     assert signal.getsignal(signal.SIGINT) == previous_signal
-    assert panel.dirty and panel.draft.models.text == "gpt-5.5"
+    assert panel.dirty and panel.draft.models.text == "gpt-6.1-sol"
     assert contents(store) == before
 
 
@@ -99,7 +99,7 @@ def test_first_connection_authenticates_before_models_and_exit_does_not_save(
     store = RuntimeConfigStore(tmp_path / "runtime")
     verifier, login = AsyncMock(), AsyncMock(return_value=oauth_credential())
     monkeypatch.setattr("llm_gateway.openai_oauth.login", login)
-    choices = iter(["openai", "oauth", "gpt-5.5", "keep", "discard"])
+    choices = iter(["openai", "oauth", "gpt-6.1-sol", "keep", "discard"])
 
     def select(title, options):
         if title == "Text model":
@@ -126,7 +126,7 @@ def test_cancel_is_not_a_failed_command_and_services_keep_model_draft(
     monkeypatch.setattr("llm_gateway.cli_tui._read_status", lambda: [])
     console = console_with(
         "model",
-        "gpt-5.5",
+        "gpt-6.1-sol",
         "services",
         "stop",
         "models",
@@ -145,7 +145,7 @@ def test_cancel_is_not_a_failed_command_and_services_keep_model_draft(
 
 
 def test_expired_draft_authentication_is_reacquired_before_save(tmp_path, monkeypatch):
-    console = console_with("gpt-5.5")
+    console = console_with("gpt-6.1-sol")
     panel, store = configured(tmp_path, console)
     panel.edit("model")
     expires = panel.prepared.credential.expires_at
@@ -192,7 +192,7 @@ def test_panel_layout_bounds_hierarchy_and_save_hint(tmp_path, size):
         painted = "\n".join(text for _, _, _, text in spans)
         assert "(current)" not in painted and "Services [Tab]" not in painted
         if columns >= 32:
-            assert "gpt-5.4" in painted
+            assert "gpt-6-sol" in painted
             assert "Models     Services" in painted
             assert any(
                 style == "1;4" and text == "Models" for _, _, style, text in spans
@@ -242,3 +242,63 @@ def test_fixed_screen_redraw_current_value_and_restoration(monkeypatch):
     assert text.endswith("\x1b[?25h\x1b[?1049l")
     assert "> B [current]" in text
     assert f"\x1b[{SELECTED_STYLE}m> B [current]" in text
+
+
+def test_start_after_save_recreates_so_the_new_connection_applies(
+    tmp_path, monkeypatch
+):
+    """Compose cannot see config.json changes, so a plain start kept old settings."""
+    monkeypatch.setattr(
+        "llm_gateway.openai_oauth.login",
+        AsyncMock(side_effect=AssertionError("Must reuse stored OAuth")),
+    )
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    service = SetupService(store, model_choices, AsyncMock())
+    run = Mock(return_value=0)
+    console = console_with(
+        "model", "gpt-6.1-sol", "save", "services", "start", "start", "models"
+    )
+    assert main(console=console, run=run, service=service, environment={}) == 130
+    assert store.load({}).config.models.text == "gpt-6.1-sol"
+    # Applied once; the next start in the same session is an ordinary start.
+    assert [c.args[0] for c in run.call_args_list] == [
+        ("start", "--recreate"),
+        ("start",),
+    ]
+    console.write.assert_any_call("Running hybro start --recreate ...")
+
+
+def test_failed_apply_keeps_the_saved_configuration_pending(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "llm_gateway.openai_oauth.login",
+        AsyncMock(side_effect=AssertionError("Must reuse stored OAuth")),
+    )
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    service = SetupService(store, model_choices, AsyncMock())
+    run = Mock(side_effect=[1, 0])
+    console = console_with("save", "services", "start", "start")
+    assert main(console=console, run=run, service=service, environment={}) == 130
+    assert [c.args[0] for c in run.call_args_list] == [
+        ("start", "--recreate"),
+        ("start", "--recreate"),
+    ]
+
+
+def test_retired_saved_model_asks_for_a_current_model(tmp_path):
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    path = store.home / "config.json"
+    path.write_text(path.read_text().replace('"gpt-6-sol"', '"gpt-5.5"'))
+    service = SetupService(store, model_choices, AsyncMock())
+    panel = SetupPanel(service, console_with(), {})
+    assert panel.saved is None and "no longer offered" in panel.notice
+
+
+def test_first_run_notice_says_what_to_do(tmp_path):
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    panel = SetupPanel(
+        SetupService(store, model_choices, AsyncMock()), console_with(), {}
+    )
+    assert panel.saved is None and "Choose Connection" in panel.notice

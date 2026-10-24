@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react'
+import { createAgent } from '../../fixtures'
 
 const mockListAgentGroups = vi.fn()
 const mockGetAllAgents = vi.fn()
@@ -155,7 +156,7 @@ describe('useGroupManagement', () => {
 
     const { result } = renderHook(() => useGroupManagement({
       ...defaultOptions(),
-      roomId: 'room-42',
+      conversationId: 'room-42',
     }))
 
     await waitFor(() => {
@@ -172,7 +173,7 @@ describe('useGroupManagement', () => {
 
   it('should apply group override via handleGroupChange', async () => {
     mockListAgentGroups.mockResolvedValue({ success: true, groups: [fakeGroup] })
-    const opts = { ...defaultOptions(), roomId: 'room-42' }
+    const opts = { ...defaultOptions(), conversationId: 'room-42' }
     const { result } = renderHook(() => useGroupManagement(opts))
 
     await waitFor(() => {
@@ -221,7 +222,7 @@ describe('useGroupManagement', () => {
     expect(result.current.groups).toEqual([fakeGroup])
 
     await act(async () => {
-      resolveAgents({ success: true, agents: [{ agent_id: 'a1', agent_card: { name: 'A1' } }] })
+      resolveAgents({ success: true, agents: [createAgent({ agent_id: 'a1', name: 'A1' })] })
     })
 
     await waitFor(() => {

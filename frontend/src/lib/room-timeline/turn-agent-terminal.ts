@@ -5,12 +5,12 @@ import type { MessageEntity } from '@/stores/message-store/types'
 /** True when every non-summary agent for this user message has a terminal task status. */
 export function allAgentsTerminalForUserMessage(
   entities: Record<string, MessageEntity>,
-  roomId: string,
+  conversationId: string,
   userMessageId: string,
 ): boolean {
   const agents = Object.values(entities).filter(
     e =>
-      e.roomId === roomId
+      e.conversationId === conversationId
       && e.messageType === 'agent'
       && !e.isEphemeral
       && e.relatedMessageId === userMessageId

@@ -16,12 +16,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dal.orchestrator.artifacts import RoomFilesEpochFencedArtifactOwner
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from execution.orchestrator.in_memory import InMemoryOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorRunState
-from execution.orchestrator.ports import OrchestratorEventStore
 from execution.orchestrator.profiles import ProfileConfiguration
+from execution.repository.orchestrator.artifacts import (
+    RoomFilesEpochFencedArtifactOwner,
+)
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorEventStore
 
 from ._orchestrator_helpers import make_run
 
@@ -44,12 +45,6 @@ def test_run_runtime_generation_is_persisted_and_immutable_by_schema():
     payload["schema_version"] = 4
     with pytest.raises(ValidationError):
         OrchestratorRunState.model_validate(payload)
-
-    legacy_payload = run.model_dump(mode="json")
-    legacy_payload.update(schema_version=5, lifecycle_family="legacy")
-    legacy = OrchestratorRunState.model_validate(legacy_payload)
-    assert legacy.schema_version == 5
-    assert legacy.lifecycle_family == "legacy"
 
 
 def test_initial_routing_and_finalization_are_reserved_not_consumed():
@@ -93,7 +88,9 @@ def test_artifact_durable_identity_strings_are_pinned():
     source = inspect.getsource(RoomFilesEpochFencedArtifactOwner)
     assert "orchestrator-v3-a2a-artifact" in source
 
-    artifacts = (ROOT / "dal" / "orchestrator" / "artifacts.py").read_text()
+    artifacts = (
+        ROOT / "execution" / "repository" / "orchestrator" / "artifacts.py"
+    ).read_text()
     assert '"orchestrator-v3-a2a"' in artifacts
 
 
@@ -108,9 +105,3 @@ def test_event_store_port_has_memory_and_mongo_implementations():
             for name, member in implementation.__dict__.items()
             if inspect.isfunction(member) and not name.startswith("_")
         }
-    port_methods = {
-        name
-        for name, member in OrchestratorEventStore.__dict__.items()
-        if inspect.isfunction(member) and not name.startswith("_")
-    }
-    assert port_methods == {"append", "read"}

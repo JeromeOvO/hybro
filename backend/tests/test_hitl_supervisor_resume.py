@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
+from approval.service import ContinuationLostError, HITLService
 from common.dto.execution import HITLRequest
-from execution.hitl.service import ContinuationLostError, HITLService
 
 
 def _request(**overrides) -> HITLRequest:
     base = dict(
         request_id="request-1",
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-1",
         source="supervisor",
         prompt="Which city?",

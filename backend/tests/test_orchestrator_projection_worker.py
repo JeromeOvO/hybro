@@ -4,25 +4,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 
 from pymongo.errors import DuplicateKeyError
 
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from dal.orchestrator.projection import (
-    MongoAppendEventProjector,
-    MongoFinalMessageProjector,
-    MongoTerminalRunStatusProjector,
-    _repair_terminal_agent_cards,
-)
+from conversation.repository import ConversationMessageStore
 from delivery.snapshot import RoomEventFold
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorEventStore,
-    InMemoryOrchestratorRunStore,
-)
 from execution.orchestrator.models import (
     AssistantMessage,
-    DataPart,
     TextPart,
 )
 from execution.orchestrator.projection import (
@@ -34,6 +22,15 @@ from execution.orchestrator.settlement import (
     TerminalDecisionFacts,
     commit_terminal_decision,
 )
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from execution.repository.orchestrator.projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorEventStore,
+    InMemoryOrchestratorRunStore,
+)
 
 from ._orchestrator_helpers import NOW, make_run
 from .test_orchestrator_a2a_mongo_parity import FakeCollection
@@ -42,15 +39,15 @@ from .test_orchestrator_a2a_mongo_parity import FakeCollection
 def _terminal_run(
     *,
     run_id: str = "run-1",
-    room_id: str = "room-1",
+    conversation_id: str = "room-1",
     final_message_id: str = "final-1",
 ):
     run = make_run()
     run = run.model_copy(
         update={
             "run_id": run_id,
-            "session_id": room_id,
-            "room_id": room_id,
+            "session_id": conversation_id,
+            "conversation_id": conversation_id,
             "client_request_id": f"request-{run_id}",
             "request": run.request.model_copy(
                 update={
@@ -85,7 +82,7 @@ def _terminal_run(
             event_intent_id="intent-event",
             final_message_intent_id="intent-message",
             public_run_intent_id="intent-run",
-            final_message_target=room_id,
+            final_message_target=conversation_id,
             public_run_target=run_id,
             created_at=NOW,
         ),
@@ -267,7 +264,7 @@ async def test_final_message_projector_dedupes_on_message_id():
         if item.kind == "deliver_final_message"
     )
     messages = _FakeMessageCollection()
-    projector = MongoFinalMessageProjector(messages)
+    projector = MongoFinalMessageProjector(_message_writer(messages))
     assert await projector.project(intent, stored) == "accepted"
     assert await projector.project(intent, stored) == "replayed"
     assert len(messages.documents) == 1
@@ -288,7 +285,7 @@ async def test_final_message_projector_delivers_on_insert_and_replay():
         deliveries.append((current_run.run_id, final.message_id, content))
         return True
 
-    projector = MongoFinalMessageProjector(messages, deliver)
+    projector = MongoFinalMessageProjector(_message_writer(messages), deliver)
     assert await projector.project(intent, stored) == "accepted"
     assert await projector.project(intent, stored) == "replayed"
     assert deliveries == [
@@ -307,15 +304,15 @@ async def test_final_message_projector_projects_assistant_into_room_memory():
     )
     projected: list[tuple[str, str]] = []
 
-    async def project_memory(room_id: str, message_id: str):
-        projected.append((room_id, message_id))
+    async def project_memory(conversation_id: str, message_id: str):
+        projected.append((conversation_id, message_id))
         return {"projected": True}
 
     projector = MongoFinalMessageProjector(
-        _FakeMessageCollection(), memory_projection=project_memory
+        _message_writer(_FakeMessageCollection()), memory_projection=project_memory
     )
     assert await projector.project(intent, stored) == "accepted"
-    assert projected == [(stored.room_id, intent.payload["message_id"])]
+    assert projected == [(stored.conversation_id, intent.payload["message_id"])]
 
 
 async def test_final_message_projector_retries_until_room_memory_exists():
@@ -328,7 +325,7 @@ async def test_final_message_projector_retries_until_room_memory_exists():
     )
     attempts = 0
 
-    async def project_memory(_room_id: str, _message_id: str):
+    async def project_memory(_conversation_id: str, _message_id: str):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -336,7 +333,7 @@ async def test_final_message_projector_retries_until_room_memory_exists():
         return {"projected": True}
 
     projector = MongoFinalMessageProjector(
-        _FakeMessageCollection(), memory_projection=project_memory
+        _message_writer(_FakeMessageCollection()), memory_projection=project_memory
     )
     assert await projector.project(intent, stored) == "error"
     assert await projector.project(intent, stored) == "replayed"
@@ -357,125 +354,11 @@ async def test_final_message_projector_retries_failed_room_delivery():
         attempts += 1
         return attempts > 1
 
-    projector = MongoFinalMessageProjector(_FakeMessageCollection(), deliver)
+    projector = MongoFinalMessageProjector(
+        _message_writer(_FakeMessageCollection()), deliver
+    )
     assert await projector.project(intent, stored) == "error"
     assert await projector.project(intent, stored) == "replayed"
-
-
-async def test_terminal_run_outbox_repairs_working_agent_card():
-    messages = _RecordingMessageUpdates()
-    run = SimpleNamespace(
-        room_id="room-1",
-        run_id="run-1",
-        status="completed",
-        updated_at=NOW,
-        tool_batches=[
-            SimpleNamespace(
-                entries=[
-                    SimpleNamespace(
-                        call_id="call-1",
-                        buffered_terminal_result=SimpleNamespace(
-                            status="completed",
-                            content=[TextPart(text="Sunny, 27°C")],
-                        ),
-                    )
-                ]
-            )
-        ],
-    )
-
-    await _repair_terminal_agent_cards(messages, run)
-
-    assert messages.updates == [
-        (
-            {
-                "room_id": "room-1",
-                "message_id": "orchestrator:run-1:call-1",
-                "extend_info.orchestrator_run_id": "run-1",
-            },
-            {
-                "$set": {
-                    "message_content.message_text": "Sunny, 27°C",
-                    "message_content.message_task.status.state": "completed",
-                    "message_content.message_task.status.timestamp": NOW.isoformat(),
-                    "task_updated_at": NOW,
-                }
-            },
-        )
-    ]
-
-
-async def test_terminal_run_outbox_renders_data_and_closes_unresolved_cards():
-    messages = _RecordingMessageUpdates()
-    run = SimpleNamespace(
-        room_id="room-1",
-        run_id="run-canceled",
-        status="canceled",
-        updated_at=NOW,
-        tool_batches=[
-            SimpleNamespace(
-                entries=[
-                    SimpleNamespace(
-                        call_id="call-data",
-                        buffered_terminal_result=SimpleNamespace(
-                            status="completed",
-                            content=[DataPart(data={"temperature": 27})],
-                        ),
-                    ),
-                    SimpleNamespace(
-                        call_id="call-pending",
-                        buffered_terminal_result=None,
-                    ),
-                ]
-            )
-        ],
-    )
-
-    await _repair_terminal_agent_cards(messages, run)
-
-    data_update = messages.updates[0][1]["$set"]
-    assert data_update["message_content.message_text"] == '{"temperature":27}'
-    assert data_update["message_content.message_task.status.state"] == "completed"
-    pending_update = messages.updates[1][1]["$set"]
-    assert pending_update["message_content.message_task.status.state"] == "canceled"
-    assert "message_content.message_text" not in pending_update
-
-
-async def test_terminal_run_status_projector_updates_public_runs():
-    store, run = await _stored_terminal_run()
-    stored = await store.load(run.run_id)
-    intent = next(
-        item
-        for item in stored.projection_outbox
-        if item.kind == "project_terminal_run_status"
-    )
-    runs = _FakeRunsCollection()
-    projector = MongoTerminalRunStatusProjector(runs)
-    assert await projector.project(intent, stored) == "accepted"
-    # The public row is keyed by the legacy run id convention (user message
-    # id), which the preflight already created in ``processing``.
-    assert runs.documents[stored.request.user_message_id]["state"] == "completed"
-    assert stored.run_id not in runs.documents
-    assert await projector.project(intent, stored) == "replayed"
-
-
-async def test_terminal_run_status_projector_falls_back_without_user_message():
-    run = _terminal_run(run_id="run-fallback")
-    run = run.model_copy(
-        update={"request": run.request.model_copy(update={"user_message_id": ""})}
-    )
-    store = InMemoryOrchestratorRunStore()
-    assert (await store.create(run, command_id="create")).outcome == "accepted"
-    stored = await store.load(run.run_id)
-    intent = next(
-        item
-        for item in stored.projection_outbox
-        if item.kind == "project_terminal_run_status"
-    )
-    runs = _FakeRunsCollection()
-    projector = MongoTerminalRunStatusProjector(runs)
-    assert await projector.project(intent, stored) == "accepted"
-    assert runs.documents[run.run_id]["state"] == "completed"
 
 
 async def test_worker_blocks_poison_intent_after_bounded_attempts():
@@ -610,7 +493,7 @@ def _canonical_room_event(
     event_id: str | None = None,
 ):
     return {
-        "room_id": run.room_id,
+        "room_id": run.conversation_id,
         "room_seq": room_seq,
         "kind": "run_event",
         "payload_public": {
@@ -683,7 +566,7 @@ def _completed_turn_fold_before_settlement(run):
             },
         ),
         {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": 6,
             "kind": "agent_response",
             "payload_public": {
@@ -725,6 +608,14 @@ async def _noop_projector(intent, run):
     return "accepted"
 
 
+def _message_writer(collection):
+    return ConversationMessageStore(
+        room_agent_messages=collection,
+        room_user_messages=object(),
+        message_repository=object(),
+    )
+
+
 class _FakeMessageCollection:
     def __init__(self) -> None:
         self.documents: dict[str, dict] = {}
@@ -737,33 +628,3 @@ class _FakeMessageCollection:
         if message_id in self.documents:
             raise DuplicateKeyError("message_id")
         self.documents[message_id] = document
-
-
-class _RecordingMessageUpdates:
-    def __init__(self) -> None:
-        self.updates: list[tuple[dict, dict]] = []
-
-    async def update_one(self, query, update, **kwargs):
-        assert kwargs == {"upsert": False}
-        self.updates.append((query, update))
-        return True
-
-
-class _FakeRunsCollection:
-    def __init__(self) -> None:
-        self.documents: dict[str, dict] = {}
-
-    async def update_one(self, query, update, **kwargs):
-        run_id = query["run_id"]
-        existing = self.documents.get(run_id)
-        if existing is not None and existing.get("state") in {
-            "completed",
-            "failed",
-            "canceled",
-        }:
-            raise DuplicateKeyError("run_id")
-        self.documents[run_id] = {**update.get("$set", {}), "run_id": run_id}
-        return True
-
-    async def find_one(self, query):
-        return self.documents.get(query["run_id"])

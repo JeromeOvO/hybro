@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from hashlib import sha256
-from typing import Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
-from common.dto.hitl import HITLQuestionAnswer
+from common.dto.base import FrozenDTO, stored_conversation_id
+from common.dto.hitl import HITLQuestionAnswer, HITLRouteSnapshot
 
 from ..models import (
     ContentPart,
@@ -100,7 +102,7 @@ class AgentToolBindingRecord(A2ADurableModel):
     binding_id: str
     binding_digest: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     tool_name: str
     definition: ToolDefinition
@@ -123,16 +125,13 @@ class AgentToolBindingRecord(A2ADurableModel):
     # scope semantics without re-resolving the Run. Per-turn explicit scopes
     # (all_active_agents, mention, explicit_selection) skip the room-membership
     # gate; roster-derived kinds (room_member, saved_group_member) require it.
-    authorization_kind: (
-        Literal[
-            "room_member",
-            "saved_group_member",
-            "explicit_selection",
-            "mention",
-            "all_active_agents",
-        ]
-        | None
-    ) = None
+    authorization_kind: Literal[
+        "room_member",
+        "saved_group_member",
+        "explicit_selection",
+        "mention",
+        "all_active_agents",
+    ]
     requesting_subject_digest: str
     input_modes: list[str]
     output_modes: list[str]
@@ -143,7 +142,7 @@ class AgentToolBindingRecord(A2ADurableModel):
 class FrozenCallResourceRef(A2ADurableModel):
     ref_id: str
     kind: Literal["context", "artifact", "attachment"]
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     source_message_id: str
     source_agent_id: str | None = None
@@ -179,7 +178,7 @@ class ImmutableA2ADispatchSnapshot(A2ADurableModel):
     transport_kind: Literal["direct", "relay"]
     direct_mode: Literal["sync", "stream", "poll"] | None = None
     requesting_subject_digest: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     deadline_at: datetime
     resource_manifest: FrozenCallResourceManifest
@@ -200,7 +199,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
     acceptance_id: str
     idempotency_key: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     assistant_message_id: str
     source_index: int = Field(ge=0)
@@ -254,6 +253,11 @@ class AgentCallLedgerRecord(A2ADurableModel):
     recent_observation_ids: list[str] = Field(default_factory=list, max_length=128)
     terminal_result: ToolResult | None = None
     terminal_result_digest: str | None = None
+    # SHA-256 of the push-notification token sent with the latest dispatch
+    # attempt. The token itself is never stored; a call without a digest
+    # (push disabled, or a record written before push registration existed)
+    # rejects every push and is served by polling.
+    push_token_digest: str | None = None
     cancellation_command: A2ACancellationCommand | None = None
     cancellation_command_id: str | None = None
     cancellation_reason: str | None = None
@@ -295,7 +299,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
             if self.terminal_result_digest != digest:
                 raise ValueError("terminal result digest does not correlate")
         if (
-            self.dispatch_snapshot.room_id != self.room_id
+            self.dispatch_snapshot.conversation_id != self.conversation_id
             or self.dispatch_snapshot.room_epoch != self.room_epoch
             or self.dispatch_snapshot.agent_id != self.agent_id
             or self.dispatch_snapshot.requesting_subject_digest
@@ -330,7 +334,7 @@ class AgentCallLedgerRecord(A2ADurableModel):
                 or command.binding_id != self.binding_id
                 or command.binding_digest != self.binding_digest
                 or command.requesting_subject_digest != self.requesting_subject_digest
-                or command.room_id != self.room_id
+                or command.conversation_id != self.conversation_id
                 or command.room_epoch != self.room_epoch
             ):
                 raise ValueError("continuation command does not correlate")
@@ -380,6 +384,13 @@ class DurableResourceProjection(A2ADurableModel):
     created_at: datetime
 
 
+class A2APushNotificationConfig(ContractModel):
+    """Per-attempt push registration sent with a dispatch; never persisted."""
+
+    url: str
+    token: SecretStr
+
+
 class A2ADispatchCommand(ContractModel):
     command_id: str
     call_record_id: str
@@ -393,9 +404,10 @@ class A2ADispatchCommand(ContractModel):
     direct_mode: Literal["sync", "stream", "poll"] | None = None
     task: str
     materialized_resources: list[MaterializedResourcePart]
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     deadline_at: datetime
+    push_notification: A2APushNotificationConfig | None = None
 
 
 class InlineDataArtifact(A2ADurableModel):
@@ -458,6 +470,31 @@ class NormalizedA2AObservation(A2ADurableModel):
         return self
 
 
+class A2APushFrame(ContractModel):
+    """One authenticated push notification, normalized for correlation.
+
+    Only a terminal ``Task`` snapshot carries an observation: status and
+    artifact updates are deltas that omit earlier output, so they are never
+    recorded as call evidence.
+    """
+
+    frame: Literal["task", "status_update", "artifact_update"]
+    task_id: str = Field(min_length=1)
+    context_id: str | None = None
+    event_kind: Literal[
+        "working", "artifact", "input_required", "auth_required", "terminal"
+    ]
+    observation: NormalizedA2AObservation | None = None
+
+    @model_validator(mode="after")
+    def _only_terminal_task_snapshots_carry_evidence(self) -> A2APushFrame:
+        if self.observation is not None and (
+            self.frame != "task" or self.event_kind != "terminal"
+        ):
+            raise ValueError("only a terminal Task snapshot carries an observation")
+        return self
+
+
 class A2ADispatchReceipt(ContractModel):
     outcome: Literal[
         "accepted",
@@ -504,7 +541,7 @@ class A2AObservationInboxRecord(A2ADurableModel):
     payload_digest: str
     received_at: datetime
     binding_scope: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     call_record_id: str | None = None
     task_id: str | None = None
@@ -529,7 +566,7 @@ class A2AObservationInboxRecord(A2ADurableModel):
 class A2AObservationConflictRecord(A2ADurableModel):
     schema_version: Literal[1] = 1
     conflict_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     source_identity: str
     accepted_observation_id: str
@@ -544,7 +581,7 @@ class PreparedInvocationSnapshot(A2ADurableModel):
     schema_version: Literal[1] = 1
     run_id: str
     invocation_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     requesting_subject_id: str
     binding: AgentToolBindingRecord
@@ -603,7 +640,7 @@ class A2AContinuationCommand(A2ADurableModel):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     created_at: datetime
 
@@ -624,7 +661,7 @@ class A2AModelReplyCommand(A2ADurableModel):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     message_text: str
     interaction_fingerprint: str | None = None
@@ -656,10 +693,92 @@ class A2ACancellationCommand(A2ADurableModel):
 
 class RoomEpoch(A2ADurableModel):
     schema_version: Literal[1] = 1
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     epoch: int = Field(ge=1)
     high_water_mark: int = Field(ge=1)
     active: bool
     creation_id: str
     deletion_id: str | None = None
     updated_at: datetime
+
+
+_NonBlankId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+_StrictVersion = Annotated[int, Field(strict=True, ge=1)]
+
+
+class HITLRouteSnapshotV2(FrozenDTO):
+    """Invocation-owned route added for the orchestrator runtime."""
+
+    model_config = ConfigDict(
+        frozen=True, extra="forbid", strict=True, serialize_by_alias=True
+    )
+
+    schema_version: Literal[2] = 2
+    route: Literal["orchestrator_tool"] = "orchestrator_tool"
+    orchestration_run_id: _NonBlankId
+    call_record_id: _NonBlankId
+    invocation_id: _NonBlankId
+    conversation_id: _NonBlankId = stored_conversation_id()
+    room_epoch: _StrictVersion
+    binding_id: _NonBlankId
+    agent_id: _NonBlankId
+    task_id: _NonBlankId | None = None
+    context_id: _NonBlankId | None = None
+    interaction_revision: _StrictVersion
+    interaction_fingerprint: _NonBlankId
+
+    @model_validator(mode="after")
+    def validate_authoritative_aliases(self) -> Self:
+        for value in (self.task_id, self.context_id):
+            if value is not None and _is_provisional_identifier(value):
+                raise ValueError("V2 route aliases must be authoritative")
+        return self
+
+    def _fingerprint_payload(self) -> dict[str, object]:
+        """Canonical fingerprint input with literal stored keys, None included."""
+
+        return {
+            "schema_version": self.schema_version,
+            "route": self.route,
+            "orchestration_run_id": self.orchestration_run_id,
+            "call_record_id": self.call_record_id,
+            "invocation_id": self.invocation_id,
+            "room_id": self.conversation_id,
+            "room_epoch": self.room_epoch,
+            "binding_id": self.binding_id,
+            "agent_id": self.agent_id,
+            "task_id": self.task_id,
+            "context_id": self.context_id,
+            "interaction_revision": self.interaction_revision,
+            "interaction_fingerprint": self.interaction_fingerprint,
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        # Persisted as ``route_fingerprint`` and recomputed on answer replay, so
+        # the hash input uses literal keys (including the stored "room_id")
+        # independent of attribute names. None values are omitted.
+        canonical = self._fingerprint_payload()
+        canonical_json = json.dumps(
+            {key: value for key, value in canonical.items() if value is not None},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return sha256(canonical_json.encode()).hexdigest()
+
+
+HITLRouteSnapshotUnion = Annotated[
+    HITLRouteSnapshot | HITLRouteSnapshotV2,
+    Field(discriminator="schema_version"),
+]
+
+
+def _is_provisional_identifier(value: str) -> bool:
+    normalized = value.casefold()
+    return normalized in {"pending", "provisional", "unknown"} or normalized.startswith(
+        ("pending-", "relay-pending-", "provisional-")
+    )

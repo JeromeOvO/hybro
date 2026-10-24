@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.factory import create_hitl_service
+from approval.repository import HITLLifecycleStore
+from approval.service import HITLService
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from dal.runtime_store.parts.hitl_lifecycle_store import HITLLifecycleRuntimeStorePart
-from execution.hitl.factory import create_hitl_service
-from execution.hitl.service import HITLService
 
 
 def _service(**kwargs) -> tuple[HITLService, dict, dict]:
@@ -56,7 +56,7 @@ def _service(**kwargs) -> tuple[HITLService, dict, dict]:
 
 async def _ask(service: HITLService) -> None:
     result = await service.request_interaction(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -105,7 +105,7 @@ def test_service_constructor_accepts_the_deadline_directly():
 async def test_undated_interactions_are_never_due_for_expiry():
     interactions = MagicMock()
     interactions.find = AsyncMock(return_value=[])
-    store = HITLLifecycleRuntimeStorePart(
+    store = HITLLifecycleStore(
         interactions=interactions,
         resume_commands=MagicMock(),
         hitl_requests=MagicMock(),
@@ -124,9 +124,8 @@ async def test_undated_interactions_are_never_due_for_expiry():
 def _orchestrator_runtime(order: list[str], *, run_status: str = "awaiting_user"):
     run = SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         status=run_status,
-        lifecycle_family="canonical",
         tool_catalog=object(),
         cancellation_command_id=None,
         client_request_id="request-1",

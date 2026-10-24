@@ -4,7 +4,7 @@ import { applyUpsert } from '@/stores/message-store/upsert'
 
 function supervisorHitl() {
   return buildPendingHitlIncomingMessage({
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageId: 'message-1',
     requestId: 'request-1',
     source: 'supervisor',
@@ -36,7 +36,7 @@ describe('message store HITL source projection', () => {
 
   it('does not regress an answered interaction from stale REST pending data', () => {
     const pending = buildPendingHitlIncomingMessage({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageId: 'message-1',
       requestId: 'request-1',
       source: 'agent',
@@ -78,7 +78,7 @@ describe('message store HITL source projection', () => {
 
   it('enforces the HITL version monotonicity matrix', () => {
     const pending = buildPendingHitlIncomingMessage({
-      roomId: 'room-1', messageId: 'message-1', requestId: 'request-1',
+      conversationId: 'room-1', messageId: 'message-1', requestId: 'request-1',
       source: 'agent', prompt: 'Round one?', promptType: 'text', choices: null,
       timestamp: '2026-08-17T00:00:00Z', agentId: null, agentName: 'Agent',
       agentSource: undefined, expiresAt: null, interactionId: 'interaction-1',
@@ -128,7 +128,7 @@ describe('message store HITL source projection', () => {
     })
 
     const newInteraction = buildPendingHitlIncomingMessage({
-      roomId: 'room-1', messageId: 'message-1', requestId: 'request-1',
+      conversationId: 'room-1', messageId: 'message-1', requestId: 'request-1',
       source: 'agent', prompt: 'New interaction?', promptType: 'text', choices: null,
       timestamp: '2026-08-17T00:00:01Z', agentId: null, agentName: 'Agent',
       agentSource: undefined, expiresAt: null, interactionId: 'interaction-2',

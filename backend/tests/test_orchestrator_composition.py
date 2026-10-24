@@ -42,6 +42,8 @@ def _deps(*, route=None):
         orchestrator_ultimate_model_route="orchestrator_ultimate",
         orchestrator_fast_prompt_id="orchestrator_fast",
         orchestrator_ultimate_prompt_id="orchestrator_ultimate",
+        a2a_push_callback_base_url="",
+        api_prefix="/api/v1",
     )
     model_registry = MagicMock()
     if route is None:
@@ -73,6 +75,7 @@ def test_composition_binds_the_full_graph_without_io():
         room_ownership_reader=deps.room_ownership_reader,
         epoch_store=deps.epoch_store,
         room_files=deps.room_files,
+        message_writer=MagicMock(),
     )
 
     assert validate_orchestrator_runtime(runtime) == []
@@ -104,6 +107,7 @@ def test_profile_resolution_failure_degrades_to_composition_error():
             room_ownership_reader=deps.room_ownership_reader,
             epoch_store=deps.epoch_store,
             room_files=deps.room_files,
+            message_writer=MagicMock(),
         )
 
 

@@ -9,6 +9,7 @@ class MongoDAL(Protocol):
     async def connect(self) -> None: ...
     async def close(self) -> None: ...
     async def ping(self) -> bool: ...
+    async def supports_transactions(self) -> bool: ...
 
 
 @runtime_checkable
@@ -46,9 +47,6 @@ class MongoCollection(Protocol):
     async def drop_index(self, name: str) -> None: ...
     async def bulk_write(self, operations: list, **kwargs) -> Any: ...
     async def distinct(self, key: str, query: dict | None = None) -> list: ...
-    async def find_one_by_stable_or_native_id(
-        self, stable_id_field: str, id_value: str
-    ) -> dict | None: ...
     def watch(
         self, pipeline: list[dict] | None = None, **kwargs
     ) -> MongoChangeStream: ...
@@ -86,27 +84,6 @@ class RedisPubSub(Protocol):
 
 
 @runtime_checkable
-class RedisStreams(Protocol):
-    @property
-    def is_connected(self) -> bool: ...
-    async def xadd(
-        self, stream: str, fields: dict, maxlen: int | None = None
-    ) -> str: ...
-    async def xread(
-        self, streams: dict, block: int = 0, count: int = 100
-    ) -> list[dict]: ...
-    async def ping(self) -> bool: ...
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
-class DistributedLock(Protocol):
-    async def acquire(self, key: str, owner: str, ttl: int = 60) -> bool: ...
-    async def release(self, key: str, owner: str) -> bool: ...
-    async def renew(self, key: str, owner: str, ttl: int = 60) -> bool: ...
-
-
-@runtime_checkable
 class LeaderElector(Protocol):
     async def try_acquire(
         self, job_name: str, ttl: int = 60, *, ttl_seconds: int | None = None
@@ -118,22 +95,11 @@ class LeaderElector(Protocol):
     async def release_all(self, job_names: list[str]) -> None: ...
 
 
-@runtime_checkable
-class IndexRegistry(Protocol):
-    def register(
-        self, module_name: str, collection: str, index_spec: list[tuple], **kwargs
-    ) -> None: ...
-    async def ensure_all(self) -> None: ...
-
-
 __all__ = [
-    "DistributedLock",
-    "IndexRegistry",
     "LeaderElector",
     "MongoChangeStream",
     "MongoCollection",
     "MongoDAL",
     "RedisKV",
     "RedisPubSub",
-    "RedisStreams",
 ]

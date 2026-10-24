@@ -77,7 +77,7 @@ def _mime(file_content: Any) -> str:
 
 def _origin_key(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     artifact_slot: str,
     part_slot: int,
@@ -85,7 +85,7 @@ def _origin_key(
 ) -> str:
     payload = [
         "v1",
-        room_id,
+        conversation_id,
         message_id,
         artifact_slot,
         part_slot,
@@ -154,7 +154,7 @@ def _platform_failure_category(exc: Exception) -> str | None:
 def _record_failure(
     report: dict[str, Any] | None,
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     artifact_slot: str,
     part_slot: int,
@@ -174,7 +174,7 @@ def _record_failure(
     logger.warning(
         "artifact_materialization_failed",
         extra={
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "message_id": message_id,
             "artifact_ref": artifact_ref,
             "part_slot": part_slot,
@@ -278,7 +278,7 @@ def _claim_file_attempt(budget: dict[str, Any]) -> bool:
 async def _store(
     *,
     data: bytes,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     artifact_slot: str,
     part_slot: int,
@@ -287,10 +287,10 @@ async def _store(
     content_sha256: str,
 ) -> dict[str, Any]:
     return await _require_room_files().store_agent_artifact(
-        room_id=room_id,
+        conversation_id=conversation_id,
         source_message_id=message_id,
         origin_key=_origin_key(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             artifact_slot=artifact_slot,
             part_slot=part_slot,
@@ -330,7 +330,7 @@ async def _store_with_retry(**kwargs: Any) -> dict[str, Any]:
             logger.warning(
                 "artifact_materialization_store_retry",
                 extra={
-                    "room_id": kwargs.get("room_id"),
+                    "conversation_id": kwargs.get("conversation_id"),
                     "message_id": kwargs.get("message_id"),
                     "attempt": attempt,
                     "max_attempts": STORE_ATTEMPTS,
@@ -347,7 +347,7 @@ async def _consume_precounted_reference(
     *,
     part: dict[str, Any],
     file_info: dict[str, Any],
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     budget: dict[str, Any],
 ) -> bool:
@@ -367,7 +367,7 @@ async def _consume_precounted_reference(
     else:
         precounted[file_id] = remaining - 1
     valid = await _require_room_files().validate_agent_reference(
-        room_id=room_id,
+        conversation_id=conversation_id,
         source_message_id=message_id,
         file_id=file_id,
         sha256=metadata.get("sha256"),
@@ -387,7 +387,7 @@ async def _consume_precounted_reference(
 
 async def materialize_inline_file_parts(
     parts: list[dict],
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
@@ -418,7 +418,7 @@ async def materialize_inline_file_parts(
                 if await _consume_precounted_reference(
                     part=part,
                     file_info=file_info,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     budget=budget,
                 ):
@@ -428,7 +428,7 @@ async def materialize_inline_file_parts(
                 code = _failure_code(exc, stage="reference")
                 _record_failure(
                     report,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     artifact_slot=resolved_slot,
                     part_slot=part_slot,
@@ -444,7 +444,7 @@ async def materialize_inline_file_parts(
             exc = ArtifactSizeLimitError("file part count limit exceeded")
             _record_failure(
                 report,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 artifact_slot=resolved_slot,
                 part_slot=part_slot,
@@ -461,7 +461,7 @@ async def materialize_inline_file_parts(
             exc = ValueError("missing file descriptor")
             _record_failure(
                 report,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 artifact_slot=resolved_slot,
                 part_slot=part_slot,
@@ -498,7 +498,7 @@ async def materialize_inline_file_parts(
                     metadata = part.get("metadata") or {}
                     file_id = str(metadata.get("file_id") or "")
                     valid = await room_files.validate_agent_reference(
-                        room_id=room_id,
+                        conversation_id=conversation_id,
                         source_message_id=message_id,
                         file_id=file_id,
                         sha256=metadata.get("sha256"),
@@ -522,7 +522,7 @@ async def materialize_inline_file_parts(
             stage = "store"
             stored = await _store_with_retry(
                 data=data,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 artifact_slot=artifact_slot or f"message:{budget['converted']}",
                 part_slot=part_slot,
@@ -548,7 +548,7 @@ async def materialize_inline_file_parts(
             code = _failure_code(exc, stage=stage)
             _record_failure(
                 report,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 message_id=message_id,
                 artifact_slot=resolved_slot,
                 part_slot=part_slot,
@@ -568,12 +568,12 @@ async def materialize_inline_file_parts(
 
 async def delete_superseded_agent_artifacts(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     file_ids: set[str],
 ) -> int:
     return await _require_room_files().delete_superseded_agent_artifacts(
-        room_id=room_id,
+        conversation_id=conversation_id,
         source_message_id=message_id,
         file_ids=file_ids,
     )
@@ -581,7 +581,7 @@ async def delete_superseded_agent_artifacts(
 
 async def materialize_artifacts(
     artifacts: list,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
@@ -612,7 +612,7 @@ async def materialize_artifacts(
                 exc = ArtifactSizeLimitError("file part count limit exceeded")
                 _record_failure(
                     report,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     artifact_slot=artifact_slot,
                     part_slot=part_slot,
@@ -629,7 +629,7 @@ async def materialize_artifacts(
                 exc = ValueError("missing file descriptor")
                 _record_failure(
                     report,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     artifact_slot=artifact_slot,
                     part_slot=part_slot,
@@ -666,7 +666,7 @@ async def materialize_artifacts(
                     if str(uri) == _room_file_content_url(file_id):
                         stage = "reference"
                         valid = await room_files.validate_agent_reference(
-                            room_id=room_id,
+                            conversation_id=conversation_id,
                             source_message_id=message_id,
                             file_id=file_id,
                             sha256=metadata.get("sha256"),
@@ -698,7 +698,7 @@ async def materialize_artifacts(
                 stage = "store"
                 stored = await _store_with_retry(
                     data=data,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     artifact_slot=artifact_slot,
                     part_slot=part_slot,
@@ -718,7 +718,7 @@ async def materialize_artifacts(
                 code = _failure_code(exc, stage=stage)
                 _record_failure(
                     report,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     message_id=message_id,
                     artifact_slot=artifact_slot,
                     part_slot=part_slot,

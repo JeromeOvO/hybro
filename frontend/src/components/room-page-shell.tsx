@@ -96,7 +96,7 @@ export interface QuoteState {
 }
 
 export interface TimelineAdapter {
-  roomId: string
+  conversationId: string
   getToken?: () => Promise<string | null>
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
@@ -132,7 +132,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const conversationGroupRef = useGroupRef()
   const prevSelectedMessageIdRef = useRef<string | undefined>(undefined)
   const sidebarSnapshotRef = useRef<{ desktopOpen: boolean; mobileOpen: boolean } | null>(null)
-  const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
+  const selectedMessageId = useSelectedAgentMessageId(adapter.conversationId)
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
   const streamBuffer = useStreamBuffer(selectedMessageId)
@@ -140,21 +140,22 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const baseDetail = useMemo(() => {
     if (!selectedMessageId) return null
     return selectAgentResponseDetail(
-      adapter.roomId,
+      adapter.conversationId,
       selectedMessageId,
       entities,
       orderedIds,
       streamBuffer,
     )
-  }, [adapter.roomId, selectedMessageId, entities, orderedIds, streamBuffer])
+  }, [adapter.conversationId, selectedMessageId, entities, orderedIds, streamBuffer])
 
   // Canonical Agent Cards are folded from execution events, not MessageStore
-  // entities. When the card has no legacy entity (the canonical-only path),
-  // build the detail shell from the Turn projection so the private detail
-  // fetch still opens the pane with the durable request/status facts.
-  const canonicalTurns = useCanonicalTurns(adapter.roomId)
+  // entities. Build the detail shell from the Turn projection so the private
+  // detail fetch opens the pane with the durable request/status facts. It
+  // wins over a MessageStore entity with the same id: snapshot HITL recovery
+  // anchors questions on a status-less shell entity under the card id.
+  const canonicalTurns = useCanonicalTurns(adapter.conversationId)
   const canonicalCardDetail = useMemo<AgentResponseDetail | null>(() => {
-    if (!selectedMessageId || baseDetail) return null
+    if (!selectedMessageId) return null
     const identity = parseCanonicalCardIdentity(selectedMessageId)
     if (!identity) return null
     for (const turn of canonicalTurns) {
@@ -197,7 +198,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       }
     }
     return null
-  }, [baseDetail, canonicalTurns, entities, selectedMessageId])
+  }, [canonicalTurns, entities, selectedMessageId])
 
   const canonicalCardTerminal = useMemo(() => {
     if (!selectedMessageId) return false
@@ -211,12 +212,12 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     return item != null && ['completed', 'failed', 'canceled'].includes(item.status)
   }, [canonicalTurns, selectedMessageId])
 
-  const effectiveBaseDetail = baseDetail ?? canonicalCardDetail
+  const effectiveBaseDetail = canonicalCardDetail ?? baseDetail
   const canonicalTerminal = parseCanonicalCardIdentity(selectedMessageId ?? '') != null
     && (canonicalCardTerminal
       || (baseDetail?.taskStatus != null && isTerminalState(baseDetail.taskStatus)))
   const privateDetailQuery = useQuery(canonicalAgentCallDetailQueryOptions(
-    adapter.roomId,
+    adapter.conversationId,
     selectedMessageId,
     adapter.getToken,
     canonicalTerminal,
@@ -248,13 +249,11 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       }
     }
     const response = privateDetailQuery.data
-    const parts = canonicalAgentCallParts(response?.parts)
     return {
       ...effectiveBaseDetail,
-      // New backends preserve A2A part boundaries. ``output`` remains only as
-      // a rolling-deploy fallback for an older detail response.
-      content: parts === undefined ? response?.output ?? '' : '',
-      parts,
+      // Typed A2A parts carry the private output.
+      content: '',
+      parts: response ? canonicalAgentCallParts(response.parts) : undefined,
       artifacts: canonicalArtifactData(response?.artifacts ?? []),
       isStreaming: false,
     }
@@ -271,28 +270,28 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     sidebarSnapshotRef.current = null
   }, [isMobileSidebar, setSidebarOpen, setSidebarOpenMobile])
 
-  const prevRoomIdRef = useRef(adapter.roomId)
+  const prevConversationIdRef = useRef(adapter.conversationId)
   useEffect(() => {
-    if (adapter.roomId !== prevRoomIdRef.current) {
+    if (adapter.conversationId !== prevConversationIdRef.current) {
       restoreSidebar()
-      useRoomUiStore.getState().closeAgentDetail(prevRoomIdRef.current)
-      prevRoomIdRef.current = adapter.roomId
+      useRoomUiStore.getState().closeAgentDetail(prevConversationIdRef.current)
+      prevConversationIdRef.current = adapter.conversationId
       prevSelectedMessageIdRef.current = undefined
     }
-  }, [adapter.roomId, restoreSidebar])
+  }, [adapter.conversationId, restoreSidebar])
 
   useLayoutEffect(() => {
     if (selectedMessageId && !detail) {
       restoreSidebar()
-      useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
+      useRoomUiStore.getState().closeAgentDetail(adapter.conversationId)
     }
-  }, [selectedMessageId, detail, adapter.roomId, restoreSidebar])
+  }, [selectedMessageId, detail, adapter.conversationId, restoreSidebar])
 
   const handleCloseDetail = useCallback(() => {
     prevSelectedMessageIdRef.current = undefined
     restoreSidebar()
-    useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
-  }, [adapter.roomId, restoreSidebar])
+    useRoomUiStore.getState().closeAgentDetail(adapter.conversationId)
+  }, [adapter.conversationId, restoreSidebar])
 
   useLayoutEffect(() => {
     if (!selectedMessageId) return
@@ -361,7 +360,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     <div ref={primaryRef} className="conversation-primary">
       <main className="flex-1 overflow-hidden">
         <ConversationMessageList
-          roomId={adapter.roomId}
+          conversationId={adapter.conversationId}
           selectedAgentMessageId={selectedMessageId}
           enableAgentDetail
         />

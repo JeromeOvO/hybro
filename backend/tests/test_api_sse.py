@@ -9,8 +9,7 @@ Tests cover:
 """
 
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -21,19 +20,6 @@ from api_gateway.routes.sse_routes import (
     get_room_sse_status,
     stream_room_messages,
 )
-from common.types import (
-    Message,
-    MessageRole,
-    Part,
-    Task,
-    TaskState,
-    TaskStatus,
-    TextPart,
-)
-from delivery.task_notifier import TaskUpdateNotifier
-from execution.dispatch.task_notifications import _notify_task_update_impl
-from models.room import MessageContent, RoomAgentMessage
-from tests.fakes.delivery import make_delivery_facade
 
 # =============================================================================
 # SSE Stream Tests
@@ -57,7 +43,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -80,7 +66,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -103,7 +89,7 @@ class TestStreamRoomMessages:
 
         with pytest.raises(HTTPException) as exc_info:
             await stream_room_messages(
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 user=mock_user_2,
                 transport=deps["sse_transport"],
                 db=deps["db_service"],
@@ -124,7 +110,7 @@ class TestStreamRoomMessages:
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
@@ -135,252 +121,11 @@ class TestStreamRoomMessages:
 
         assert frame == {
             "type": "connected",
-            "room_id": sample_room.room_id,
+            "conversation_id": sample_room.conversation_id,
             "timestamp": frame["timestamp"],
             "data": {"connection_id": "conn-123"},
         }
         assert isinstance(frame["timestamp"], str)
-
-    @pytest.mark.asyncio
-    async def test_stream_forwards_public_task_frame_with_client_request_id(
-        self, mock_user, mock_db_service, sample_room
-    ):
-        private_sentinel = "PRIVATE_SENTINEL_actual_notification_delivery_boundary"
-        public_label = "Requesting Insurer"
-        client_request_id = "cr-insurer-001"
-        task = Task(
-            id="task-insurer-001",
-            status=TaskStatus(
-                state=TaskState.failed,
-                message=Message(
-                    message_id="private-error",
-                    role=MessageRole.USER,
-                    parts=[Part(root=TextPart(text=private_sentinel))],
-                ),
-            ),
-            history=[
-                Message(
-                    message_id="private-history",
-                    role=MessageRole.USER,
-                    parts=[Part(root=TextPart(text=private_sentinel))],
-                )
-            ],
-            metadata={
-                "prompt": private_sentinel,
-                "hitl_prompt": private_sentinel,
-                "choices": [private_sentinel],
-                "hitl_choices": [private_sentinel],
-            },
-        )
-        message = RoomAgentMessage(
-            room_id=sample_room.room_id,
-            message_id="agent-msg-insurer-001",
-            agent_id="insurer-agent",
-            user_id=mock_user.user_id,
-            client_request_id=client_request_id,
-            has_task_tracking=True,
-            message_content=MessageContent(
-                message_text=private_sentinel,
-                message_task=task,
-            ),
-            task_content=private_sentinel,
-            extend_info={"public_task_label": public_label},
-        )
-        notification_store = SimpleNamespace(
-            update_last_notified_state=AsyncMock(return_value=True),
-            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
-            get_room_by_room_id=AsyncMock(return_value=sample_room),
-            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
-        )
-        delivery = make_delivery_facade()
-        mock_db_service.get_room_by_room_id.return_value = sample_room
-
-        response = await stream_room_messages(
-            sample_room.room_id,
-            mock_user,
-            transport=delivery,
-            db=mock_db_service,
-        )
-
-        await anext(response.body_iterator)
-        await _notify_task_update_impl(
-            notification_store,
-            TaskUpdateNotifier(delivery),
-            delivery,
-            message_id=message.message_id,
-            state=TaskState.failed,
-            room_id=sample_room.room_id,
-            user_id=mock_user.user_id,
-        )
-        second_event = await anext(response.body_iterator)
-        frame = json.loads(second_event.removeprefix("data: ").strip())
-        await response.body_iterator.aclose()
-
-        assert frame["type"] == "task_update"
-        assert frame["room_id"] == sample_room.room_id
-        assert frame["data"]["task_content"] == public_label
-        assert frame["data"]["client_request_id"] == client_request_id
-        assert frame["data"]["error"] == "Task failed"
-        assert private_sentinel not in second_event
-
-    @pytest.mark.asyncio
-    async def test_stream_task_update_drops_completed_inline_file_bytes(
-        self,
-        mock_user,
-        mock_db_service,
-        sample_room,
-    ):
-        private_bytes = "PRIVATE_SENTINEL_sse_inline_file_bytes"
-        task = Task(
-            id="task-file-001",
-            status=TaskStatus(state=TaskState.completed),
-        )
-        message = RoomAgentMessage(
-            room_id=sample_room.room_id,
-            message_id="agent-msg-file-001",
-            agent_id="file-agent",
-            user_id=mock_user.user_id,
-            has_task_tracking=True,
-            message_content=MessageContent(message_task=task),
-            extend_info={"public_task_label": "Requesting File Agent"},
-        )
-        notification_store = SimpleNamespace(
-            update_last_notified_state=AsyncMock(return_value=True),
-            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
-            get_room_by_room_id=AsyncMock(return_value=sample_room),
-            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
-        )
-        delivery = make_delivery_facade()
-        mock_db_service.get_room_by_room_id.return_value = sample_room
-
-        response = await stream_room_messages(
-            sample_room.room_id,
-            mock_user,
-            transport=delivery,
-            db=mock_db_service,
-        )
-
-        await anext(response.body_iterator)
-        with patch(
-            "common.utils.a2a_helpers.materialize_inline_file_parts",
-            new_callable=AsyncMock,
-        ):
-            await _notify_task_update_impl(
-                notification_store,
-                TaskUpdateNotifier(delivery),
-                delivery,
-                message_id=message.message_id,
-                state=TaskState.completed,
-                room_id=sample_room.room_id,
-                user_id=mock_user.user_id,
-                parts=[
-                    {
-                        "kind": "file",
-                        "file": {
-                            "bytes": private_bytes,
-                            "uri": "https://storage.example/result.txt",
-                            "mimeType": "text/plain",
-                            "name": "result.txt",
-                        },
-                        "metadata": {
-                            "file_id": "a" * 32,
-                            "file_name": "result.txt",
-                            "mime_type": "text/plain",
-                            "size_bytes": 4,
-                            "sha256": "hash",
-                        },
-                    }
-                ],
-            )
-        second_event = await anext(response.body_iterator)
-        frame = json.loads(second_event.removeprefix("data: ").strip())
-        await response.body_iterator.aclose()
-
-        assert frame["type"] == "task_update"
-        file_part = frame["data"]["parts"][0]
-        assert "file" not in file_part
-        assert file_part["metadata"] == {
-            "file_id": "a" * 32,
-            "file_name": "result.txt",
-            "mime_type": "text/plain",
-            "size_bytes": 4,
-            "sha256": "hash",
-        }
-        assert private_bytes not in second_event
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("state", "safe_error"),
-        [
-            (TaskState.failed, "Task failed"),
-            (TaskState.rejected, "Task was rejected by the agent"),
-        ],
-    )
-    async def test_stream_hides_agent_role_failure_status_message(
-        self,
-        mock_user,
-        mock_db_service,
-        sample_room,
-        state,
-        safe_error,
-    ):
-        private_sentinel = f"PRIVATE_SENTINEL_sse_{state.value}_agent_status"
-        public_label = "Requesting Insurer"
-        task = Task(
-            id="task-insurer-002",
-            status=TaskStatus(
-                state=state,
-                message=Message(
-                    message_id="private-agent-status",
-                    role=MessageRole.AGENT,
-                    parts=[Part(root=TextPart(text=private_sentinel))],
-                ),
-            ),
-        )
-        message = RoomAgentMessage(
-            room_id=sample_room.room_id,
-            message_id=f"agent-msg-insurer-{state.value}",
-            agent_id="insurer-agent",
-            user_id=mock_user.user_id,
-            has_task_tracking=True,
-            message_content=MessageContent(message_task=task),
-            extend_info={"public_task_label": public_label},
-        )
-        notification_store = SimpleNamespace(
-            update_last_notified_state=AsyncMock(return_value=True),
-            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
-            get_room_by_room_id=AsyncMock(return_value=sample_room),
-            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
-        )
-        delivery = make_delivery_facade()
-        mock_db_service.get_room_by_room_id.return_value = sample_room
-
-        response = await stream_room_messages(
-            sample_room.room_id,
-            mock_user,
-            transport=delivery,
-            db=mock_db_service,
-        )
-
-        await anext(response.body_iterator)
-        await _notify_task_update_impl(
-            notification_store,
-            TaskUpdateNotifier(delivery),
-            delivery,
-            message_id=message.message_id,
-            state=state,
-            room_id=sample_room.room_id,
-            user_id=mock_user.user_id,
-        )
-        second_event = await anext(response.body_iterator)
-        frame = json.loads(second_event.removeprefix("data: ").strip())
-        await response.body_iterator.aclose()
-
-        assert frame["type"] == "task_update"
-        assert frame["data"]["task_content"] == public_label
-        assert frame["data"]["error"] == safe_error
-        assert frame["data"].get("status_message") is None
-        assert private_sentinel not in second_event
 
 
 # =============================================================================
@@ -398,20 +143,22 @@ class TestGetRoomSseStatus:
         """Should return SSE connection status for room."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
         mock_sse_transport.get_room_status.return_value = {
-            "room_id": sample_room.room_id,
+            "conversation_id": sample_room.conversation_id,
             "connections": 2,
             "active": True,
         }
 
         result = await get_room_sse_status(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             transport=mock_sse_transport,
             db=mock_db_service,
         )
 
         assert result["connections"] == 2
-        mock_sse_transport.get_room_status.assert_called_once_with(sample_room.room_id)
+        mock_sse_transport.get_room_status.assert_called_once_with(
+            sample_room.conversation_id
+        )
 
     @pytest.mark.asyncio
     async def test_raises_403_when_status_user_does_not_own_room(
@@ -423,7 +170,7 @@ class TestGetRoomSseStatus:
 
         with pytest.raises(HTTPException) as exc_info:
             await get_room_sse_status(
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 user=mock_user_2,
                 transport=deps["sse_transport"],
                 db=deps["db_service"],
@@ -464,7 +211,7 @@ class TestCancelMessage:
         assert result["status"] == "canceled"
         assert result["outcome"] == "canceled"
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -518,7 +265,7 @@ class TestCancelMessage:
 
         assert result["outcome"] == "canceled"
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=canceled_message.room_id,
+            conversation_id=canceled_message.conversation_id,
             message_id=canceled_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -685,7 +432,7 @@ class TestCancelMessage:
         )
 
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
@@ -764,7 +511,7 @@ class TestCancelMessage:
 
         assert result["success"] is True
         deps["execution_engine"].cancel.assert_awaited_once_with(
-            room_id=sample_user_message.room_id,
+            conversation_id=sample_user_message.conversation_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )

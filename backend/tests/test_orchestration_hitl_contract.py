@@ -15,7 +15,7 @@ def _hitl_doc(**overrides):
         interaction_id=overrides.pop("interaction_id", "interaction-1"),
         question_index=overrides.pop("question_index", 0),
         question_count=overrides.pop("question_count", 1),
-        room_id=overrides.pop("room_id", "room-1"),
+        conversation_id=overrides.pop("room_id", "room-1"),
         user_message_id=overrides.pop("user_message_id", "user-msg-1"),
         application_route=overrides.pop("application_route", "supervisor_run"),
         public_source=overrides.pop("public_source", "supervisor"),
@@ -43,10 +43,6 @@ def _persistence_mock():
     persistence.get_hitl_request = AsyncMock(return_value=None)
     persistence.cas_update_hitl_request = AsyncMock(return_value=True)
     persistence.update_hitl_request = AsyncMock(return_value=True)
-    persistence.get_and_clear_continuation_on_message = AsyncMock(return_value=None)
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock(
-        return_value=None
-    )
     return persistence
 
 
@@ -56,7 +52,7 @@ def test_hitl_request_model_preserves_optional_orchestration_run_link_fields():
         interaction_id="interaction-1",
         question_index=0,
         question_count=1,
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="user-msg-1",
         application_route="supervisor_run",
         public_source="supervisor",
@@ -72,7 +68,7 @@ def test_hitl_request_model_preserves_optional_orchestration_run_link_fields():
 
 def test_hitl_delivery_event_has_no_orchestration_run_link():
     event = HITLRequestEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         request_id="hitl-1",
         message_id="display-msg-1",
         source="supervisor",

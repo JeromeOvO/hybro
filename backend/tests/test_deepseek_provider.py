@@ -239,13 +239,12 @@ async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_opena
     for logical_name in (
         "lead_ai_model",
         "classifier_ai_model",
-        "context_memory_json_model",
         "supervisor_model",
     ):
         await gateway.generate([{"role": "user", "content": "hi"}], logical_name)
     await gateway.embed("hello", "embedding_model")
 
-    assert deepseek.generate.await_count == 4
+    assert deepseek.generate.await_count == 3
     assert all(
         call.kwargs["model"] == "deepseek-v4-flash"
         for call in deepseek.generate.await_args_list

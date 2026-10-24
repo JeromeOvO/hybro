@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
 from delivery.config import DeliveryConfig
 from delivery.facade import DeliveryFacade
@@ -22,128 +21,61 @@ TERMINAL_STATUSES = {
 class FakeDeliveryCompat:
     def __init__(self, redis_service: Any | None = None) -> None:
         self.room_connections: dict[str, dict[str, SSEConnection]] = {}
-        self.cancelled_messages: set[str] = set()
-        self.tokens: dict[str, CancellationToken] = {}
         self.frames: list[tuple[str, dict]] = []
         self.redis_service = redis_service
         self.terminal_status_sent: set[str] = set()
         self.draining = False
         self.lifecycle_calls: list[tuple[str, Any | None]] = []
-        self.change_stream_connected = True
         self.delivery_kv_connected = False
         self.delivery_pubsub_connected = False
 
-    async def open_connection(self, room_id: str) -> SSEConnection:
+    async def open_connection(self, conversation_id: str) -> SSEConnection:
         if self.draining:
             raise ConnectionRefusedError(
                 "Server is draining - rejecting new SSE connections"
             )
         connection = SSEConnection(
-            room_id=room_id,
-            connection_id=f"conn-{len(self.room_connections.get(room_id, {})) + 1}",
+            conversation_id=conversation_id,
+            connection_id=f"conn-{len(self.room_connections.get(conversation_id, {})) + 1}",
             heartbeat_interval=0.01,
             now=utcnow,
         )
-        self.room_connections.setdefault(room_id, {})[connection.connection_id] = (
-            connection
-        )
+        self.room_connections.setdefault(conversation_id, {})[
+            connection.connection_id
+        ] = connection
         return connection
 
-    async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        connection = self.room_connections.get(room_id, {}).pop(connection_id, None)
+    async def remove_connection(self, conversation_id: str, connection_id: str) -> None:
+        connection = self.room_connections.get(conversation_id, {}).pop(
+            connection_id, None
+        )
         if connection is not None:
             connection.close()
-        if room_id in self.room_connections and not self.room_connections[room_id]:
-            self.room_connections.pop(room_id)
+        if (
+            conversation_id in self.room_connections
+            and not self.room_connections[conversation_id]
+        ):
+            self.room_connections.pop(conversation_id)
 
-    def get_room_status(self, room_id: str) -> dict:
-        connections = self.room_connections.get(room_id, {})
+    def get_room_status(self, conversation_id: str) -> dict:
+        connections = self.room_connections.get(conversation_id, {})
         if not connections:
             return {
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "active_connections": 0,
                 "status": "no_connections",
             }
         return {
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "active_connections": len(connections),
             "status": "active",
         }
-
-    def is_cancelled(self, message_id: str) -> bool:
-        return message_id in self.cancelled_messages
-
-    def cancel_message(self, message_id: str) -> None:
-        self._set_cancelled_local(message_id)
-
-    async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        self._set_cancelled_local(message_id)
-        if self.redis_service is not None:
-            await self.redis_service.set_nx(f"cancelled:{message_id}", "1", ex=3600)
-
-    async def check_cancelled(self, message_id: str) -> bool:
-        if message_id in self.cancelled_messages:
-            return True
-        if self.redis_service is not None and await self.redis_service.exists(
-            f"cancelled:{message_id}"
-        ):
-            self._set_cancelled_local(message_id)
-            return True
-        return False
-
-    def clear_cancellation(self, message_id: str) -> None:
-        self.cancelled_messages.discard(message_id)
-        self.tokens.pop(message_id, None)
-
-    def create_token(self, message_id: str) -> CancellationToken:
-        existing = self.tokens.get(message_id)
-        if existing is not None:
-            return existing
-        token = CancellationToken(message_id=message_id)
-        if message_id in self.cancelled_messages:
-            token.cancel()
-        self.tokens[message_id] = token
-        return token
-
-    def get_token(self, message_id: str) -> CancellationToken | None:
-        return self.tokens.get(message_id)
-
-    def release_token(self, message_id: str, token: CancellationToken | None) -> bool:
-        if token is None or self.tokens.get(message_id) is not token:
-            return False
-        self.tokens.pop(message_id, None)
-        return True
-
-    def release_active_token(
-        self,
-        message_id: str,
-        token: CancellationToken | None,
-    ) -> bool:
-        return self.release_token(message_id, token)
-
-    def remove_token(self, message_id: str) -> None:
-        self.tokens.pop(message_id, None)
-
-    async def signal(self, message_id: str) -> None:
-        await self.cancel_message_and_broadcast(message_id)
 
     async def start(self) -> None:
         self.lifecycle_calls.append(("start", None))
 
     async def stop(self) -> None:
         self.lifecycle_calls.append(("stop", None))
-
-    async def start_change_stream_watcher(self) -> None:
-        self.lifecycle_calls.append(("start_change_stream_watcher", None))
-
-    async def stop_change_stream_watcher(self) -> None:
-        self.lifecycle_calls.append(("stop_change_stream_watcher", None))
-
-    async def start_cancellation_watcher(self) -> None:
-        self.lifecycle_calls.append(("start_cancellation_watcher", None))
-
-    async def stop_cancellation_watcher(self) -> None:
-        self.lifecycle_calls.append(("stop_cancellation_watcher", None))
 
     async def close_all_connections(self) -> None:
         self.lifecycle_calls.append(("close_all_connections", None))
@@ -152,7 +84,7 @@ class FakeDeliveryCompat:
                 connection.close()
         self.room_connections.clear()
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
+    async def publish_sse(self, conversation_id: str, frame: dict[str, Any]) -> bool:
         self.frames.append((frame["type"], frame["data"]))
         return True
 
@@ -177,13 +109,7 @@ class FakeDeliveryCompat:
     def is_connected(self) -> bool:
         return self.delivery_pubsub_connected
 
-    def _set_cancelled_local(self, message_id: str) -> None:
-        self.cancelled_messages.add(message_id)
-        token = self.tokens.get(message_id)
-        if token is not None:
-            token.cancel()
-
-    async def _should_deliver(self, room_id: str, frame: dict) -> bool:
+    async def _should_deliver(self, conversation_id: str, frame: dict) -> bool:
         if frame.get("type") != "processing_status":
             return True
         data = frame.get("data")
@@ -194,8 +120,8 @@ class FakeDeliveryCompat:
         if status not in TERMINAL_STATUSES or not message_id:
             return True
 
-        local_key = f"{room_id}:{message_id}"
-        redis_key = f"terminal:{room_id}:{message_id}"
+        local_key = f"{conversation_id}:{message_id}"
+        redis_key = f"terminal:{conversation_id}:{message_id}"
         if local_key in self.terminal_status_sent:
             return False
         if self.redis_service is not None:
@@ -217,11 +143,13 @@ class FakeEventPublisher:
         if self.compat is None:
             return
         frame = to_sse_frame(event, timestamp=utcnow())
-        room_id = frame["room_id"]
-        if not await self.compat._should_deliver(room_id, frame):
+        conversation_id = frame["conversation_id"]
+        if not await self.compat._should_deliver(conversation_id, frame):
             return
         self.compat.frames.append((frame["type"], frame["data"]))
-        connections = list(self.compat.room_connections.get(room_id, {}).values())
+        connections = list(
+            self.compat.room_connections.get(conversation_id, {}).values()
+        )
         for connection in connections:
             await connection.queue.put(frame)
 

@@ -24,7 +24,7 @@ export async function handleTaskSubmitted(
 
   useMessageStore.getState().upsertMessage({
     id: messageId,
-    roomId: ctx.roomId,
+    conversationId: ctx.conversationId,
     messageType: 'agent',
     content: '',
     senderName,
@@ -40,7 +40,7 @@ export async function handleTaskSubmitted(
   }, 'sse')
 
   if (!canonical) {
-    appendEvent(ctx.roomId, {
+    appendEvent(ctx.conversationId, {
       kind: 'agent_started',
       timestamp: sseMessage.timestamp,
       agentId: sseMessage.data.agent_id ?? undefined,

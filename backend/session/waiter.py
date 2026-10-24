@@ -149,24 +149,24 @@ class SessionWaiter:
         self.start_grace_seconds = start_grace_seconds
         self._page_size = page_size
 
-    async def latest_seq(self, room_id: str) -> int:
-        return await self._events.latest_seq(room_id)
+    async def latest_seq(self, conversation_id: str) -> int:
+        return await self._events.latest_seq(conversation_id)
 
     async def scan(
-        self, room_id: str, correlation_id: str, *, after: int
+        self, conversation_id: str, correlation_id: str, *, after: int
     ) -> CorrelatedOutcome:
         """Read every event after ``after`` once, without waiting."""
         outcome = CorrelatedOutcome(last_seq=after)
-        await self._read_new(room_id, correlation_id, outcome)
+        await self._read_new(conversation_id, correlation_id, outcome)
         return outcome
 
-    async def history(self, room_id: str) -> dict[str, CorrelatedOutcome]:
+    async def history(self, conversation_id: str) -> dict[str, CorrelatedOutcome]:
         """Every request's outcome, keyed by correlation id, in one pass."""
         outcomes: dict[str, CorrelatedOutcome] = {}
         cursor = 0
         while True:
             page = await self._events.read_range(
-                room_id, after=cursor, limit=self._page_size
+                conversation_id, after=cursor, limit=self._page_size
             )
             for record in page:
                 _absorb_into(outcomes, record)
@@ -176,12 +176,12 @@ class SessionWaiter:
             cursor = last
 
     async def _read_new(
-        self, room_id: str, correlation_id: str, outcome: CorrelatedOutcome
+        self, conversation_id: str, correlation_id: str, outcome: CorrelatedOutcome
     ) -> None:
         while True:
             cursor = outcome.last_seq
             records = await self._events.read_range(
-                room_id, after=cursor, limit=self._page_size
+                conversation_id, after=cursor, limit=self._page_size
             )
             for record in records:
                 outcome.absorb(record, correlation_id)

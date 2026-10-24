@@ -20,7 +20,7 @@ export type TaskState = A2ATaskState | 'policy-required' | 'expired'
 export type SSEFrame<T extends string, D> = {
   type: T
   timestamp: string
-  room_id: string
+  conversation_id: string
   data: D
 }
 
@@ -116,13 +116,6 @@ export interface RoomSnapshotTask {
   error: string | null
 }
 
-export interface RoomSnapshotRun {
-  run_id: string
-  status: string
-  client_request_id: string | null
-  ts: string
-}
-
 export interface RoomSnapshotStream {
   message_id: string
   agent_id: string | null
@@ -133,33 +126,15 @@ export interface RoomSnapshotStream {
   last_chunk: boolean
 }
 
-export interface RoomSnapshotTraceNode {
-  id: string
-  kind: string
-  client_request_id?: string | null
-  ts?: string
-  [key: string]: unknown
-}
-
-export interface RoomSnapshotTraceRun {
-  run_id: string
-  client_request_id: string | null
-  nodes: RoomSnapshotTraceNode[]
-  usage: unknown
-  duration_ms: number
-}
-
 type SnapshotBase = {
   room_seq: number
   messages: RoomSnapshotMessage[]
   tasks: RoomSnapshotTask[]
-  runs: RoomSnapshotRun[]
   hitl: {
     requests: Array<Record<string, unknown>>
     resolved: Array<Record<string, unknown>>
   }
   streaming: Record<string, RoomSnapshotStream>
-  trace: Record<string, RoomSnapshotTraceRun>
 }
 
 export type SnapshotData = SnapshotBase & (
@@ -384,19 +359,19 @@ export function hasSSEFrameEnvelope(value: unknown): value is AnySSEFrame {
   const keys = Object.keys(frame).sort()
   return (
     keys.length === 4 &&
-    keys[0] === 'data' &&
-    keys[1] === 'room_id' &&
+    keys[0] === 'conversation_id' &&
+    keys[1] === 'data' &&
     keys[2] === 'timestamp' &&
     keys[3] === 'type' &&
     typeof frame.type === 'string' &&
     typeof frame.timestamp === 'string' &&
-    typeof frame.room_id === 'string' &&
+    typeof frame.conversation_id === 'string' &&
     Object.prototype.hasOwnProperty.call(frame, 'data')
   )
 }
 
 export interface SSEConnectionStatus {
-  room_id: string
+  conversation_id: string
   active_connections: number
   status: 'active' | 'no_connections'
 }

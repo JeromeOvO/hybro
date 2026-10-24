@@ -7,17 +7,17 @@ import json
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, Protocol
 
 from common.dto.hitl import (
     A2AInteractionSpec,
     HITLAuthorizationResultAnswer,
     HITLQuestionAnswer,
-    HITLRouteSnapshotV2,
 )
 from common.utils.logger import get_logger
 
 from ..models import TextPart, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from .errors import (
     AgentCardContractError,
     AmbiguousRemoteEffectError,
@@ -41,6 +41,7 @@ from .models import (
     AgentCallLedgerRecord,
     DurableHITLAnswerRecord,
     HITLAnswerAppliedMarker,
+    HITLRouteSnapshotV2,
     NormalizedA2AObservation,
     VerifiedAuthReferenceBinding,
 )
@@ -49,7 +50,6 @@ from .ports import (
     AgentCallLedgerStore,
     AgentToolBindingStore,
     AuthorizationRefreshPort,
-    AuthReferenceVerificationPort,
     HITLAbandonOutcome,
     HITLApplicationPort,
     NormalizedObservationRecorder,
@@ -59,6 +59,27 @@ from .ports import (
 from .terminal_interactions import TerminalInteractionFinalizer
 
 logger = get_logger(__name__)
+
+
+class AuthReferenceVerificationPort(Protocol):
+    async def verify(
+        self,
+        authorization_reference: str,
+        *,
+        authenticated_answerer_id: str,
+        call_record_id: str,
+        binding_id: str,
+        binding_digest: str,
+        conversation_id: str,
+        room_epoch: int,
+        interaction_id: str,
+        interaction_revision: int,
+        route_fingerprint: str,
+        interaction_fingerprint: str,
+        question_id: str,
+        challenge_digest: str,
+        answer_digest: str,
+    ) -> str: ...
 
 
 class InMemoryHITLApplicationPort:
@@ -82,7 +103,7 @@ class InMemoryHITLApplicationPort:
             orchestration_run_id=call.run_id,
             call_record_id=call.call_record_id,
             invocation_id=call.invocation_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             binding_id=call.binding_id,
             agent_id=call.agent_id,
@@ -189,7 +210,7 @@ class InMemoryHITLApplicationPort:
         return self.read_interaction_for_test(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
         interactions = []
         for interaction_id, stored in self._interactions.items():
@@ -198,7 +219,7 @@ class InMemoryHITLApplicationPort:
             if interaction_id in self._abandoned_interactions:
                 continue
             spec, route, fingerprint = stored
-            if route.room_id != room_id:
+            if route.conversation_id != conversation_id:
                 continue
             interactions.append(
                 (
@@ -210,7 +231,7 @@ class InMemoryHITLApplicationPort:
         return interactions
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
         interactions = []
         for interaction_id, stored in self._interactions.items():
@@ -221,7 +242,7 @@ class InMemoryHITLApplicationPort:
             if interaction_id in self._abandoned_interactions:
                 continue
             spec, route, fingerprint = stored
-            if route.room_id != room_id:
+            if route.conversation_id != conversation_id:
                 continue
             if (interaction_id, route.interaction_revision) in self._answer_records:
                 continue
@@ -500,6 +521,11 @@ class A2AContinuationCoordinator:
             != call.requesting_subject_digest
         ):
             raise PermissionError("durable answer owner does not match call")
+        if await self.hitl.read_interaction(call.pending_interaction_id) is None:
+            # An answered interaction becomes unreadable only when it is
+            # closed (abandoned), which is permanent. Its public projection
+            # can never be emitted, so retrying would never converge.
+            return call.state
         marked = await self._persist_answer_marker(call, answer_record)
         if marked is None:
             current = await self.ledger.load_by_record_id(call_record_id)
@@ -673,7 +699,7 @@ class A2AContinuationCoordinator:
                 call_record_id=call.call_record_id,
                 binding_id=call.binding_id,
                 binding_digest=call.binding_digest,
-                room_id=call.room_id,
+                conversation_id=call.conversation_id,
                 room_epoch=call.room_epoch,
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
@@ -764,16 +790,12 @@ class A2AContinuationCoordinator:
     ) -> None:
         if self.run_store is not None:
             run = await self.run_store.load(call.run_id)
-            if (
-                run is not None
-                and run.lifecycle_family == "canonical"
-                and any(
-                    entry.surface_for_call_record_id == call.call_record_id
-                    and entry.interaction_id == answer_record.interaction_id
-                    and entry.state == "pending"
-                    for batch in run.tool_batches
-                    for entry in batch.entries
-                )
+            if run is not None and any(
+                entry.surface_for_call_record_id == call.call_record_id
+                and entry.interaction_id == answer_record.interaction_id
+                and entry.state == "pending"
+                for batch in run.tool_batches
+                for entry in batch.entries
             ):
                 # Answers may be captured from REST visibility before the full
                 # request/control prefix is acknowledged. Only its existing
@@ -853,7 +875,7 @@ class A2AContinuationCoordinator:
             )
             return current.state if current is not None else "delivery_uncertain"
         if not await self.room_epochs.verify_active(
-            claimed.room_id, claimed.room_epoch
+            claimed.conversation_id, claimed.room_epoch
         ):
             return await self._terminalize_authorization_failure(
                 claimed,
@@ -863,7 +885,7 @@ class A2AContinuationCoordinator:
         authorization = await self.authorization.authorize(
             binding=binding,
             requesting_subject_id=answer_record.authenticated_answerer_id,
-            room_id=claimed.room_id,
+            conversation_id=claimed.conversation_id,
             room_epoch=claimed.room_epoch,
             resource_refs=[ref.ref_id for ref in claimed.resource_manifest.refs],
         )
@@ -891,7 +913,7 @@ class A2AContinuationCoordinator:
             requesting_subject_digest=claimed.requesting_subject_digest,
             task_id=claimed.a2a_task_id,
             context_id=claimed.a2a_context_id,
-            room_id=claimed.room_id,
+            conversation_id=claimed.conversation_id,
             room_epoch=claimed.room_epoch,
             created_at=answer_record.applied_at,
         )
@@ -1549,7 +1571,7 @@ class A2AContinuationCoordinator:
         if renewed is None:
             return None
         if not await self.room_epochs.verify_active(
-            renewed.room_id, renewed.room_epoch
+            renewed.conversation_id, renewed.room_epoch
         ):
             return None
         return renewed
@@ -1558,13 +1580,7 @@ class A2AContinuationCoordinator:
         if self.run_store is None:
             return False
         run = await self.run_store.load(call.run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def _run_fenced_continuation(
         self,

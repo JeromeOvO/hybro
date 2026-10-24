@@ -8,7 +8,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: 'Hello',
     senderName: 'Agent',
@@ -28,7 +28,7 @@ describe('useMessageStore', () => {
       const store = useMessageStore.getState()
       store.setRoom('room-1')
       const state = useMessageStore.getState()
-      expect(state.roomId).toBe('room-1')
+      expect(state.conversationId).toBe('room-1')
       expect(state.entities).toEqual({})
       expect(state.orderedIds).toEqual([])
       expect(state.hydratedFromDb).toBe(false)
@@ -41,7 +41,7 @@ describe('useMessageStore', () => {
       store.upsertMessage(makeIncoming(), 'sse')
       store.clearRoom()
       const state = useMessageStore.getState()
-      expect(state.roomId).toBeNull()
+      expect(state.conversationId).toBeNull()
       expect(state.entities).toEqual({})
       expect(state.orderedIds).toEqual([])
     })
@@ -199,12 +199,12 @@ describe('useMessageStore', () => {
     it('only cancels tasks in the specified room', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(
-        makeIncoming({ id: 'task-r1', roomId: 'room-1', taskStatus: TASK_STATE.WORKING }),
+        makeIncoming({ id: 'task-r1', conversationId: 'room-1', taskStatus: TASK_STATE.WORKING }),
         'sse',
       )
       store.upsertMessage(
         makeIncoming({
-          id: 'task-r2', roomId: 'room-2', taskStatus: TASK_STATE.WORKING,
+          id: 'task-r2', conversationId: 'room-2', taskStatus: TASK_STATE.WORKING,
           timestamp: '2026-02-17T10:01:00Z',
         }),
         'sse',

@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from common.dto.base import stored_conversation_id
+
+from .persistence import TERMINAL_RUN_STATUSES
 
 
 class ContractModel(BaseModel):
-    """Strict base for persisted orchestrator contracts."""
+    """Strict base for persisted orchestrator contracts.
 
-    model_config = ConfigDict(extra="forbid")
+    ``serialize_by_alias`` keeps stored keys such as ``room_id`` (see
+    ``stored_conversation_id``) in every dump, including digest inputs.
+    """
+
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
 
 
 class ResolvedModelSnapshot(ContractModel):
@@ -209,6 +218,18 @@ class ToolInteractionQuestion(ContractModel):
     choices: list[str] | None = None
 
 
+class ToolInteractionAnswer(ContractModel):
+    question_id: str
+    answer: str
+
+
+class ToolInteractionAnswers(ContractModel):
+    """The user's answers to one Agent interaction, shown only to the model."""
+
+    interaction_id: str
+    answers: list[ToolInteractionAnswer] = Field(default_factory=list)
+
+
 class ToolSuspension(ContractModel):
     invocation_id: str
     status: ToolSuspensionStatus
@@ -237,6 +258,8 @@ class ToolObservation(ContractModel):
     invocation_id: str
     outcome: ToolExecutionOutcome
     observed_at: datetime
+    # The user's answers to the interaction this call was last resumed with.
+    interaction_answers: ToolInteractionAnswers | None = None
 
 
 ToolBatchEntryState = Literal[
@@ -288,6 +311,8 @@ class ToolBatchEntry(ContractModel):
     interaction_id: str | None = None
     interaction_fingerprint: str | None = None
     interaction_questions: list[ToolInteractionQuestion] = Field(default_factory=list)
+    # User answers per interaction round, written to the model transcript.
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _entry_state_is_consistent(self) -> ToolBatchEntry:
@@ -359,6 +384,7 @@ class ToolResultMessage(ContractModel):
     is_error: bool
     error_code: str | None = None
     error_message: str | None = None
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -380,6 +406,8 @@ class ToolInteractionMessage(ContractModel):
     questions: list[ToolInteractionQuestion] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
     agent_label: str | None = None
+    # Answers to this call's earlier rounds, so a follow-up round keeps them.
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -521,6 +549,11 @@ class ModelStreamEvent(ContractModel):
         return self
 
 
+_HISTORICAL_TASK_LABEL = re.compile(
+    r"\A(?:\s*\[historical plan, not evidence[^\]\n]*\][ \t]*(?:\n|\Z))+"
+)
+
+
 class AgentToolInput(ContractModel):
     """Platform-owned arguments for one privately bound Agent tool."""
 
@@ -528,6 +561,16 @@ class AgentToolInput(ContractModel):
     context_refs: list[str] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
     attachment_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("task")
+    @classmethod
+    def _strip_copied_history_label(cls, value: str) -> str:
+        # The transcript labels earlier calls' tasks as historical plans; a
+        # model that copies such a task must not forward the label to an Agent.
+        stripped = _HISTORICAL_TASK_LABEL.sub("", value)
+        if not stripped.strip():
+            raise ValueError("task is empty after removing the history label")
+        return stripped
 
 
 class PreparedResourceRef(ContractModel):
@@ -657,7 +700,7 @@ class AuthorizationBasis(ContractModel):
         "mention",
         "all_active_agents",
     ]
-    room_id: str | None = None
+    conversation_id: str | None = stored_conversation_id(None)
     group_id: str | None = None
     selected_by_user_id: str | None = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -681,14 +724,14 @@ class CandidateScopeSnapshot(ContractModel):
     snapshot_id: str
     revision: int = Field(default=1, ge=1)
     source: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     group_id: str | None = None
     agent_ids: list[str]
     agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
     room_membership_version: str | None = None
     group_version: str | None = None
     resolved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    authorization_basis: AuthorizationBasis | None = None
+    authorization_basis: AuthorizationBasis
 
 
 CancellationCause = Literal["user_requested", "room_closed", "shutdown", "policy"]
@@ -709,11 +752,10 @@ RunStatus = Literal[
 
 
 class OrchestratorRunState(ContractModel):
-    # Expand/contract reader accepts v5 legacy documents and v6 canonical
-    # documents. New canonical admission explicitly writes v6; legacy fixtures
-    # and already-running v5 Runs remain pinned and readable.
-    schema_version: Literal[5, 6] = 5
-    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
+    # Only canonical schema-6 Runs exist; scripts/delete_legacy_orchestrator_runs.py
+    # removed the v5 and legacy-family documents.
+    schema_version: Literal[6] = 6
+    lifecycle_family: Literal["canonical"] = "canonical"
     run_id: str
     # Explicit persisted execution-engine ownership, fixed at Run creation and
     # never re-evaluated afterwards (production cutover invariant). Runs owned by
@@ -723,7 +765,7 @@ class OrchestratorRunState(ContractModel):
     # way without guessing from store identity.
     runtime_generation: Literal["orchestrator"] = "orchestrator"
     session_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     client_request_id: str | None
     request: RunRequestSnapshot
     profile: OrchestratorProfile
@@ -800,7 +842,7 @@ class OrchestratorRunState(ContractModel):
             if self.recovery_claim.kind != "cancellation":
                 raise ValueError("canceling Runs require cancellation recovery")
         elif self.status == "canceled":
-            if self.lifecycle_family == "canonical" and self.cancellation_cause is None:
+            if self.cancellation_cause is None:
                 raise ValueError("canceled canonical Runs require a cancellation cause")
             if (self.cancellation_command_id is None) != (
                 self.cancellation_requested_at is None
@@ -810,59 +852,40 @@ class OrchestratorRunState(ContractModel):
             raise ValueError(
                 "cancellation metadata is valid only for canceling or canceled Runs"
             )
-        if self.lifecycle_family == "canonical":
-            if self.schema_version != 6:
-                raise ValueError("canonical Runs require schema version 6")
-            for batch in self.tool_batches:
-                for entry in batch.entries:
-                    if entry.acceptance is not None and not entry.opaque_public_call_id:
-                        raise ValueError(
-                            "accepted canonical tool entries require a public call ID"
-                        )
-        elif any(
-            (
-                self.active_internal_turn_id,
-                self.active_assistant_message_id,
-                self.active_attempt,
-                self.greatest_public_text_offset,
-                self.active_public_text,
+        for batch in self.tool_batches:
+            for entry in batch.entries:
+                if entry.acceptance is not None and not entry.opaque_public_call_id:
+                    raise ValueError(
+                        "accepted canonical tool entries require a public call ID"
+                    )
+        if self.greatest_public_text_offset != len(self.active_public_text):
+            raise ValueError(
+                "canonical public offset must match active text checkpoint"
             )
-        ):
-            raise ValueError("legacy Runs cannot carry canonical active stream state")
-        if self.lifecycle_family == "canonical":
-            if self.greatest_public_text_offset != len(self.active_public_text):
-                raise ValueError(
-                    "canonical public offset must match active text checkpoint"
+        if self.status in TERMINAL_RUN_STATUSES:
+            if any(
+                (
+                    self.active_internal_turn_id,
+                    self.active_assistant_message_id,
+                    self.active_attempt,
+                    self.active_public_text,
                 )
-            if self.status in {
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
-            }:
-                if any(
-                    (
-                        self.active_internal_turn_id,
-                        self.active_assistant_message_id,
-                        self.active_attempt,
-                        self.active_public_text,
-                    )
-                ):
-                    raise ValueError(
-                        "terminal canonical Runs cannot retain active lifecycle state"
-                    )
-                if any(
-                    entry.state != "terminal"
-                    for batch in self.tool_batches
-                    for entry in batch.entries
-                ):
-                    raise ValueError(
-                        "terminal canonical Runs cannot retain open declared Tools"
-                    )
-                if any(not batch.results_flushed for batch in self.tool_batches):
-                    raise ValueError(
-                        "terminal canonical Runs require every Tool batch flushed"
-                    )
+            ):
+                raise ValueError(
+                    "terminal canonical Runs cannot retain active lifecycle state"
+                )
+            if any(
+                entry.state != "terminal"
+                for batch in self.tool_batches
+                for entry in batch.entries
+            ):
+                raise ValueError(
+                    "terminal canonical Runs cannot retain open declared Tools"
+                )
+            if any(not batch.results_flushed for batch in self.tool_batches):
+                raise ValueError(
+                    "terminal canonical Runs require every Tool batch flushed"
+                )
         return self
 
 
@@ -912,7 +935,7 @@ class OrchestratorEvent(ContractModel):
     event_type: EventType
     session_id: str
     run_id: str
-    room_id: str
+    conversation_id: str = stored_conversation_id()
     room_epoch: int = Field(ge=1)
     sequence: int = Field(gt=0)
     state_version: int = Field(ge=0)

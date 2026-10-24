@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '../../utils/test-utils'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
-import type { AgentCenterResponse, Agent, AgentCard, AgentSkill, AgentCapabilities } from '@/lib/types'
+import type { AgentRouteResponse, Agent } from '@/lib/types'
+import type { AgentCardView, AgentSkillView } from '@/lib/types/agent'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
 /* ── Mocks ── */
@@ -37,7 +38,7 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ getToken: mockGetToken, userId: 'owner-user' }),
 }))
 
-const mockGetAgent = vi.fn<() => Promise<AgentCenterResponse>>()
+const mockGetAgent = vi.fn<() => Promise<AgentRouteResponse>>()
 const mockDeleteAgent = vi.fn()
 vi.mock('@/lib/api/agent', () => ({
   getAgent: mockGetAgent,
@@ -68,37 +69,33 @@ vi.mock('@/lib/agent-icon-utils', () => ({
 
 /* ── Local factory ── */
 
-function buildSkill(overrides: Partial<AgentSkill> = {}): AgentSkill {
+function buildSkill(overrides: Partial<AgentSkillView> = {}): AgentSkillView {
   return {
     id: 'skill-1',
     name: 'Default Skill',
     description: 'Skill description',
     tags: ['tag-a'],
     examples: ['example one', 'example two', 'example three'],
-    inputModes: ['text/plain'],
-    outputModes: ['text/plain'],
     ...overrides,
   }
 }
 
-function buildCard(overrides: Partial<AgentCard> = {}): AgentCard {
+function buildCard(overrides: Partial<AgentCardView> = {}): AgentCardView {
   return {
     name: 'Test Agent',
     description: 'A helpful test agent.',
     version: '1.0.0',
-    protocolVersion: '1.0.0',
-    url: 'http://localhost:8001',
-    iconUrl: undefined,
-    documentationUrl: 'https://docs.example.com',
-    provider: { organization: 'Acme Corp', url: 'https://acme.com' },
+    icon_url: null,
+    documentation_url: 'https://docs.example.com',
+    provider_organization: 'Acme Corp',
     capabilities: {
       streaming: true,
-      pushNotifications: false,
-      stateTransitionHistory: false,
-      extensions: undefined,
-    } as AgentCapabilities,
-    defaultInputModes: ['text/plain', 'application/json'],
-    defaultOutputModes: ['text/plain'],
+      push_notifications: false,
+      state_transition_history: false,
+      extensions: false,
+    },
+    default_input_modes: ['text/plain', 'application/json'],
+    default_output_modes: ['text/plain'],
     skills: [buildSkill()],
     ...overrides,
   }
@@ -106,22 +103,22 @@ function buildCard(overrides: Partial<AgentCard> = {}): AgentCard {
 
 function buildAgentResponse(
   overrides: {
-    card?: Partial<AgentCard>
+    card?: Partial<AgentCardView>
     providerId?: string
-    status?: Agent['agent_status']
+    status?: Agent['status']
     source?: Agent['source']
-    isHubOnline?: boolean
   } = {},
-): AgentCenterResponse {
+): AgentRouteResponse {
   return {
     success: true,
     agent: {
+      ...buildCard(overrides.card),
       agent_id: 'agent-test-1',
       provider_id: overrides.providerId ?? 'owner-user',
-      agent_card: buildCard(overrides.card),
-      agent_status: overrides.status ?? 'active',
+      status: overrides.status ?? 'active',
       source: overrides.source ?? 'cloud',
-      is_hub_online: overrides.isHubOnline,
+      is_public: true,
+      call_count: 0,
     },
   }
 }
@@ -202,7 +199,7 @@ describe('ConsumerAgentProfilePage', () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({
           card: {
-            skills: [buildSkill({ examples: [] }), buildSkill({ id: 's2', examples: undefined })],
+            skills: [buildSkill({ examples: [] }), buildSkill({ id: 's2', examples: [] })],
           },
         }),
       )
@@ -277,8 +274,7 @@ describe('ConsumerAgentProfilePage', () => {
 
     it('shows Local agents as discovery-managed without unregister controls', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse({
-        source: 'hub',
-        isHubOnline: true,
+        source: 'local',
       }))
 
       render(<ConsumerAgentProfilePage />)
@@ -302,8 +298,8 @@ describe('ConsumerAgentProfilePage', () => {
 
     it('does not show stale Local agent details', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse({
-        source: 'hub',
-        isHubOnline: false,
+        source: 'local',
+        status: 'inactive',
       }))
 
       render(<ConsumerAgentProfilePage />)
@@ -326,7 +322,7 @@ describe('ConsumerAgentProfilePage', () => {
 
     it('hides Documentation when URL is absent', async () => {
       mockGetAgent.mockResolvedValue(
-        buildAgentResponse({ card: { documentationUrl: undefined } }),
+        buildAgentResponse({ card: { documentation_url: null } }),
       )
 
       render(<ConsumerAgentProfilePage />)
@@ -345,10 +341,10 @@ describe('ConsumerAgentProfilePage', () => {
           card: {
             capabilities: {
               streaming: true,
-              pushNotifications: true,
-              stateTransitionHistory: false,
-              extensions: undefined,
-            } as AgentCapabilities,
+              push_notifications: true,
+              state_transition_history: false,
+              extensions: false,
+            },
           },
         }),
       )
@@ -375,10 +371,10 @@ describe('ConsumerAgentProfilePage', () => {
           card: {
             capabilities: {
               streaming: false,
-              pushNotifications: false,
-              stateTransitionHistory: false,
-              extensions: undefined,
-            } as AgentCapabilities,
+              push_notifications: false,
+              state_transition_history: false,
+              extensions: false,
+            },
           },
         }),
       )
@@ -431,7 +427,7 @@ describe('ConsumerAgentProfilePage', () => {
       expect(handoff?.draft).toBe('')
       expect(handoff?.seedAgents).toHaveLength(1)
       expect(handoff?.seedAgents?.[0].agent_id).toBe('agent-test-1')
-      expect(handoff?.seedAgents?.[0].agent_card.name).toBe('Test Agent')
+      expect(handoff?.seedAgents?.[0].name).toBe('Test Agent')
     })
   })
 

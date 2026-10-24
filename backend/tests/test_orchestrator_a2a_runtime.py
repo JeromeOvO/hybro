@@ -12,7 +12,6 @@ from a2a_adapter.orchestrator_direct_client import (
     OrchestratorDirectA2AClient,
     endpoint_scope_digest,
 )
-from a2a_adapter.task_status import build_completed_text_task
 from common.dto.hitl import A2AInteractionSpec
 from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
@@ -62,6 +61,7 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 )
 from execution.orchestrator.models import TextPart, ToolResult, ToolSuspension
 from execution.orchestrator.ports import InvalidParkedInteractionTarget
+from tests._a2a_task_builders import build_completed_text_task
 
 from ._orchestrator_a2a_helpers import invocation, ledger_record, prepared
 from ._orchestrator_helpers import NOW, NeverCancelled
@@ -128,9 +128,11 @@ class FlakyCardSdk:
             raise self.failures.pop(0)
         return {
             "name": "Agent",
-            "url": url,
             "version": "1.0.0",
             "capabilities": {},
+            "supportedInterfaces": [
+                {"url": url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+            ],
         }
 
     async def send_message(self, card, message, **kwargs):
@@ -438,6 +440,7 @@ async def _run_production_recovery_cycle(
         dispatch=runtime.dispatch,
         observations=runtime.observations,
         recover_dispatch=recover_dispatch,
+        hitl=InMemoryHITLApplicationPort(),
     )
 
     async def noop():
@@ -548,6 +551,42 @@ async def test_production_recovery_cycle_bounds_repeated_card_503():
         runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
     )
     assert sdk.card_fetches == terminal.runtime_policy.max_transport_attempts
+
+
+async def test_recovery_exhausted_transport_leaves_terminal_for_suspended_run():
+    """Recovery discards execute()'s result, so the terminal must be recorded
+    as an executor-routed observation that ingress can deliver to the Run."""
+    dispatch, _ = flaky_card_dispatch(
+        [A2AClientFacadeError("unavailable", status_code=503)] * 3
+    )
+    runtime, ledger, _, _, ingress = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+    first = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    assert isinstance(first, ToolSuspension)
+
+    for _ in range(2):
+        await make_call_due(ledger)
+        await _run_production_recovery_cycle(
+            runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+        )
+
+    terminal = await ledger.load("run-1", "call-1")
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.error_code == "agent_card_transport_unavailable"
+    row = await ingress.inbox.load(terminal.recent_observation_ids[-1])
+    assert row is not None
+    assert row.event_kind == "terminal"
+    assert row.observation.status == "failed"
+    assert row.observation.error_code == "agent_card_transport_unavailable"
+    assert row.delivery_route == "executor"
+    assert row.outcome_digest == terminal.terminal_result_digest
 
 
 async def test_production_recovery_cycle_terminalizes_card_404_once():
@@ -1953,7 +1992,7 @@ async def test_runtime_surface_publication_requires_exact_parked_target(
         )
     publish.assert_not_awaited()
     emit.assert_not_awaited()
-    assert await owner.get_published_interactions(call.room_id) == []
+    assert await owner.get_published_interactions(call.conversation_id) == []
 
 
 @pytest.mark.parametrize("outcome", ["stale", "conflict", "absent", "error"])
@@ -1988,7 +2027,7 @@ async def test_runtime_surface_rejected_visibility_write_emits_no_hitl(
             interaction_id="interaction-1",
         )
     emit.assert_not_awaited()
-    assert await runtime.hitl.get_published_interactions(call.room_id) == []
+    assert await runtime.hitl.get_published_interactions(call.conversation_id) == []
 
 
 @pytest.mark.parametrize("state", ["input_required", "auth_required"])
@@ -2025,5 +2064,5 @@ async def test_runtime_surface_legitimate_visibility_replay_completes_publicatio
         interaction_id="interaction-1",
     )
     assert publish.await_count == emit.await_count == 2
-    assert len(await runtime.hitl.get_published_interactions(call.room_id)) == 1
+    assert len(await runtime.hitl.get_published_interactions(call.conversation_id)) == 1
     assert await ledger.load_by_record_id(call.call_record_id) == call

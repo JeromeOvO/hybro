@@ -52,7 +52,7 @@ function installCompletedCanonicalTurn(): void {
 }
 
 const mockAdapter: ComposerShellAdapter = {
-  roomId: 'test-room',
+  conversationId: 'test-room',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
   onRespondToHitlBatch: vi.fn(),
@@ -93,7 +93,7 @@ describe('ComposerShell', () => {
     const hitlRequestIndex = { current: new Map<string, string>() }
     const requestSnapshot = vi.fn()
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room',
+      conversationId: 'test-room',
       lifecycle: createProcessingLifecycle(() => {}),
       getAgentName: vi.fn().mockResolvedValue('Agent'),
       getAgentSource: vi.fn(),
@@ -103,13 +103,13 @@ describe('ComposerShell', () => {
       requestSnapshotRef: { current: requestSnapshot },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
@@ -143,7 +143,7 @@ describe('ComposerShell', () => {
     } as AnySSEFrame)
 
     await dispatcher({
-      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      type: 'processing_status', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 3, room_event_id: 'compat-1', trace_id: 'trace-1', status: 'awaiting_input',
         message_id: 'user-1', related_message_id: 'user-1',
@@ -152,7 +152,7 @@ describe('ComposerShell', () => {
     } as AnySSEFrame)
     expect(requestSnapshot).not.toHaveBeenCalled()
     await dispatcher({
-      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      type: 'processing_status', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 4, room_event_id: 'compat-2', status: 'awaiting_input',
         message_id: 'user-1', related_message_id: 'user-1',
@@ -181,7 +181,7 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('user-1', 'client-1')
     lifecycle.setProcessing(false)
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room',
+      conversationId: 'test-room',
       lifecycle,
       getAgentName: vi.fn().mockResolvedValue('Agent'),
       getAgentSource: vi.fn(),
@@ -191,18 +191,18 @@ describe('ComposerShell', () => {
       requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'client-1',
@@ -216,13 +216,13 @@ describe('ComposerShell', () => {
     lifecycle.markSseDisconnection()
 
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-2', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
@@ -256,23 +256,23 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('user-1', 'client-1')
     lifecycle.setProcessing(false)
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     const runStarted = {
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'client-1',
@@ -285,7 +285,7 @@ describe('ComposerShell', () => {
     await dispatcher(runStarted as AnySSEFrame)
     expect(lifecycle.isSendGuardActive()).toBe(true)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
         type: 'run_settled', correlation_id: 'client-1',
@@ -312,23 +312,23 @@ describe('ComposerShell', () => {
     const lifecycle = createProcessingLifecycle(() => {})
     lifecycle.startProcessing('legacy-user', 'legacy-client')
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 0 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
         type: 'run_started', correlation_id: 'canonical-client',
@@ -339,7 +339,7 @@ describe('ComposerShell', () => {
       },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      type: 'run_event', timestamp: ts, conversation_id: 'test-room',
       data: {
         room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
         type: 'run_settled', correlation_id: 'canonical-client',
@@ -362,18 +362,18 @@ describe('ComposerShell', () => {
     lifecycle.startProcessing('legacy-user', 'legacy-client')
     const ts = '2030-01-01T00:00:00.000Z'
     const dispatcher = createSSEDispatcher({
-      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      conversationId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
       reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
       setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
     })
     await dispatcher({
-      type: 'connected', timestamp: ts, room_id: 'test-room',
+      type: 'connected', timestamp: ts, conversation_id: 'test-room',
       data: { connection_id: 'connection-1', room_seq: 2 },
     } as AnySSEFrame)
     await dispatcher({
-      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'canonical-user',
@@ -412,7 +412,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-upload',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'Review my application',
       senderName: 'User',
@@ -421,7 +421,7 @@ describe('ComposerShell', () => {
     }, 'db')
     store.upsertMessage({
       id: 'agent-upload',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: 'Please upload the PDF in a new message.',
       senderName: 'Agent A',
@@ -442,7 +442,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'hi',
       senderName: 'User',
@@ -450,7 +450,7 @@ describe('ComposerShell', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -475,7 +475,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'hitl-versioned',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -500,7 +500,7 @@ describe('ComposerShell', () => {
     act(() => {
       store.upsertMessage({
         id: 'hitl-versioned',
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: '',
         senderName: 'Agent A',
@@ -524,7 +524,7 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'hitl-status',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: 'Which market?',
       senderName: 'Agent A',
@@ -544,7 +544,7 @@ describe('ComposerShell', () => {
     act(() => {
       store.upsertMessage({
         id: 'hitl-status',
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: 'Which market?',
         senderName: 'Agent A',
@@ -577,7 +577,7 @@ describe('ComposerShell HITL queuing', () => {
     ] as const) {
       store.upsertMessage({
         id,
-        roomId: 'test-room',
+        conversationId: 'test-room',
         messageType: 'agent',
         content: '',
         senderName: 'Broker',
@@ -598,7 +598,7 @@ describe('ComposerShell HITL queuing', () => {
     }
     store.upsertMessage({
       id: 'new-open',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Broker',
@@ -622,7 +622,7 @@ describe('ComposerShell HITL queuing', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'user',
       content: 'hi',
       senderName: 'User',
@@ -630,7 +630,7 @@ describe('ComposerShell HITL queuing', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-1',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent A',
@@ -646,7 +646,7 @@ describe('ComposerShell HITL queuing', () => {
     }, 'db')
     store.upsertMessage({
       id: 'hitl-2',
-      roomId: 'test-room',
+      conversationId: 'test-room',
       messageType: 'agent',
       content: '',
       senderName: 'Agent B',

@@ -6,7 +6,7 @@ import inspect
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pymongo.errors import ConnectionFailure, ExecutionTimeout, WTimeoutError
@@ -22,6 +22,15 @@ from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileOperationError, FileStorageError
 from room_files.leases import RoomWriteLeases
 from room_files.mime import normalize_mime_type
+from room_files.ports import RoomLifecycleStore
+
+
+@runtime_checkable
+class RoomStateOwner(Protocol):
+    """A module that deletes, and verifies deleted, its own rows for a room."""
+
+    async def delete_room_state(self, conversation_id: str) -> bool: ...
+
 
 DEFAULT_CONTENT_URL_PREFIX = "/api/v1/files"
 
@@ -34,11 +43,9 @@ class RoomFiles:
         *,
         metadata: Any,
         content: FileContentStore,
-        rooms: Any | None = None,
+        room_lifecycle: RoomLifecycleStore | None = None,
         messages: Any | None = None,
         agent_messages: Any | None = None,
-        room_owned_collections: Iterable[Any] = (),
-        excluded_from_room_state_delete: Iterable[str] = (),
         lease_writes: bool = False,
         file_id_factory: Callable[[], str] | None = None,
         now: Callable[[], datetime] = utcnow,
@@ -47,16 +54,13 @@ class RoomFiles:
     ) -> None:
         self._metadata = metadata
         self._content = content
-        self._rooms = rooms
+        self._room_lifecycle = room_lifecycle
         self._messages = messages
         self._agent_messages = agent_messages
-        self._room_owned_collections = tuple(room_owned_collections)
-        self._excluded_from_room_state_delete = frozenset(
-            excluded_from_room_state_delete
-        )
+        self._room_state_owners: tuple[RoomStateOwner, ...] = ()
         self._leases = (
-            RoomWriteLeases(rooms, now=now)
-            if rooms is not None and lease_writes
+            RoomWriteLeases(room_lifecycle, now=now)
+            if room_lifecycle is not None and lease_writes
             else None
         )
         self._file_id_factory = file_id_factory or (lambda: uuid4().hex)
@@ -67,7 +71,7 @@ class RoomFiles:
     async def store_agent_artifact(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         source_message_id: str,
         origin_key: str,
         content: bytes,
@@ -76,14 +80,14 @@ class RoomFiles:
         max_bytes: int = 50 * 1024 * 1024,
         content_sha256: str | None = None,
     ) -> dict[str, Any]:
-        if self._rooms is not None and self._leases is None:
+        if self._room_lifecycle is not None and self._leases is None:
             raise FileStoragePlatformError(
                 409, {"message": "Artifact write lease is unavailable"}
             )
         try:
-            async with self.write_lease(room_id, "agent-artifact") as lease_id:
+            async with self.write_lease(conversation_id, "agent-artifact") as lease_id:
                 return await self._store_agent_artifact(
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     source_message_id=source_message_id,
                     origin_key=origin_key,
                     content=content,
@@ -113,20 +117,20 @@ class RoomFiles:
             ) from transient_exc
 
     async def _assert_artifact_write_fence(
-        self, room_id: str, lease_id: str | None
+        self, conversation_id: str, lease_id: str | None
     ) -> None:
         if self._leases is None:
-            if self._rooms is not None:
+            if self._room_lifecycle is not None:
                 raise FileConflictError("artifact write lease is unavailable")
             return
         if lease_id is None:
             raise FileConflictError("artifact write lease is unavailable")
-        await self._leases.assert_valid(room_id, lease_id)
+        await self._leases.assert_valid(conversation_id, lease_id)
 
     async def _store_agent_artifact(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         source_message_id: str,
         origin_key: str,
         content: bytes,
@@ -145,20 +149,20 @@ class RoomFiles:
         resumed = await self._recover_agent_artifact_origin(
             origin_key=origin_key,
             digest=digest,
-            room_id=room_id,
+            conversation_id=conversation_id,
             lease_id=lease_id,
         )
         if resumed is not None:
             return resumed
 
-        owner_id = await self._room_owner(room_id)
+        owner_id = await self._room_owner(conversation_id)
         if owner_id is None:
             raise FileStoragePlatformError(404, {"message": "Room not found"})
         file_id = self._file_id_factory()
         now = self._now()
         pending = {
             "file_id": file_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "owner_id": owner_id,
             "source": "agent_artifact",
             "source_message_id": source_message_id,
@@ -176,7 +180,7 @@ class RoomFiles:
         try:
             await self._metadata.insert_one(pending)
             await self._content.write(file_id, content, pending["mime_type"])
-            await self._assert_artifact_write_fence(room_id, lease_id)
+            await self._assert_artifact_write_fence(conversation_id, lease_id)
             result = await self._metadata.update_one(
                 {"file_id": file_id, "status": "pending", "version": 1},
                 {
@@ -204,7 +208,7 @@ class RoomFiles:
         *,
         origin_key: str,
         digest: str,
-        room_id: str,
+        conversation_id: str,
         lease_id: str | None,
     ) -> dict[str, Any] | None:
         existing = await self._metadata.find_one(
@@ -219,7 +223,7 @@ class RoomFiles:
         resumed = await self._resume_agent_artifact_origin(
             existing,
             digest=digest,
-            room_id=room_id,
+            conversation_id=conversation_id,
             lease_id=lease_id,
         )
         if resumed is not None:
@@ -238,7 +242,7 @@ class RoomFiles:
         existing: dict[str, Any],
         *,
         digest: str,
-        room_id: str,
+        conversation_id: str,
         lease_id: str | None,
     ) -> dict[str, Any] | None:
         status = existing.get("status")
@@ -251,7 +255,7 @@ class RoomFiles:
                 expected_size=int(existing.get("size_bytes") or 0),
                 expected_sha256=digest,
             ):
-                await self._assert_artifact_write_fence(room_id, lease_id)
+                await self._assert_artifact_write_fence(conversation_id, lease_id)
                 version = int(existing.get("version", 1))
                 result = await self._metadata.update_one(
                     {"file_id": file_id, "status": "pending", "version": version},
@@ -306,16 +310,16 @@ class RoomFiles:
         file_bytes: bytes,
         filename: str,
         owner_id: str,
-        room_id: str,
+        conversation_id: str,
         content_type: str | None = None,
     ) -> FileInfo:
         try:
-            async with self.write_lease(room_id, "user-upload") as lease_id:
+            async with self.write_lease(conversation_id, "user-upload") as lease_id:
                 return await self._upload(
                     file_bytes=file_bytes,
                     filename=filename,
                     owner_id=owner_id,
-                    room_id=room_id,
+                    conversation_id=conversation_id,
                     content_type=content_type,
                     lease_id=lease_id,
                 )
@@ -329,7 +333,7 @@ class RoomFiles:
         file_bytes: bytes,
         filename: str,
         owner_id: str,
-        room_id: str,
+        conversation_id: str,
         content_type: str | None,
         lease_id: str | None,
     ) -> FileInfo:
@@ -348,7 +352,7 @@ class RoomFiles:
         now = self._now()
         pending = {
             "file_id": file_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "owner_id": owner_id,
             "source": "user_upload",
             "file_name": safe_name,
@@ -364,7 +368,7 @@ class RoomFiles:
         try:
             await self._metadata.insert_one(pending)
             await self._content.write(file_id, file_bytes, mime_type)
-            await self._assert_lease(room_id, lease_id)
+            await self._assert_lease(conversation_id, lease_id)
             result = await self._metadata.update_one(
                 {"file_id": file_id, "status": "pending", "version": 1},
                 {
@@ -408,11 +412,11 @@ class RoomFiles:
 
     async def get_for_room_file(
         self,
-        room_id: str,
+        conversation_id: str,
         file_id: str,
     ) -> dict[str, Any] | None:
         doc = await self._metadata.find_one(
-            {"room_id": room_id, "file_id": file_id, "status": "ready"}
+            {"room_id": conversation_id, "file_id": file_id, "status": "ready"}
         )
         if doc is None:
             return None
@@ -421,7 +425,7 @@ class RoomFiles:
     async def validate_agent_reference(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         source_message_id: str,
         file_id: str,
         sha256: str | None,
@@ -431,7 +435,7 @@ class RoomFiles:
         doc = await self._metadata.find_one(
             {
                 "file_id": file_id,
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "source_message_id": source_message_id,
                 "source": "agent_artifact",
                 "origin_key": {"$type": "string"},
@@ -517,7 +521,7 @@ class RoomFiles:
     async def claim_references(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         owner_id: str,
         message_id: str,
         file_ids: list[str],
@@ -533,7 +537,7 @@ class RoomFiles:
                 result = await self._metadata.update_one(
                     {
                         "file_id": file_id,
-                        "room_id": room_id,
+                        "room_id": conversation_id,
                         "owner_id": owner_id,
                         "status": "ready",
                     },
@@ -547,7 +551,7 @@ class RoomFiles:
                     existing = await self._metadata.find_one(
                         {
                             "file_id": file_id,
-                            "room_id": room_id,
+                            "room_id": conversation_id,
                             "owner_id": owner_id,
                             "status": "ready",
                             "reference_claims.message_id": message_id,
@@ -644,7 +648,7 @@ class RoomFiles:
     async def delete_superseded_agent_artifacts(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         source_message_id: str,
         file_ids: set[str],
     ) -> int:
@@ -653,7 +657,7 @@ class RoomFiles:
             doc = await self._metadata.find_one(
                 {
                     "file_id": file_id,
-                    "room_id": room_id,
+                    "room_id": conversation_id,
                     "source_message_id": source_message_id,
                     "source": "agent_artifact",
                     "status": "ready",
@@ -665,7 +669,7 @@ class RoomFiles:
             claimed = await self._metadata.update_one(
                 {
                     "file_id": file_id,
-                    "room_id": room_id,
+                    "room_id": conversation_id,
                     "source_message_id": source_message_id,
                     "source": "agent_artifact",
                     "status": "ready",
@@ -696,11 +700,11 @@ class RoomFiles:
 
     async def delete_for_room(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         deletion_id: str | None = None,
     ) -> int:
-        cursor = self._metadata.find({"room_id": room_id})
+        cursor = self._metadata.find({"room_id": conversation_id})
         if inspect.isawaitable(cursor):
             cursor = await cursor
         deleted = 0
@@ -724,57 +728,58 @@ class RoomFiles:
             deleted += int(_changed(result, attribute="deleted_count"))
         return deleted
 
-    async def list_for_room(self, room_id: str) -> list[FileInfo]:
-        cursor = self._metadata.find({"room_id": room_id, "status": "ready"})
+    async def list_for_room(self, conversation_id: str) -> list[FileInfo]:
+        cursor = self._metadata.find({"room_id": conversation_id, "status": "ready"})
         if inspect.isawaitable(cursor):
             cursor = await cursor
         return [self._file_info(doc) async for doc in _aiter_documents(cursor)]
 
     @asynccontextmanager
-    async def write_lease(self, room_id: str, owner: str) -> AsyncIterator[str | None]:
+    async def write_lease(
+        self, conversation_id: str, owner: str
+    ) -> AsyncIterator[str | None]:
         if self._leases is None:
             yield None
             return
-        async with self._leases.hold(room_id, owner) as lease_id:
+        async with self._leases.hold(conversation_id, owner) as lease_id:
             yield lease_id
 
-    async def begin_room_deletion(self, room_id: str, owner_id: str) -> str | None:
+    async def begin_room_deletion(
+        self, conversation_id: str, owner_id: str
+    ) -> str | None:
         if self._leases is None:
             return None
-        return await self._leases.begin_deletion(room_id, owner_id)
+        return await self._leases.begin_deletion(conversation_id, owner_id)
 
-    async def wait_for_room_writes(self, room_id: str) -> bool:
+    async def wait_for_room_writes(self, conversation_id: str) -> bool:
         if self._leases is None:
             return True
-        return await self._leases.wait_until_drained(room_id)
+        return await self._leases.wait_until_drained(conversation_id)
 
     async def set_deletion_phase(
-        self, room_id: str, deletion_id: str, phase: str
+        self, conversation_id: str, deletion_id: str, phase: str
     ) -> bool:
-        if self._rooms is None:
+        if self._room_lifecycle is None:
             return True
-        result = await self._rooms.update_one(
-            {
-                "room_id": room_id,
-                "lifecycle_state": "deleting",
-                "deletion_id": deletion_id,
-            },
-            {"$set": {"deletion_phase": phase}},
+        return await self._room_lifecycle.set_deletion_phase(
+            conversation_id, deletion_id, phase
         )
-        return _changed(result)
 
-    async def delete_room_state(self, room_id: str) -> bool:
-        collections = [
-            collection
-            for collection in self._room_owned_collections
-            if _collection_name(collection) not in self._excluded_from_room_state_delete
+    def bind_room_state_owners(self, owners: Iterable[RoomStateOwner]) -> None:
+        """Bind the modules whose room rows go with a deleted room."""
+        self._room_state_owners = tuple(owners)
+
+    async def delete_room_state(self, conversation_id: str) -> bool:
+        """Ask every owner to delete its room rows; succeed only if all did."""
+        if not self._room_state_owners:
+            # Fail closed: an unbound lifecycle would let recovery delete the
+            # room row while every owner's rows remain.
+            raise RuntimeError("Room-state owners have not been bound")
+        results = [
+            await owner.delete_room_state(conversation_id)
+            for owner in self._room_state_owners
         ]
-        for collection in collections:
-            await collection.delete_many({"room_id": room_id})
-        for collection in collections:
-            if await collection.count({"room_id": room_id}):
-                return False
-        return True
+        return all(results)
 
     async def recover(self, *, max_age_hours: int = 24) -> int:
         """Idempotently recover stale writes and remove unreferenced uploads."""
@@ -890,41 +895,29 @@ class RoomFiles:
             if referenced is not None:
                 continue
             recovered += await self.delete_superseded_agent_artifacts(
-                room_id=str(doc["room_id"]),
+                conversation_id=str(doc["room_id"]),
                 source_message_id=source_message_id,
                 file_ids={file_id},
             )
         return recovered
 
     async def _recover_room_deletions(self) -> int:
-        if self._rooms is None:
+        if self._room_lifecycle is None:
             return 0
         cutoff = self._now() - timedelta(minutes=5)
-        cursor = self._rooms.find(
-            {
-                "lifecycle_state": "deleting",
-                "deletion_started_at": {"$lt": cutoff},
-            }
-        )
-        if inspect.isawaitable(cursor):
-            cursor = await cursor
+        stale = await self._room_lifecycle.list_stale_deletions(started_before=cutoff)
         recovered = 0
-        async for room in _aiter_documents(cursor):
-            room_id = str(room["room_id"])
-            deletion_id = str(room.get("deletion_id") or "")
-            if not await self.wait_for_room_writes(room_id):
+        for conversation_id, deletion_id in stale:
+            if not await self.wait_for_room_writes(conversation_id):
                 continue
-            await self.delete_for_room(room_id, deletion_id=deletion_id)
-            if not await self.delete_room_state(room_id):
+            await self.delete_for_room(conversation_id, deletion_id=deletion_id)
+            if not await self.delete_room_state(conversation_id):
                 continue
-            deleted = await self._rooms.delete_one(
-                {
-                    "room_id": room_id,
-                    "lifecycle_state": "deleting",
-                    "deletion_id": deletion_id,
-                }
+            recovered += int(
+                await self._room_lifecycle.delete_room_in_deletion(
+                    conversation_id, deletion_id
+                )
             )
-            recovered += int(_changed(deleted, attribute="deleted_count"))
         return recovered
 
     async def _recover_reference_claims(self, cutoff: datetime) -> int:
@@ -1081,20 +1074,14 @@ class RoomFiles:
                     recovered += 1
         return recovered
 
-    async def _room_owner(self, room_id: str) -> str | None:
-        if self._rooms is None:
+    async def _room_owner(self, conversation_id: str) -> str | None:
+        if self._room_lifecycle is None:
             return None
-        room = await self._rooms.find_one({"room_id": room_id})
-        if room is None:
-            return None
-        if room.get("lifecycle_state", "active") != "active":
-            return None
-        owner = room.get("room_owner_id") or room.get("owner_id")
-        return str(owner) if owner else None
+        return await self._room_lifecycle.get_active_room_owner(conversation_id)
 
-    async def _assert_lease(self, room_id: str, lease_id: str | None) -> None:
+    async def _assert_lease(self, conversation_id: str, lease_id: str | None) -> None:
         if self._leases is not None and lease_id is not None:
-            await self._leases.assert_valid(room_id, lease_id)
+            await self._leases.assert_valid(conversation_id, lease_id)
 
     def _file_info(self, doc: dict[str, Any]) -> FileInfo:
         file_id = str(doc["file_id"])
@@ -1125,8 +1112,3 @@ def _changed(result: Any, *, attribute: str = "modified_count") -> bool:
     if isinstance(result, bool):
         return result
     return bool(getattr(result, attribute, 0))
-
-
-def _collection_name(collection: Any) -> str | None:
-    name = getattr(collection, "name", None)
-    return str(name) if name else None

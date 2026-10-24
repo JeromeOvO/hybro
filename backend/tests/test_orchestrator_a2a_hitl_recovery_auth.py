@@ -144,7 +144,7 @@ class TrustedAuthReferences:
         call_record_id,
         binding_id="binding-run-1",
         binding_digest="binding-digest-run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         expires_at=None,
         **challenge_identity,
@@ -154,7 +154,7 @@ class TrustedAuthReferences:
             "call_record_id": call_record_id,
             "binding_id": binding_id,
             "binding_digest": binding_digest,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "room_epoch": room_epoch,
             "expires_at": expires_at or datetime.now(UTC) + timedelta(minutes=5),
             **challenge_identity,
@@ -171,7 +171,7 @@ class TrustedAuthReferences:
             "call_record_id": context["call_record_id"],
             "binding_id": context["binding_id"],
             "binding_digest": context["binding_digest"],
-            "room_id": context["room_id"],
+            "room_id": context["conversation_id"],
             "room_epoch": context["room_epoch"],
         }
         expected.update(
@@ -540,7 +540,7 @@ async def test_in_memory_hitl_answer_requires_exact_revision_and_excludes_cancel
     assert [
         interaction.interaction_id
         for interaction, _route, _fingerprint in await hitl.get_published_interactions(
-            call.room_id
+            call.conversation_id
         )
     ] == ["interaction-1"]
 
@@ -1302,12 +1302,12 @@ async def test_answer_marker_recovers_all_pre_command_crash_boundaries(failure):
         original_verify = coordinator.room_epochs.verify_active
         crashed = False
 
-        async def crash_verify(room_id, epoch):
+        async def crash_verify(conversation_id, epoch):
             nonlocal crashed
             if not crashed:
                 crashed = True
                 raise OSError("crash after claim")
-            return await original_verify(room_id, epoch)
+            return await original_verify(conversation_id, epoch)
 
         coordinator.room_epochs.verify_active = crash_verify
     resume_kwargs = {
@@ -1445,7 +1445,7 @@ async def test_continuation_interaction_receipt_parks_typed_second_round():
     stored = hitl.read_interaction_for_test("interaction-2")
     assert stored is not None
     assert stored[2] == persisted.interaction_fingerprint
-    assert await hitl.get_published_interactions(call.room_id) == []
+    assert await hitl.get_published_interactions(call.conversation_id) == []
     assert hitl.read_interaction_for_test("interaction-1") is None
     assert len(dispatch.commands) == 1
     first_command = dispatch.commands[0]
@@ -1814,7 +1814,7 @@ async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persisten
         call_record_id=call.call_record_id,
         binding_id=call.binding_id,
         binding_digest=call.binding_digest,
-        room_id=call.room_id,
+        conversation_id=call.conversation_id,
         room_epoch=call.room_epoch,
         **exact_identity,
     )
@@ -1825,7 +1825,7 @@ async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persisten
             call_record_id=call.call_record_id,
             binding_id=call.binding_id,
             binding_digest=call.binding_digest,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             **exact_identity,
         )
@@ -1844,7 +1844,7 @@ async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persisten
                 call_record_id=call.call_record_id,
                 binding_id=call.binding_id,
                 binding_digest=call.binding_digest,
-                room_id=call.room_id,
+                conversation_id=call.conversation_id,
                 room_epoch=call.room_epoch,
                 **unsafe,
             )
@@ -1855,7 +1855,7 @@ async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persisten
             call_record_id="other-call",
             binding_id=call.binding_id,
             binding_digest=call.binding_digest,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             **auth_reference_identity(call, route, "authref:valid"),
         )
@@ -2032,3 +2032,33 @@ async def test_recovery_dispatches_an_applied_answer_left_without_a_command():
     assert await recovery.recover_due(due_at=datetime.now(UTC)) == 1
     assert (await ledger.load_by_record_id(call.call_record_id)).state == "working"
     assert len(dispatch.commands) == 1
+
+
+async def test_answer_for_closed_interaction_stops_reconciling(caplog):
+    coordinator, ledger, hitl, _refs, dispatch, call, route = await setup_waiting()
+    await hitl.answer(
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+        verified_auth_reference_digests=[],
+        verified_auth_references=[],
+    )
+    assert (
+        await hitl.abandon(
+            "interaction-1",
+            call_record_id=call.call_record_id,
+            reason="superseded_by_new_interaction",
+        )
+        == "accepted"
+    )
+
+    with caplog.at_level("WARNING"):
+        state = await coordinator.reconcile_answer(call_record_id=call.call_record_id)
+        recovery = A2AContinuationRecoveryService(coordinator, ledger)
+        assert await recovery.recover_due(due_at=datetime.now(UTC), limit=10) == 0
+
+    assert state == "input_required"
+    assert dispatch.commands == []
+    assert "hitl_answer_reconcile_deferred" not in caplog.text

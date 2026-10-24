@@ -3,44 +3,36 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from inspect import isawaitable
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
-from common.a2a_constants import is_terminal_state
-from common.a2a_task_projection import public_persisted_task_data
 from common.dto import (
     AgentInfo,
     AgentMessageInput,
     CreateRoomRequest,
-    MembershipSeed,
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
-    RoomTimelineEntry,
-    RoomTimelinePage,
     SavedUserMessage,
-    TimelinePosition,
     UserMessageInput,
-    UserMessageInsertResult,
 )
+from common.dto.base import to_stored_conversation_keys
 from common.observability import NoopTracingProvider
-from common.protocols import (
-    AgentRegistry,
-    AttachmentMetadataReader,
-    MessageRepository,
-    RoomMembershipSeedSource,
-    RoomRepository,
-)
-from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
-from common.types import MessageRole as Role
+from common.protocols import AgentRegistry, RoomRepository
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import (
+    RoomTimelineEntry,
+    RoomTimelinePage,
+    TimelinePosition,
+    UserMessageInsertResult,
+)
 from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
 )
-from conversation.membership import resolve_membership_seed
+from conversation.membership import RoomMembershipSeedSource, resolve_membership_seed
 from conversation.translators import (
     agent_message_doc_from_input,
     create_room_doc,
@@ -53,11 +45,87 @@ from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 
+_CANONICAL_CARD_PREFIX = "orchestrator:"
+_CANONICAL_PUBLIC_CALL_PREFIX = "inv_"
+
+
+@runtime_checkable
+class CanonicalAgentCallReader(Protocol):
+    """Confirms that a canonical Agent Card names a call in the given room."""
+
+    async def agent_call_exists(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        public_call_id: str,
+    ) -> bool: ...
+
+
+def _parse_canonical_card_id(message_id: str) -> tuple[str, str] | None:
+    """Split ``orchestrator:{run_id}:{public_call_id}``; ``None`` when malformed."""
+
+    if not message_id.startswith(_CANONICAL_CARD_PREFIX):
+        return None
+    separator = message_id.rfind(":" + _CANONICAL_PUBLIC_CALL_PREFIX)
+    if separator <= len(_CANONICAL_CARD_PREFIX):
+        return None
+    run_id = message_id[len(_CANONICAL_CARD_PREFIX) : separator]
+    public_call_id = message_id[separator + 1 :]
+    if public_call_id == _CANONICAL_PUBLIC_CALL_PREFIX or ":" in public_call_id:
+        return None
+    return run_id, public_call_id
+
+
+@runtime_checkable
+class MessageRepository(Protocol):
+    async def save_user_message(self, message: dict) -> str: ...
+    async def get_user_message_by_idempotency_key(
+        self, conversation_id: str, client_request_id: str
+    ) -> dict | None: ...
+    async def insert_user_message_idempotently(
+        self, document: dict
+    ) -> UserMessageInsertResult: ...
+    async def save_agent_message(self, message: dict) -> str: ...
+    async def get_by_id(self, message_id: str) -> dict | None: ...
+    async def get_user_message_by_id(self, message_id: str) -> dict | None: ...
+    async def get_agent_message_by_id(self, message_id: str) -> dict | None: ...
+
+    async def update_user_message(self, message_id: str, updates: dict) -> bool: ...
+    async def update_agent_message(self, message_id: str, updates: dict) -> bool: ...
+    async def update_agent_message_if_not_terminal(
+        self, message_id: str, updates: dict, terminal_states: list[str]
+    ) -> bool: ...
+    async def count_agent_messages(self, query: dict) -> int: ...
+    async def get_by_ids(self, message_ids: list[str]) -> list[dict]: ...
+    async def get_for_room(
+        self, conversation_id: str, limit: int, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_timeline_page(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+        before: TimelinePosition | None,
+    ) -> RoomTimelinePage: ...
+    async def get_thread(self, parent_message_id: str) -> list[dict]: ...
+    async def update_status(self, message_id: str, status: str, **fields) -> bool: ...
+    async def delete_for_room(self, conversation_id: str) -> dict[str, int]: ...
+    async def get_user_messages_for_room(
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_agent_messages_for_room(
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]: ...
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]: ...
+
+
 _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
     {
         "room_name",
         "extend_info",
-        "processing_message_id",
         "last_activity_at",
         "is_pinned",
         "pin_order",
@@ -92,19 +160,24 @@ class ConversationFacade:
         self._now = now
         self._tracer = tracer or NoopTracingProvider()
         self._epoch_store = epoch_store
+        self._agent_call_reader: CanonicalAgentCallReader | None = None
 
-    async def get_room(self, room_id: str) -> RoomInfo | None:
-        doc = await self._repository.get_by_id(room_id)
+    def bind_agent_call_reader(self, reader: CanonicalAgentCallReader) -> None:
+        """Late-bound: the canonical run store is composed after this facade."""
+        self._agent_call_reader = reader
+
+    async def get_room(self, conversation_id: str) -> RoomInfo | None:
+        doc = await self._repository.get_by_id(conversation_id)
         if doc is not None and doc.get("lifecycle_state", "active") != "active":
             return None
         return room_info_from_doc(doc) if doc is not None else None
 
-    async def get_room_agents(self, room_id: str) -> list[str]:
-        room = await self.get_room(room_id)
+    async def get_room_agents(self, conversation_id: str) -> list[str]:
+        room = await self.get_room(conversation_id)
         return list(room.agent_ids) if room is not None else []
 
-    async def get_room_owner(self, room_id: str) -> str | None:
-        doc = await self._repository.get_by_id(room_id)
+    async def get_room_owner(self, conversation_id: str) -> str | None:
+        doc = await self._repository.get_by_id(conversation_id)
         return _owner_id_from_doc(doc)
 
     async def create_room(self, request: CreateRoomRequest) -> RoomInfo:
@@ -118,10 +191,10 @@ class ConversationFacade:
         if self._epoch_store is None:
             raise RuntimeError("Room epoch store is not bound")
         epoch_store = self._epoch_store
-        room_id = self._id_factory()
+        conversation_id = self._id_factory()
         creation_id = uuid4().hex
         doc = create_room_doc(
-            room_id=room_id,
+            conversation_id=conversation_id,
             owner_id=request.owner_id,
             owner_name=request.owner_name,
             room_name=request.room_name,
@@ -137,47 +210,49 @@ class ConversationFacade:
         await self._repository.create(doc)
         try:
             outcome, _ = await epoch_store.activate(
-                room_id, creation_id, activated_at=self._now()
+                conversation_id, creation_id, activated_at=self._now()
             )
         except Exception as exc:
-            await self._compensate_room_creation(room_id)
+            await self._compensate_room_creation(conversation_id)
             logger.error(
-                "Room epoch activation failed for room_id=%s", room_id, exc_info=True
+                "Room epoch activation failed for conversation_id=%s",
+                conversation_id,
+                exc_info=True,
             )
             raise ValueError("Room epoch activation failed") from exc
         if outcome == "conflict":
-            await self._compensate_room_creation(room_id)
+            await self._compensate_room_creation(conversation_id)
             raise ValueError("Room epoch activation conflict")
         return room_info_from_doc(doc)
 
-    async def _compensate_room_creation(self, room_id: str) -> None:
+    async def _compensate_room_creation(self, conversation_id: str) -> None:
         try:
-            await self._repository.delete(room_id)
+            await self._repository.delete(conversation_id)
         except Exception:
             logger.warning(
-                "Failed to compensate room creation for room_id=%s",
-                room_id,
+                "Failed to compensate room creation for conversation_id=%s",
+                conversation_id,
                 exc_info=True,
             )
 
-    async def delete_room(self, room_id: str, owner_id: str) -> bool:
-        doc = await self._repository.get_by_id(room_id)
+    async def delete_room(self, conversation_id: str, owner_id: str) -> bool:
+        doc = await self._repository.get_by_id(conversation_id)
         if _owner_id_from_doc(doc) != owner_id:
             return False
-        await self._message_repository.delete_for_room(room_id)
-        return await self._repository.delete(room_id)
+        await self._message_repository.delete_for_room(conversation_id)
+        return await self._repository.delete(conversation_id)
 
-    async def update_room(self, room_id: str, updates: dict) -> RoomInfo | None:
+    async def update_room(self, conversation_id: str, updates: dict) -> RoomInfo | None:
         unknown = set(updates) - _ALLOWED_ROOM_UPDATE_KEYS
         if unknown:
             raise ValueError(f"Unknown room update keys: {sorted(unknown)}")
-        updated = await self._repository.update_fields(room_id, dict(updates))
+        updated = await self._repository.update_fields(conversation_id, dict(updates))
         return room_info_from_doc(updated) if updated is not None else None
 
     async def update_membership(
-        self, room_id: str, request: MembershipUpdateRequest
+        self, conversation_id: str, request: MembershipUpdateRequest
     ) -> RoomInfo:
-        doc = await self._repository.get_by_id(room_id)
+        doc = await self._repository.get_by_id(conversation_id)
         if doc is None:
             raise ValueError("Room not found")
 
@@ -201,7 +276,7 @@ class ConversationFacade:
             status = "manual"
 
         updated = await self._repository.set_membership(
-            room_id,
+            conversation_id,
             agent_set=agent_set,
             membership_origin=origin,
             membership_origin_status=status,
@@ -212,44 +287,8 @@ class ConversationFacade:
             raise ValueError("Room not found")
         return room_info_from_doc(updated)
 
-    async def replace_membership(
-        self,
-        room_id: str,
-        seed: MembershipSeed,
-        requesting_user_id: str | None = None,
-    ) -> RoomInfo:
-        doc = await self._repository.get_by_id(room_id)
-        if doc is None:
-            raise ValueError("Room not found")
-        room = room_info_from_doc(doc)
-        resolved_seed = seed
-        if requesting_user_id is not None:
-            resolved_seed = MembershipSeed(
-                mode=seed.mode,
-                agent_ids=list(seed.agent_ids) if seed.agent_ids is not None else None,
-                group_id=seed.group_id,
-                requesting_user_id=requesting_user_id,
-            )
-        resolved = await resolve_membership_seed(
-            seed=resolved_seed,
-            owner_id=room.owner_id,
-            agent_registry=self._agent_registry,
-            membership_source=self._membership_source,
-        )
-        updated = await self._repository.set_membership(
-            room_id,
-            agent_set=resolved.agent_set,
-            membership_origin=resolved.membership_origin,
-            membership_origin_status=resolved.membership_origin_status,
-            source_group_id=resolved.source_group_id,
-            source_group_name=resolved.source_group_name,
-        )
-        if updated is None:
-            raise ValueError("Room not found")
-        return room_info_from_doc(updated)
-
-    async def delete_room_owned_messages(self, room_id: str) -> dict[str, int]:
-        return await self._message_repository.delete_for_room(room_id)
+    async def delete_room_owned_messages(self, conversation_id: str) -> dict[str, int]:
+        return await self._message_repository.delete_for_room(conversation_id)
 
     async def delete_room_quote(self, quote_id: str) -> bool:
         if self._quote_repository is None:
@@ -257,32 +296,36 @@ class ConversationFacade:
         return bool(await self._quote_repository.delete_by_id(quote_id))
 
     async def get_attachment_for_room_file(
-        self, room_id: str, file_id: str
+        self, conversation_id: str, file_id: str
     ) -> dict | None:
         reader = self._attachment_metadata_reader
         if reader is None:
             return None
-        return await reader.get_for_room_file(room_id, file_id)
+        return await reader.get_for_room_file(conversation_id, file_id)
 
-    async def cleanup_room_owned_data(self, room_id: str) -> dict[str, int]:
-        result: dict[str, int] = await self._message_repository.delete_for_room(room_id)
+    async def cleanup_room_owned_data(self, conversation_id: str) -> dict[str, int]:
+        result: dict[str, int] = await self._message_repository.delete_for_room(
+            conversation_id
+        )
         if self._quote_repository is not None:
-            result["quotes"] = await self._quote_repository.delete_for_room(room_id)
+            result["quotes"] = await self._quote_repository.delete_for_room(
+                conversation_id
+            )
         return result
 
     async def save_user_message(
-        self, room_id: str, message: UserMessageInput
+        self, conversation_id: str, message: UserMessageInput
     ) -> SavedUserMessage:
-        await self._require_room(room_id)
+        await self._require_room(conversation_id)
         message_id = self._id_factory()
         doc = user_message_doc_from_input(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             message=message,
             created_at=self._now(),
         )
         await self._message_repository.save_user_message(doc)
-        await self._touch_room_activity(room_id)
+        await self._touch_room_activity(conversation_id)
         return saved_user_message_from_doc(doc)
 
     def ensure_user_message_id(self, user_message: RoomUserMessage) -> str:
@@ -299,7 +342,9 @@ class ConversationFacade:
     ) -> UserMessageInsertResult:
         try:
             self.ensure_user_message_id(user_message)
-            doc = user_message.model_dump(mode="json", exclude={"quote"})
+            doc = to_stored_conversation_keys(
+                user_message.model_dump(mode="json", exclude={"quote"})
+            )
             _strip_file_urls(doc)
             if idempotency_fingerprint is not None:
                 if idempotency_fingerprint_version is None:
@@ -310,11 +355,11 @@ class ConversationFacade:
                     await self._message_repository.insert_user_message_idempotently(doc)
                 )
                 if result.created:
-                    await self._touch_room_activity(user_message.room_id)
+                    await self._touch_room_activity(user_message.conversation_id)
                 return result
 
             message_id = await self._message_repository.save_user_message(doc)
-            await self._touch_room_activity(user_message.room_id)
+            await self._touch_room_activity(user_message.conversation_id)
             return UserMessageInsertResult(
                 message_id=message_id,
                 created=True,
@@ -330,36 +375,38 @@ class ConversationFacade:
                 "Failed to persist room user message"
             ) from exc
 
-    async def save_agent_message(self, room_id: str, message: AgentMessageInput) -> str:
-        await self._require_room(room_id)
+    async def save_agent_message(
+        self, conversation_id: str, message: AgentMessageInput
+    ) -> str:
+        await self._require_room(conversation_id)
         message_id = self._id_factory()
         doc = agent_message_doc_from_input(
-            room_id=room_id,
+            conversation_id=conversation_id,
             message_id=message_id,
             message=message,
             created_at=self._now(),
         )
         saved_id = await self._message_repository.save_agent_message(doc)
-        await self._touch_room_activity(room_id)
+        await self._touch_room_activity(conversation_id)
         return saved_id
 
-    async def _touch_room_activity(self, room_id: str) -> None:
+    async def _touch_room_activity(self, conversation_id: str) -> None:
         try:
             activity_at = self._now()
             touch_activity = getattr(self._repository, "touch_activity", None)
             if touch_activity is not None:
-                result = touch_activity(room_id, activity_at)
+                result = touch_activity(conversation_id, activity_at)
             else:
                 result = self._repository.update_fields(
-                    room_id,
+                    conversation_id,
                     {"last_activity_at": activity_at},
                 )
             if isawaitable(result):
                 await result
         except Exception:
             logger.warning(
-                "Failed to update room activity timestamp for room_id=%s",
-                room_id,
+                "Failed to update room activity timestamp for conversation_id=%s",
+                conversation_id,
                 exc_info=True,
             )
 
@@ -368,7 +415,9 @@ class ConversationFacade:
     ) -> bool:
         try:
             update_data = _strip_unset_task_tracking_fields(
-                message.model_dump(exclude_unset=True, mode="json")
+                to_stored_conversation_keys(
+                    message.model_dump(exclude_unset=True, mode="json")
+                )
             )
             return bool(
                 await self._message_repository.update_agent_message(
@@ -398,11 +447,11 @@ class ConversationFacade:
 
     async def get_user_message_by_idempotency_key(
         self,
-        room_id: str,
+        conversation_id: str,
         client_request_id: str,
     ) -> dict | None:
         return await self._message_repository.get_user_message_by_idempotency_key(
-            room_id,
+            conversation_id,
             client_request_id,
         )
 
@@ -411,9 +460,13 @@ class ConversationFacade:
         doc = await getter(message_id) if getter is not None else None
         return _safe_parse_agent_message(doc)
 
-    async def get_user_messages_for_room(self, room_id: str) -> list[RoomUserMessage]:
+    async def get_user_messages_for_room(
+        self, conversation_id: str
+    ) -> list[RoomUserMessage]:
         try:
-            docs = await self._message_repository.get_user_messages_for_room(room_id)
+            docs = await self._message_repository.get_user_messages_for_room(
+                conversation_id
+            )
             return [
                 message
                 for doc in docs
@@ -423,15 +476,18 @@ class ConversationFacade:
             logger.error("Failed to get room user messages", exc_info=True)
             return []
 
-    async def get_agent_messages_for_room(self, room_id: str) -> list[RoomAgentMessage]:
+    async def get_agent_messages_for_room(
+        self, conversation_id: str
+    ) -> list[RoomAgentMessage]:
         try:
-            docs = await self._message_repository.get_agent_messages_for_room(room_id)
+            docs = await self._message_repository.get_agent_messages_for_room(
+                conversation_id
+            )
             messages = [
                 message
                 for doc in docs
                 if (message := _safe_parse_agent_message(doc)) is not None
             ]
-            await self._auto_fail_stale_agent_messages(messages)
             return messages
         except Exception:
             logger.error("Failed to get room agent messages", exc_info=True)
@@ -439,18 +495,17 @@ class ConversationFacade:
 
     async def get_timeline_page(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         limit: int,
         before: TimelinePosition | None,
     ) -> RoomTimelinePage:
         page = await self._message_repository.get_timeline_page(
-            room_id,
+            conversation_id,
             limit=limit,
             before=before,
         )
         entries: list[RoomTimelineEntry] = []
-        selected_agents: list[RoomAgentMessage] = []
         for entry in page.entries:
             try:
                 if entry.source == "user":
@@ -464,15 +519,12 @@ class ConversationFacade:
                     else None
                 )
                 logger.error(
-                    "Invalid selected timeline message room_id=%s message_id=%s",
-                    room_id,
+                    "Invalid selected timeline message conversation_id=%s message_id=%s",
+                    conversation_id,
                     message_id,
                 )
                 raise ValueError("Invalid stored room timeline message") from None
-            if isinstance(message, RoomAgentMessage):
-                selected_agents.append(message)
             entries.append(RoomTimelineEntry(source=entry.source, message=message))
-        await self._auto_fail_stale_agent_messages(selected_agents)
         return RoomTimelinePage(
             entries=entries,
             has_more=page.has_more,
@@ -498,12 +550,12 @@ class ConversationFacade:
             return []
 
     async def get_messages_for_room(
-        self, room_id: str, limit: int = 100, before: datetime | None = None
+        self, conversation_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[RoomMessageInfo]:
         return [
             message_info_from_doc(doc)
             for doc in await self._message_repository.get_for_room(
-                room_id, limit, before
+                conversation_id, limit, before
             )
         ]
 
@@ -517,16 +569,6 @@ class ConversationFacade:
             for message_id in message_ids
             if message_id in by_id
         ]
-
-    async def get_turn_completion_kind(self, message_id: str) -> str | None:
-        doc = await self._message_repository.get_by_id(message_id)
-        if not isinstance(doc, dict):
-            return None
-        extend_info = doc.get("extend_info")
-        if not isinstance(extend_info, dict):
-            return None
-        kind = extend_info.get("turn_completion_kind")
-        return kind if kind in {"synthesis", "deterministic"} else None
 
     async def materialize_quote(
         self,
@@ -553,33 +595,19 @@ class ConversationFacade:
             if hasattr(payload.source_kind, "value")
             else payload.source_kind
         )
-        source_kind_value = str(source_kind)
-        if source_kind_value not in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
-            source_message = await self.get_message(payload.source_message_id)
-            if source_message is None or source_message.room_id != room.room_id:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source",
-                    status_code=400,
-                )
-            expected_message_type = {
-                "user_turn": "user",
-                "agent": "agent",
-                "synthesis": "agent",
-            }.get(source_kind_value.lower())
-            if (
-                expected_message_type is not None
-                and source_message.message_type != expected_message_type
-            ):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source type",
-                    status_code=400,
-                )
+        source_error = await self._quote_source_error(
+            conversation_id=room.conversation_id,
+            source_message_id=payload.source_message_id,
+            source_kind=str(source_kind),
+        )
+        if source_error is not None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=source_error,
+                status_code=400,
+            )
 
         if self._quote_repository is None:
             return RoomCenterUserMessageResponse(
@@ -592,7 +620,7 @@ class ConversationFacade:
 
         try:
             snippet = QuotedSnippet(
-                room_id=room.room_id,
+                conversation_id=room.conversation_id,
                 created_by_user_id=request.user_id or user_message.user_id or "",
                 text=text,
                 source_message_id=payload.source_message_id,
@@ -623,77 +651,71 @@ class ConversationFacade:
         user_message.quote = None
         return None
 
-    @staticmethod
-    def _is_orchestrator_managed_agent_message(msg: RoomAgentMessage) -> bool:
-        # Orchestrator recovery owns these cards; room hydrate must not
-        # auto-fail them as legacy stale tasks.
-        extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
-        run_id = extend_info.get("orchestrator_run_id")
-        return isinstance(run_id, str) and bool(run_id.strip())
-
-    async def _auto_fail_stale_agent_messages(  # noqa: C901
+    async def _quote_source_error(
         self,
-        messages: list[RoomAgentMessage],
-    ) -> None:
-        stale_task_threshold = 10 * 60
+        *,
+        conversation_id: str,
+        source_message_id: str,
+        source_kind: str,
+    ) -> str | None:
+        """Return the 400 error for an invalid quote source, else ``None``."""
 
-        def is_task_stale(msg: RoomAgentMessage) -> bool:
-            timestamp = msg.task_updated_at or msg.task_created_at
-            # Missing timestamps are not treated as stale — avoids false-failing
-            # working tasks before task timestamps are stamped.
-            if timestamp is None:
-                return False
-            return (
-                utcnow() - ensure_utc(timestamp)
-            ).total_seconds() > stale_task_threshold
+        if source_message_id.startswith(_CANONICAL_CARD_PREFIX):
+            valid = await self._canonical_quote_source_is_valid(
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                source_kind=source_kind,
+            )
+            return None if valid else "Invalid quote source"
+        if source_kind in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
+            return None
+        source_message = await self.get_message(source_message_id)
+        if source_message is None or source_message.conversation_id != conversation_id:
+            return "Invalid quote source"
+        expected_message_type = {
+            "user_turn": "user",
+            "agent": "agent",
+            "synthesis": "agent",
+        }.get(source_kind.lower())
+        if (
+            expected_message_type is not None
+            and source_message.message_type != expected_message_type
+        ):
+            return "Invalid quote source type"
+        return None
 
-        def mark_failed(msg: RoomAgentMessage, error_text: str) -> None:
-            task = msg.message_content.message_task if msg.message_content else None
-            if task:
-                public_task = Task.model_validate(public_persisted_task_data(task))
-                public_task.status = TaskStatus(
-                    state=TaskState.failed,
-                    message=Message(
-                        message_id=self._id_factory(),
-                        role=Role.AGENT,
-                        parts=[Part(root=TextPart(text=error_text))],
-                    ),
-                )
-                msg.message_content.message_task = public_task
-            msg.task_updated_at = utcnow()
+    async def _canonical_quote_source_is_valid(
+        self,
+        *,
+        conversation_id: str,
+        source_message_id: str,
+        source_kind: str,
+    ) -> bool:
+        """Canonical Agent Cards are not room messages; check the call record.
 
-        for msg in messages:
-            if self._is_orchestrator_managed_agent_message(msg):
-                continue
-            task = msg.message_content.message_task if msg.message_content else None
-            if task is None:
-                continue
-            current_state = task.status.state
-            if is_terminal_state(current_state):
-                continue
-            extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
-            if extend_info.get("orchestrator_run_id"):
-                # The durable orchestrator lifecycle owns this projection. Its
-                # compatibility card has no legacy webhook tracker and must not
-                # be terminalized by the legacy orphan detector.
-                continue
-            if not msg.has_task_tracking:
-                if current_state == TaskState.working and is_task_stale(msg):
-                    mark_failed(
-                        msg,
-                        "Task did not complete — the connection was lost, "
-                        "possibly due to a server restart.",
-                    )
-                    await self.update_agent_message(msg.message_id, msg)
-                continue
-            if is_task_stale(msg):
-                mark_failed(
-                    msg,
-                    "Task did not complete — no progress was received within "
-                    "the expected timeframe. This may have been caused by "
-                    "a server restart or agent failure.",
-                )
-                await self.update_agent_message(msg.message_id, msg)
+        Fails closed: a malformed id, a non-``agent`` kind, a missing reader, a
+        reader error, and an unknown or foreign call are indistinguishable.
+        """
+
+        if source_kind != QuoteSourceKind.AGENT.value:
+            return False
+        identity = _parse_canonical_card_id(source_message_id)
+        if identity is None or self._agent_call_reader is None:
+            return False
+        run_id, public_call_id = identity
+        try:
+            return await self._agent_call_reader.agent_call_exists(
+                conversation_id=conversation_id,
+                run_id=run_id,
+                public_call_id=public_call_id,
+            )
+        except Exception:
+            logger.warning(
+                "Canonical quote source lookup failed for room %s",
+                conversation_id,
+                exc_info=True,
+            )
+            return False
 
     async def get_message_thread(self, parent_message_id: str) -> list[RoomMessageInfo]:
         return [
@@ -701,20 +723,10 @@ class ConversationFacade:
             for doc in await self._message_repository.get_thread(parent_message_id)
         ]
 
-    async def verify_room_agent_membership(self, room_id: str, agent_id: str) -> bool:
-        return agent_id in await self.get_room_agents(room_id)
-
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        repository_checker = getattr(
-            self._message_repository, "is_message_cancelled", None
-        )
-        if repository_checker is not None:
-            return bool(await repository_checker(message_id))
-        doc = await self._message_repository.get_by_id(message_id)
-        if doc is None:
-            return False
-        status = str(doc.get("status") or doc.get("message_status") or "").lower()
-        return bool(doc.get("is_cancelled")) or status in {"cancelled", "canceled"}
+    async def verify_room_agent_membership(
+        self, conversation_id: str, agent_id: str
+    ) -> bool:
+        return agent_id in await self.get_room_agents(conversation_id)
 
     def _validate_create_room_request(self, request: CreateRoomRequest) -> None:
         if not request.owner_id:
@@ -754,8 +766,8 @@ class ConversationFacade:
             raise ValueError(f"Inactive agent IDs: {', '.join(inactive)}")
         return {agent.agent_id: agent.name or agent.agent_id for agent in agents}
 
-    async def _require_room(self, room_id: str) -> dict:
-        doc = await self._repository.get_by_id(room_id)
+    async def _require_room(self, conversation_id: str) -> dict:
+        doc = await self._repository.get_by_id(conversation_id)
         if doc is None:
             raise ValueError("Room not found")
         return doc
@@ -824,8 +836,6 @@ def _strip_file_urls(doc: dict) -> None:
 
 def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:
     task_tracking_fields = {
-        "webhook_token_hash",
-        "pending_continuation",
         "last_notified_state",
         "agent_url",
         "task_created_at",

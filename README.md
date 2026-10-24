@@ -60,7 +60,9 @@ hybro start          # pulls the images published for this CLI's version
 - **MCP Server**: http://127.0.0.1:8001/mcp (Streamable HTTP, same-host clients)
 
 Running `hybro` with no arguments opens the same settings/services interface in
-a terminal. `hybro --version` prints the CLI and stack version.
+a terminal. After **Verify and save** there, **Start services** recreates the
+containers so the saved settings take effect; from a checkout it also rebuilds
+images. `hybro --version` prints the CLI and stack version.
 
 Alternatively, run the CLI without installing it by unpacking a release asset
 (`hybro-<version>-<platform>.tar.gz` from the GitHub Release) and executing
@@ -137,10 +139,12 @@ Waits for the owner or for a remote Agent:
 |---|---|---|
 | `backend.approval_deadline_hours` | `null` (no deadline) | Hours before an unanswered supervisor question expires and fails its Run. Must be greater than 0 when set. |
 | `backend.orchestrator_call_wait_ceiling_hours` | `168` (seven days) | Hours an acknowledged remote Agent task is polled with `tasks/get` before the call expires. Must be greater than 0. |
+| `backend.a2a_push_callback_base_url` | `""` (push disabled) | Base URL that remote Agents can reach. Must be `https`; plain `http` is accepted only for loopback (`localhost`, `127.0.0.0/8`, `::1`), `host.docker.internal`, or a private RFC 1918 address, because the per-call push token travels in a request header. When set, Hybro registers a per-call push notification URL with Agents whose card advertises push support, so late results arrive without waiting for the next poll. Polling stays the fallback. |
 
 ```bash
 ./scripts/hybro config set backend.approval_deadline_hours 48
 ./scripts/hybro config set backend.orchestrator_call_wait_ceiling_hours 72.5
+./scripts/hybro config set backend.a2a_push_callback_base_url '"https://hybro.example.com"'
 ```
 
 A Run waiting for an answer or a remote Agent does not count that time against

@@ -17,9 +17,9 @@ interface CanonicalRoomState {
 
 interface TurnStore {
   rooms: Record<string, CanonicalRoomState>
-  replaceSnapshot: (roomId: string, turns: RoomSnapshotTurn[]) => { ok: true } | { ok: false; violation: string }
-  applyEvent: (roomId: string, event: CanonicalFoldEvent) => { handled: true; ok: boolean; violation?: string }
-  clearRoom: (roomId: string) => void
+  replaceSnapshot: (conversationId: string, turns: RoomSnapshotTurn[]) => { ok: true } | { ok: false; violation: string }
+  applyEvent: (conversationId: string, event: CanonicalFoldEvent) => { handled: true; ok: boolean; violation?: string }
+  clearRoom: (conversationId: string) => void
   clear: () => void
 }
 
@@ -27,11 +27,11 @@ const emptyRoom = (): CanonicalRoomState => ({ turns: {}, order: [] })
 
 export const useTurnStore = create<TurnStore>((set, get) => ({
   rooms: {},
-  replaceSnapshot: (roomId, snapshotTurns) => {
+  replaceSnapshot: (conversationId, snapshotTurns) => {
     const turns: TurnProjectionMap = {}
     const order: string[] = []
     for (const value of snapshotTurns) {
-      const turn = snapshotTurnToProjection(roomId, value)
+      const turn = snapshotTurnToProjection(conversationId, value)
       const violation = validateProjectionClosure(turn)
       if (violation) return { ok: false as const, violation }
       turns[turn.id] = turn
@@ -40,21 +40,21 @@ export const useTurnStore = create<TurnStore>((set, get) => ({
     set((state) => ({
       rooms: {
         ...state.rooms,
-        [roomId]: { turns, order },
+        [conversationId]: { turns, order },
       },
     }))
     const presentation = useTurnPresentationStore.getState()
     for (const turnId of order) presentation.ensure(turns[turnId], true)
     return { ok: true as const }
   },
-  applyEvent: (roomId, event) => {
-    const current = get().rooms[roomId] ?? emptyRoom()
-    const result = foldCanonicalEvent(current.turns, roomId, event)
+  applyEvent: (conversationId, event) => {
+    const current = get().rooms[conversationId] ?? emptyRoom()
+    const result = foldCanonicalEvent(current.turns, conversationId, event)
     if (!result.ok) {
       set((state) => ({
         rooms: {
           ...state.rooms,
-          [roomId]: { ...current, protocolViolation: result.violation },
+          [conversationId]: { ...current, protocolViolation: result.violation },
         },
       }))
       return { handled: true as const, ok: false, violation: result.violation }
@@ -68,7 +68,7 @@ export const useTurnStore = create<TurnStore>((set, get) => ({
     set((state) => ({
       rooms: {
         ...state.rooms,
-        [roomId]: {
+        [conversationId]: {
           turns: result.turns,
           order,
         },
@@ -79,17 +79,17 @@ export const useTurnStore = create<TurnStore>((set, get) => ({
     }
     return { handled: true as const, ok: true }
   },
-  clearRoom: (roomId) => set((state) => {
+  clearRoom: (conversationId) => set((state) => {
     const rooms = { ...state.rooms }
-    delete rooms[roomId]
+    delete rooms[conversationId]
     return { rooms }
   }),
   clear: () => set({ rooms: {} }),
 }))
 
-export function useCanonicalTurns(roomId: string): TurnProjection[] {
+export function useCanonicalTurns(conversationId: string): TurnProjection[] {
   return useTurnStore(useShallow((state) => {
-    const room = state.rooms[roomId]
+    const room = state.rooms[conversationId]
     if (!room) return []
     return room.order.map((id) => room.turns[id]).filter(Boolean)
   }))
@@ -116,21 +116,21 @@ export function selectCanonicalComposerAuthority(room: CanonicalRoomState | unde
   }
 }
 
-export function useCanonicalComposerAuthority(roomId: string): CanonicalComposerAuthority {
-  return useTurnStore(useShallow((state) => selectCanonicalComposerAuthority(state.rooms[roomId])))
+export function useCanonicalComposerAuthority(conversationId: string): CanonicalComposerAuthority {
+  return useTurnStore(useShallow((state) => selectCanonicalComposerAuthority(state.rooms[conversationId])))
 }
 
-export function hasCanonicalRoomAuthority(roomId: string): boolean {
-  return Object.prototype.hasOwnProperty.call(useTurnStore.getState().rooms, roomId)
+export function hasCanonicalRoomAuthority(conversationId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(useTurnStore.getState().rooms, conversationId)
 }
 
 export function isCanonicalRoot(
-  roomId: string,
+  conversationId: string,
   clientRequestId: string | null | undefined,
   userMessageId: string | null | undefined,
 ): boolean {
   if (!clientRequestId || !userMessageId) return false
-  const room = useTurnStore.getState().rooms[roomId]
+  const room = useTurnStore.getState().rooms[conversationId]
   return Boolean(room && Object.values(room.turns).some((turn) => (
     turn.clientRequestId === clientRequestId && turn.userMessageId === userMessageId
   )))

@@ -15,7 +15,6 @@ from conversation.deletion import (
     RoomFileDeletionLifecycle,
 )
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
-from models.request import RoomCenterRoomSettingRequest
 
 from ._orchestrator_helpers import NOW
 
@@ -45,104 +44,30 @@ def _memory_cleanup(*, result=True):
 def _service(*, room=None, files=None, memory=None):
     return RoomDeletionService(
         room_lifecycle=room or _room_lifecycle(),
-        file_lifecycle=files,
+        file_lifecycle=files or _file_lifecycle(),
         memory_cleanup=memory if memory is not None else _memory_cleanup(),
     )
 
 
 @pytest.mark.parametrize(
-    ("room_request", "owner", "status", "error"),
+    ("requesting_user_id", "owner", "status", "error"),
     [
-        (RoomCenterRoomSettingRequest(), "owner", 400, "Room id is required"),
-        (
-            RoomCenterRoomSettingRequest(room_id="room-1"),
-            None,
-            404,
-            "Room not found",
-        ),
-        (
-            RoomCenterRoomSettingRequest(
-                room_id="room-1", requesting_user_id="intruder"
-            ),
-            "owner",
-            403,
-            "Forbidden",
-        ),
+        ("owner", None, 404, "Room not found"),
+        ("intruder", "owner", 403, "Forbidden"),
     ],
 )
-async def test_request_and_owner_validation(room_request, owner, status, error):
+async def test_request_and_owner_validation(requesting_user_id, owner, status, error):
     room = _room_lifecycle(owner=owner)
 
-    response = await _service(room=room).delete_room_by_room_id(room_request)
+    response = await _service(room=room).delete_room_by_room_id(
+        "room-1", requesting_user_id=requesting_user_id
+    )
 
     assert response.success is False
     assert response.status_code == status
     assert response.error == error
     room.delete_room.assert_not_awaited()
     room.cleanup_room_owned_data.assert_not_awaited()
-
-
-async def test_compatibility_fallback_deletes_room_then_best_effort_memory_cleanup():
-    events: list[str] = []
-    room = _room_lifecycle()
-    memory = _memory_cleanup(result=False)
-    room.delete_room.side_effect = lambda *_: events.append("delete-room") or True
-    memory.delete_room_memory.side_effect = lambda *_: (
-        events.append("memory-cleanup") or False
-    )
-
-    response = await _service(room=room, memory=memory).delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert response.status_code == 200
-    assert events == ["delete-room", "memory-cleanup"]
-    room.cleanup_room_owned_data.assert_not_awaited()
-
-
-async def test_fallback_without_file_lifecycle_still_fences_epoch_before_delete():
-    epoch_store = InMemoryRoomEpochStore()
-    await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    room = _room_lifecycle()
-
-    service = RoomDeletionService(
-        room_lifecycle=room,
-        file_lifecycle=None,
-        memory_cleanup=_memory_cleanup(),
-        epoch_store=epoch_store,
-    )
-    response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert await epoch_store.read_active("room-1") is None
-    room.delete_room.assert_awaited_once_with("room-1", "owner")
-
-
-async def test_fallback_epoch_deactivation_failure_returns_409_without_delete():
-    class FailingEpochStore(InMemoryRoomEpochStore):
-        async def deactivate(self, room_id, epoch, deletion_id, *, deactivated_at):
-            return "conflict", None
-
-    epoch_store = FailingEpochStore()
-    await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    room = _room_lifecycle()
-
-    service = RoomDeletionService(
-        room_lifecycle=room,
-        file_lifecycle=None,
-        memory_cleanup=_memory_cleanup(),
-        epoch_store=epoch_store,
-    )
-    response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is False
-    assert response.status_code == 409
-    room.delete_room.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -157,7 +82,7 @@ async def test_begin_or_write_drain_conflict_returns_409(deletion_id, drained, e
     files = _file_lifecycle(deletion_id=deletion_id, drained=drained)
 
     response = await _service(room=room, files=files).delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1")
+        "room-1", requesting_user_id="owner"
     )
 
     assert response.success is False
@@ -184,7 +109,7 @@ async def test_production_deletion_preserves_strict_phase_and_cleanup_order():
     files.begin_room_deletion.side_effect = record("begin", "deletion-1")
     files.wait_for_room_writes.side_effect = record("drain", True)
 
-    async def record_phase(room_id, deletion_id, phase):
+    async def record_phase(conversation_id, deletion_id, phase):
         events.append(f"phase:{phase}")
         return True
 
@@ -197,9 +122,7 @@ async def test_production_deletion_preserves_strict_phase_and_cleanup_order():
 
     response = await _service(
         room=room, files=files, memory=memory
-    ).delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
+    ).delete_room_by_room_id("room-1", requesting_user_id="owner")
 
     assert response.success is True
     assert response.status_code == 200
@@ -233,7 +156,7 @@ async def test_deletion_deactivates_epoch_tombstone_survives_and_recreation_incr
     )
 
     response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
+        "room-1", requesting_user_id="owner"
     )
 
     assert response.success is True
@@ -256,7 +179,9 @@ async def test_deletion_deactivates_epoch_tombstone_survives_and_recreation_incr
 
 async def test_deletion_epoch_conflict_returns_409_before_cleanup():
     class ConflictingEpochStore(InMemoryRoomEpochStore):
-        async def deactivate(self, room_id, epoch, deletion_id, *, deactivated_at):
+        async def deactivate(
+            self, conversation_id, epoch, deletion_id, *, deactivated_at
+        ):
             return "conflict", None
 
     epoch_store = ConflictingEpochStore()
@@ -271,7 +196,7 @@ async def test_deletion_epoch_conflict_returns_409_before_cleanup():
     )
 
     response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1")
+        "room-1", requesting_user_id="owner"
     )
 
     assert response.success is False
@@ -295,7 +220,7 @@ async def test_cleanup_failure_stops_before_finalizing(failure):
 
     response = await _service(
         room=room, files=files, memory=memory
-    ).delete_room_by_room_id(RoomCenterRoomSettingRequest(room_id="room-1"))
+    ).delete_room_by_room_id("room-1", requesting_user_id="owner")
 
     assert response.success is False
     assert response.status_code == 500
@@ -314,7 +239,7 @@ async def test_final_room_delete_failure_preserves_finalizing_error():
     files = _file_lifecycle()
 
     response = await _service(room=room, files=files).delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1")
+        "room-1", requesting_user_id="owner"
     )
 
     assert response.success is False
@@ -327,22 +252,21 @@ async def test_final_room_delete_failure_preserves_finalizing_error():
 
 
 async def test_chat_delete_is_thin_delegate_and_missing_binding_fails_fast():
-    source = inspect.getsource(ChatService.delete_room_by_room_id)
+    source = inspect.getsource(ChatService.delete_room)
     runtime = ChatService()
 
     assert "_require_room_deletion" in source
     assert "begin_room_deletion" not in source
     assert "cleanup_room_owned_data" not in source
     with pytest.raises(RuntimeError, match="room deletion service"):
-        await runtime.delete_room_by_room_id(
-            RoomCenterRoomSettingRequest(room_id="room-1")
-        )
+        await runtime.delete_room("room-1", requesting_user_id="owner")
 
     service = SimpleNamespace(delete_room_by_room_id=AsyncMock(return_value="done"))
     runtime.bind_room_deletion(service)
-    request = RoomCenterRoomSettingRequest(room_id="room-1")
-    assert await runtime.delete_room_by_room_id(request) == "done"
-    service.delete_room_by_room_id.assert_awaited_once_with(request)
+    assert await runtime.delete_room("room-1", requesting_user_id="owner") == "done"
+    service.delete_room_by_room_id.assert_awaited_once_with(
+        "room-1", requesting_user_id="owner"
+    )
 
 
 def test_deletion_service_uses_only_narrow_ports_and_container_wires_them():

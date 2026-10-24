@@ -91,13 +91,13 @@ def test_gateway_routes_import_only_module_protocol_surfaces():
 def test_gateway_route_modules_do_not_hold_business_dependency_globals():
     dependency_global_names = {
         "agent_avatar_manager",
-        "agent_center",
+        "agent_catalog",
         "agent_group_store",
-        "agent_liveness_checker",
         "agent_selection_service",
         "agent_service",
         "api_key_store",
         "capability_issue_service",
+        "chat_rooms",
         "discovery_default_limit",
         "discovery_rate_limit_service",
         "discovery_service",
@@ -109,7 +109,6 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
         "hub_relay_service",
         "inspection_center",
         "relay_service",
-        "room_center",
         "room_ownership_reader",
         "room_store",
         "sse_manager",
@@ -225,17 +224,18 @@ def test_room_route_owner_protocol_covers_room_route_calls():
     import chat.protocols as protocols
 
     required_methods = {
-        "create_new_room",
-        "inquiry_rooms_by_room_owner_id",
-        "inquiry_room_messages_by_room_id",
-        "inquiry_room_setting",
-        "inquiry_active_runs",
-        "update_room_agent_set",
-        "update_room_name",
+        "create_room",
+        "delete_room",
+        "get_room",
+        "list_room_history",
+        "list_rooms_for_owner",
+        "read_messages",
+        "rename_room",
+        "update_history_fields",
         "update_room_default_mode",
     }
 
-    assert required_methods.issubset(set(protocols.RoomCenterCompatibility.__dict__))
+    assert required_methods.issubset(set(protocols.ChatRooms.__dict__))
 
 
 def test_api_gateway_packages_are_registered_for_distribution():
@@ -247,9 +247,7 @@ def test_api_gateway_packages_are_registered_for_distribution():
     assert {
         "api_gateway",
         "api_gateway.routes",
-        "common.client",
         "common.middleware",
-        "common.server",
         "common.utils",
     }.issubset(packages)
     assert "main" in set(setuptools_config.get("py-modules", []))

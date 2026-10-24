@@ -30,10 +30,10 @@ describe('handleArtifactUpdate', () => {
     }, false)
 
     handleArtifactUpdate(
-      { roomId: 'room-1', lifecycle: makeLifecycle() },
+      { conversationId: 'room-1', lifecycle: makeLifecycle() },
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-1',
@@ -73,7 +73,7 @@ describe('handleArtifactUpdate', () => {
       }, false, { clientRequestId: 'existing-req' })
       useMessageStore.getState().upsertMessage({
         id: 'existing-msg',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'Public baseline.',
         senderName: 'Agent',
@@ -114,10 +114,10 @@ describe('handleArtifactUpdate', () => {
       if (lastChunk !== undefined) data.last_chunk = lastChunk
 
       handleArtifactUpdate(
-        { roomId: 'room-1', lifecycle: makeLifecycle() },
+        { conversationId: 'room-1', lifecycle: makeLifecycle() },
         {
           type: 'artifact_update',
-          room_id: 'room-1',
+          conversation_id: 'room-1',
           timestamp: '2026-07-13T00:00:01.000Z',
           data,
         } as unknown as Parameters<typeof handleArtifactUpdate>[1],
@@ -149,7 +149,7 @@ describe('handleArtifactUpdate', () => {
     }, false)
     useMessageStore.getState().upsertMessage({
       id: 'msg-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: 'Final answer.',
       senderName: 'Agent',
@@ -158,10 +158,10 @@ describe('handleArtifactUpdate', () => {
     }, 'sse')
 
     handleArtifactUpdate(
-      { roomId: 'room-1', lifecycle: makeLifecycle() },
+      { conversationId: 'room-1', lifecycle: makeLifecycle() },
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-1',

@@ -18,8 +18,8 @@ def room_svc():
     svc.database_service = MagicMock()
     reader = MagicMock()
     reader.get_for_room_file = AsyncMock(
-        side_effect=lambda room_id, file_id: (
-            _file_meta(file_id, room_id) if room_id == "room1" else None
+        side_effect=lambda conversation_id, file_id: (
+            _file_meta(file_id, conversation_id) if conversation_id == "room1" else None
         )
     )
     svc.bind_attachment_metadata_reader(reader)
@@ -28,18 +28,18 @@ def room_svc():
 
 def _user_msg():
     return RoomUserMessage(
-        room_id="room1",
+        conversation_id="room1",
         message_id="msg1",
         message_type="user",
         message_content=MessageContent(message_text="hi"),
     )
 
 
-def _file_meta(file_id, room_id="room1"):
+def _file_meta(file_id, conversation_id="room1"):
     return {
         "file_id": file_id,
-        "room_id": room_id,
-        "s3_key": f"uploads/{room_id}/{file_id}/file.png",
+        "room_id": conversation_id,
+        "s3_key": f"uploads/{conversation_id}/{file_id}/file.png",
         "mime_type": "image/png",
         "file_name": "file.png",
         "size_bytes": 1024,
@@ -49,12 +49,14 @@ def _file_meta(file_id, room_id="room1"):
 class TestDualSourceMerge:
     async def test_top_level_only(self, room_svc):
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -62,46 +64,54 @@ class TestDualSourceMerge:
 
     async def test_inline_only(self, room_svc):
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             inline_file_ids=["f1"],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
 
     async def test_dedup_across_sources(self, room_svc):
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
             inline_file_ids=["f1"],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
 
     async def test_merged_from_both_sources(self, room_svc):
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
             inline_file_ids=["f2"],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert err is None
         assert len(msg.message_content.attachments) == 2
 
     async def test_no_attachments_noop(self, room_svc):
-        request = RoomCenterUserMessageRequest(room_id="room1")
+        request = RoomCenterUserMessageRequest(conversation_id="room1")
         msg = _user_msg()
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
         assert err is None
         assert msg.message_content.attachments is None
 
@@ -113,12 +123,14 @@ class TestCrossRoomRejection:
         )
 
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 404
@@ -129,12 +141,14 @@ class TestMergedLimitEnforcement:
     async def test_exceeds_max_attachments(self, room_svc):
         ids = [f"f{i}" for i in range(MAX_ATTACHMENTS_PER_MESSAGE + 1)]
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id=fid) for fid in ids],
         )
         msg = _user_msg()
 
-        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._message_sender._resolve_and_apply_attachments(
+            request, msg
+        )
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 400
@@ -143,12 +157,12 @@ class TestMergedLimitEnforcement:
 class TestContentSummary:
     async def test_content_summary_generated(self, room_svc):
         request = RoomCenterUserMessageRequest(
-            room_id="room1",
+            conversation_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
         )
         msg = _user_msg()
 
-        await room_svc._resolve_and_apply_attachments(request, msg)
+        await room_svc._message_sender._resolve_and_apply_attachments(request, msg)
 
         summary = msg.message_content.content_summary
         assert summary is not None

@@ -16,7 +16,7 @@ function buffer(overrides: Partial<StreamBuffer> = {}): StreamBuffer {
     text: 'live',
     artifacts: [],
     isComplete: false,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     lastUpdatedAt: Date.now(),
     ...overrides,
   }

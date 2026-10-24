@@ -25,7 +25,7 @@ FieldPolicy = Literal[
     "sanitized_text",
     "safe_summary",
     "allowlisted_control",
-    "private_legacy_only",
+    "private_only",
     "prohibited_canonical",
 ]
 
@@ -34,7 +34,7 @@ def _fields(model, overrides: dict[str, FieldPolicy]) -> dict[str, FieldPolicy]:
     base: dict[str, FieldPolicy] = {
         name: "prohibited_canonical" for name in model.model_fields
     }
-    for name in ("room_id", "timestamp", "trace_id"):
+    for name in ("conversation_id", "timestamp", "trace_id"):
         if name in base:
             base[name] = "transport"
     base.update(overrides)
@@ -48,8 +48,8 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
             "event_type": "allowlisted_control",
             "message_id": "identity",
             "status": "allowlisted_control",
-            "agent_id": "private_legacy_only",
-            "details": "private_legacy_only",
+            "agent_id": "private_only",
+            "details": "private_only",
             "related_message_id": "identity",
             "client_request_id": "identity",
         },
@@ -72,8 +72,8 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
         {
             "event_type": "prohibited_canonical",
             "message_id": "identity",
-            "agent_id": "private_legacy_only",
-            "content_delta": "private_legacy_only",
+            "agent_id": "private_only",
+            "content_delta": "private_only",
         },
     ),
     AgentMessageFinal: _fields(
@@ -123,10 +123,10 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
         {
             "event_type": "prohibited_canonical",
             "message_id": "identity",
-            "agent_id": "private_legacy_only",
-            "artifact": "private_legacy_only",
-            "append": "private_legacy_only",
-            "last_chunk": "private_legacy_only",
+            "agent_id": "private_only",
+            "artifact": "private_only",
+            "append": "private_only",
+            "last_chunk": "private_only",
             "client_request_id": "identity",
         },
     ),
@@ -190,19 +190,24 @@ CANONICAL_PROCESSING_STATUS_ADAPTER_STATUSES = frozenset(
 
 def canonical_processing_status_adapter(
     *,
-    room_id: str,
+    conversation_id: str,
     user_message_id: str,
     client_request_id: str,
     status: str,
 ) -> ProcessingStatusEvent:
-    """Build the sole content-free stale-browser canonical compatibility DTO."""
+    """Build the content-free turn-level ``processing_status`` event.
 
-    if not room_id or not user_message_id or not client_request_id:
+    The room snapshot folds it into the User message status. Live SSE clients
+    drop it once the root's canonical Turn is known, and otherwise route it
+    through the ``client_request_id``-correlated processing-status handler.
+    """
+
+    if not conversation_id or not user_message_id or not client_request_id:
         raise ValueError("canonical processing adapter requires exact nonempty roots")
     if status not in CANONICAL_PROCESSING_STATUS_ADAPTER_STATUSES:
         raise ValueError("canonical processing adapter status is not allowlisted")
     return ProcessingStatusEvent(
-        room_id=room_id,
+        conversation_id=conversation_id,
         message_id=user_message_id,
         related_message_id=user_message_id,
         client_request_id=client_request_id,

@@ -23,7 +23,7 @@ import { UserMessageBlock } from './UserMessageBlock'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { resolveScrollStateAfterEvent } from './scroll-state'
 interface ConversationMessageListProps {
-  roomId: string
+  conversationId: string
   selectedAgentMessageId?: string
   enableAgentDetail?: boolean
 }
@@ -57,7 +57,6 @@ function PendingUserTurn({ messageId, live }: { messageId: string; live: boolean
       {live ? (
         <div className="conversation-body-frame conversation-turn-content flex flex-col">
           <TurnTracePanel
-            nodes={[]}
             statusEntries={entity.processingStatusLogs ?? []}
             isRunning
             startedAt={entity.timestamp}
@@ -68,10 +67,10 @@ function PendingUserTurn({ messageId, live }: { messageId: string; live: boolean
   )
 }
 
-export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
-  const legacyTurns = useTurnViewModels(roomId)
-  const canonicalTurns = useCanonicalTurns(roomId)
-  const processing = useRoomProcessing(roomId)
+export function ConversationMessageList({ conversationId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
+  const legacyTurns = useTurnViewModels(conversationId)
+  const canonicalTurns = useCanonicalTurns(conversationId)
+  const processing = useRoomProcessing(conversationId)
   const turns = useMemo<ConversationTurn[]>(() => {
     const canonicalByUser = new Map(canonicalTurns.map((turn) => [turn.userMessageId, turn]))
     const included = new Set<string>()
@@ -116,9 +115,9 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [hasNewContent, setHasNewContent] = useState(false)
 
-  const localSendSeq = useLocalSendSeq(roomId)
-  const initialHydrationSeq = useInitialHydrationSeq(roomId)
-  const prevRoomIdRef = useRef(roomId)
+  const localSendSeq = useLocalSendSeq(conversationId)
+  const initialHydrationSeq = useInitialHydrationSeq(conversationId)
+  const prevConversationIdRef = useRef(conversationId)
   const prevHydrationSeqRef = useRef(0)
   const initialScrollResolvedRef = useRef(false)
 
@@ -162,11 +161,11 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   const storeVersion = useMessageStore(s => s.version)
   const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
 
-  const saveConversationScroll = useCallback((targetRoomId: string) => {
+  const saveConversationScroll = useCallback((targetConversationId: string) => {
     const el = scrollRef.current
     if (!el) return
     useRoomUiStore.getState().saveConversationScroll(
-      targetRoomId,
+      targetConversationId,
       readConversationScrollSnapshot(el),
     )
   }, [])
@@ -203,13 +202,13 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     pinnedToContentEndRef.current = true
     setHasNewContent(false)
     setShowScrollBtn(false)
-    useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: targetScrollTop, atBottom: true })
+    useRoomUiStore.getState().saveConversationScroll(conversationId, { scrollTop: targetScrollTop, atBottom: true })
 
     if (behavior !== 'smooth') return
 
     const saveWhenSettled = () => {
       if (!isNearContentEnd(el)) return
-      useRoomUiStore.getState().saveConversationScroll(roomId, {
+      useRoomUiStore.getState().saveConversationScroll(conversationId, {
         scrollTop: el.scrollTop,
         atBottom: true,
       })
@@ -221,20 +220,20 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     requestAnimationFrame(() => requestAnimationFrame(saveWhenSettled))
-  }, [roomId, markProgrammaticScroll])
+  }, [conversationId, markProgrammaticScroll])
 
   useEffect(() => {
     return () => {
-      saveConversationScroll(roomId)
+      saveConversationScroll(conversationId)
     }
-  }, [roomId, saveConversationScroll])
+  }, [conversationId, saveConversationScroll])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
 
-    if (roomId !== prevRoomIdRef.current) {
-      prevRoomIdRef.current = roomId
+    if (conversationId !== prevConversationIdRef.current) {
+      prevConversationIdRef.current = conversationId
       prevHydrationSeqRef.current = 0
       initialScrollResolvedRef.current = false
       userPausedRef.current = false
@@ -252,7 +251,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       initialScrollResolvedRef.current = true
 
       if (!userPausedRef.current && !shouldSkipInitialHydrationScrollRestore(localSendSeq)) {
-        const saved = useRoomUiStore.getState().getConversationScroll(roomId)
+        const saved = useRoomUiStore.getState().getConversationScroll(conversationId)
         programmaticScrollRef.current = true
         restoreConversationScrollWithRetry(el, saved, (result) => {
           userPausedRef.current = result === 'restored-position'
@@ -310,7 +309,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     prevMetricsRef.current = curr
-  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive, markProgrammaticScroll])
+  }, [conversationId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive, markProgrammaticScroll])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -339,7 +338,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
         }
 
         if (inferFromScrollPosition) {
-          useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: m.scrollTop, atBottom })
+          useRoomUiStore.getState().saveConversationScroll(conversationId, { scrollTop: m.scrollTop, atBottom })
         }
 
         if (programmaticScrollRef.current) {
@@ -366,7 +365,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       prevMetricsRef.current = m
 
       if (!programmaticScrollRef.current) {
-        useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: m.scrollTop, atBottom })
+        useRoomUiStore.getState().saveConversationScroll(conversationId, { scrollTop: m.scrollTop, atBottom })
       }
     }
 
@@ -397,16 +396,16 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('touchmove', onTouchMove)
     }
-  }, [roomId, turnLive, stopTailFollow])
+  }, [conversationId, turnLive, stopTailFollow])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
     const store = useRoomUiStore.getState()
     if (selectedAgentMessageId === messageId) {
-      store.closeAgentDetail(roomId)
+      store.closeAgentDetail(conversationId)
       return
     }
-    store.openAgentDetail(roomId, messageId)
-  }, [roomId, selectedAgentMessageId])
+    store.openAgentDetail(conversationId, messageId)
+  }, [conversationId, selectedAgentMessageId])
 
   return (
     <div className="relative h-full bg-background">

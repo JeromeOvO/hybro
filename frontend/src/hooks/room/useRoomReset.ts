@@ -3,13 +3,12 @@ import type { MutableRefObject } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
-import { useTraceStore } from '@/stores/trace-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 
 export function useRoomReset(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
   resetAgentNameCache: () => void,
@@ -30,24 +29,22 @@ export function useRoomReset(
     setSseError(null)
 
     // Initialize normalized store for this room.
-    useMessageStore.getState().setRoom(roomId)
-    useTraceStore.getState().setRoom(roomId)
+    useMessageStore.getState().setRoom(conversationId)
 
     // Clear stale buffers from any prior visit to this room. This is distinct
-    // from the cleanup below: the cleanup (which runs with the old roomId in
+    // from the cleanup below: the cleanup (which runs with the old conversationId in
     // closure) clears buffers when leaving a room; this call clears buffers
     // that survived a previous visit to the room now being entered.
-    useStreamingStore.getState().clearRoom(roomId)
+    useStreamingStore.getState().clearRoom(conversationId)
 
     return () => {
-      // Clean up per-room state when leaving this room. The roomId captured
+      // Clean up per-room state when leaving this room. The conversationId captured
       // here is the room being left (React closes over the value at the time
       // this effect registered), so both calls target the correct room.
-      useRoomUiStore.getState().resetRoom(roomId)
-      useStreamingStore.getState().clearRoom(roomId)
-      useTraceStore.getState().clearRoom()
-      useTurnStore.getState().clearRoom(roomId)
+      useRoomUiStore.getState().resetRoom(conversationId)
+      useStreamingStore.getState().clearRoom(conversationId)
+      useTurnStore.getState().clearRoom(conversationId)
       useTurnPresentationStore.getState().clear()
     }
-  }, [roomId, lifecycle, hitlRequestIndex, setSending, setCancelling, setSseConnected, setSseError, resetAgentNameCache])
+  }, [conversationId, lifecycle, hitlRequestIndex, setSending, setCancelling, setSseConnected, setSseError, resetAgentNameCache])
 }

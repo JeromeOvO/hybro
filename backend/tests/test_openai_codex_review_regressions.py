@@ -63,7 +63,7 @@ async def test_ordinary_assistant_history_matches_installed_responses_contract()
             {"role": "tool", "tool_call_id": "exact-old-call", "content": "result"},
             {"role": "assistant", "content": "after"},
         ],
-        "gpt-5.4",
+        "gpt-6-sol",
     )
     inputs = json.loads(calls[0].content)["input"]
     assert [item.get("type", "message") for item in inputs] == [
@@ -122,7 +122,7 @@ async def test_terminal_closes_without_reading_http_trailer(trailer, operation):
     adapter = provider([], calls, body=body)
     async with asyncio.timeout(0.2):
         if operation == "generate":
-            result = await adapter.generate([], "gpt-5.4", timeout_seconds=0.03)
+            result = await adapter.generate([], "gpt-6-sol", timeout_seconds=0.03)
             assert result.content == "ok"
             assert result.raw_response["choices"][0]["finish_reason"] == "stop"
         else:
@@ -249,11 +249,11 @@ async def test_structured_truncated_output_is_still_locally_validated(valid):
     )
     adapter = provider(raw, calls)
     if valid:
-        result = await adapter.generate_structured([], "gpt-5.4", json_mode=True)
+        result = await adapter.generate_structured([], "gpt-6-sol", json_mode=True)
         assert result.data == {"ok": True} and result.usage.completion_tokens == 3
     else:
         with pytest.raises(LLMProviderFailure):
-            await adapter.generate_structured([], "gpt-5.4", json_mode=True)
+            await adapter.generate_structured([], "gpt-6-sol", json_mode=True)
     assert len(calls) == 1
 
 
@@ -358,11 +358,11 @@ async def test_setup_precedes_legacy_validation_in_original_composition(
         settings_obj=settings,
         providers={"openai": adapter},
     )
-    assert (await gateway.generate([])).model == "gpt-5.4"
+    assert (await gateway.generate([])).model == "gpt-6-sol"
     frozen = turn(model_id=registry.get_model("lead_ai_model").model_id)
     events = [event async for event in gateway.stream_turn_once(frozen)]
     assert frozen.model_id == "" and events[-1].finish_reason == "stop"
-    assert all(json.loads(call.content)["model"] == "gpt-5.4" for call in calls)
+    assert all(json.loads(call.content)["model"] == "gpt-6-sol" for call in calls)
     assert await gateway.embed("unchanged") == [1.0]
     adapter.embed.assert_awaited_once_with("unchanged", model="text-embedding-3-small")
     assert len(calls) == 2

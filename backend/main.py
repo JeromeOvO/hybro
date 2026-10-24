@@ -11,6 +11,7 @@ from common.config.loader import settings
 
 import api_gateway
 from common.auth import bind_auth_config
+from common.protocols import HealthCheck
 from common.middleware.request_concurrency import RequestConcurrencyLimitMiddleware
 from common.middleware.request_logging import RequestLoggingMiddleware
 from common.middleware.request_size import RequestBodyLimitMiddleware
@@ -35,6 +36,9 @@ AGENT_MESSAGE_MAX_CONCURRENT = 4
 # default), so four concurrent sends also cap session throughput.
 SESSION_MESSAGE_MAX_BYTES = 64 * 1024
 SESSION_MESSAGE_MAX_CONCURRENT = 4
+# Remote Agents post A2A push notifications without a user session; admission
+# bounds how many bodies one worker reads at once.
+A2A_PUSH_MAX_CONCURRENT = 8
 
 
 class _RequestLoggingFastAPI(FastAPI):
@@ -62,10 +66,7 @@ def compute_health_status(
     delivery_kv_connected: bool,
     redis_runtime_connected: bool,
     redis_url: str,
-    change_stream_connected: bool,
     agent_search_index_ready: bool = False,
-    memory_search_index_ready: bool = False,
-    search_indexes_ready: bool = False,
 ) -> dict:
     redis_expected = bool(redis_url)
     redis_degraded = redis_expected and not (
@@ -74,11 +75,10 @@ def compute_health_status(
         and delivery_kv_connected
         and redis_runtime_connected
     )
-    degraded = redis_degraded or not change_stream_connected or not search_indexes_ready
+    degraded = redis_degraded or not agent_search_index_ready
     return {
         "body": {
             "status": "degraded" if degraded else "ok",
-            "change_stream_connected": change_stream_connected,
             "delivery_pubsub_connected": delivery_pubsub_connected,
             "eventing_connected": eventing_connected,
             "delivery_kv_connected": delivery_kv_connected,
@@ -87,10 +87,7 @@ def compute_health_status(
             "broker_connected": delivery_pubsub_connected,
             "broker_expected": redis_expected,
             "redis_service_connected": redis_runtime_connected,
-            "legacy_redis_service_connected": redis_runtime_connected,
             "agent_search_index_ready": agent_search_index_ready,
-            "memory_search_index_ready": memory_search_index_ready,
-            "search_indexes_ready": search_indexes_ready,
         },
         "status_code": 503 if degraded else 200,
     }
@@ -102,7 +99,7 @@ health_check_service = create_health_check_service(
 )
 
 
-def get_health_check():
+def get_health_check() -> HealthCheck:
     return health_check_service
 
 
@@ -175,11 +172,17 @@ def create_app(
         path=f"{settings.api_prefix}/sessions/messages",
         max_concurrent=SESSION_MESSAGE_MAX_CONCURRENT,
     )
+    app.add_middleware(
+        RequestConcurrencyLimitMiddleware,
+        path=f"{settings.api_prefix}/a2a/push",
+        max_concurrent=A2A_PUSH_MAX_CONCURRENT,
+        include_subpaths=True,
+    )
 
     @app.get("/health")
     async def health_check(
         request: Request,
-        health=Depends(get_health_check),
+        health: HealthCheck = Depends(get_health_check),
     ):
         return await health.check(request)
 

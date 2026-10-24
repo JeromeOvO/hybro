@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 // Mock useRoomWebhook — returns a stable room so the useEffect fires
 vi.mock("@/hooks/useRoomWebhook", () => ({
   useRoomWebhook: () => ({
-    room: { room_id: "room-abc", room_name: "Test Room", room_agent_set: { a1: "Agent One" } },
+    room: { conversation_id: "room-abc", room_name: "Test Room", room_agent_set: { a1: "Agent One" } },
     loading: false,
     sending: false,
     processing: false,

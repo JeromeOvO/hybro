@@ -109,7 +109,7 @@ def test_noninteractive_environment_forwarding_and_noop(
     assert verifier.await_count == 2
     assert "source: environment" in output.getvalue()
     assert "Unchanged" in output.getvalue()
-    assert "restart backend with HYBRO_HOME" in output.getvalue()
+    assert "apply with hybro start --recreate" in output.getvalue()
     assert "fixture-environment" not in output.getvalue()
 
 

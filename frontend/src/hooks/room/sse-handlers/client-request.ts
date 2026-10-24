@@ -28,11 +28,11 @@ export function clientRequestIdOf(frame: RoomSSEMessage): string | null {
 
 /** Resolve the user message id for a client_request_id from the store. */
 export function resolveUserMessageId(
-  roomId: string,
+  conversationId: string,
   clientRequestId: string | null,
 ): string | undefined {
   if (!clientRequestId) return undefined
-  return findProcessingStatusUserEntity(roomId, {
+  return findProcessingStatusUserEntity(conversationId, {
     clientRequestId,
     preferClientRequestId: true,
   })?.id

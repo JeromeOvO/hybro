@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from common.dto.base import accepts_stored_conversation_id
 from common.utils.time import utcnow
 
 MAX_QUOTE_TEXT_LENGTH = 8000
@@ -36,7 +37,7 @@ class QuotedSnippet(BaseModel):
     """Persisted immutable quote snapshot (Mongo ``room_quotes``)."""
 
     quote_id: str = Field(default_factory=lambda: uuid4().hex)
-    room_id: str
+    conversation_id: str = accepts_stored_conversation_id()
     created_by_user_id: str
     created_at: datetime = Field(default_factory=utcnow)
     text: str

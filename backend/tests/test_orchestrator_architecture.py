@@ -168,7 +168,7 @@ def test_production_entry_points_reach_orchestrator_only_through_routing_seam():
     packages = set(pyproject["tool"]["setuptools"]["packages"])
     assert "execution.orchestrator" in packages
     assert "execution.orchestrator.a2a_runtime" in packages
-    assert "dal.orchestrator" in packages
+    assert "execution.repository.orchestrator" in packages
 
     container_modules = imported_modules(ROOT / "container.py")
     assert "orchestrator_composition" in container_modules
@@ -188,7 +188,7 @@ def test_production_entry_points_reach_orchestrator_only_through_routing_seam():
             if module == routing_seam:
                 continue
             if module.startswith("execution.orchestrator") or module.startswith(
-                "dal.orchestrator"
+                "execution.repository.orchestrator"
             ):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == []

@@ -11,7 +11,7 @@ const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) 
 })
 
 async function connectAndOpen(options: Partial<SSEConnectionOptions> = {}) {
-  const connection = new SSEConnection({ roomId: 'test-room', ...options })
+  const connection = new SSEConnection({ conversationId: 'test-room', ...options })
   const connectPromise = connection.connect()
   // Allow microtasks to process (fetch call + stream reader setup)
   await vi.advanceTimersByTimeAsync(0)
@@ -96,7 +96,7 @@ describe('SSEConnection', () => {
 
       const testMessage = {
         type: 'task_update',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: { message_id: 'msg-1', status: 'completed' },
       }
@@ -114,7 +114,7 @@ describe('SSEConnection', () => {
 
       const heartbeat = {
         type: 'heartbeat',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: {},
       }
@@ -131,7 +131,7 @@ describe('SSEConnection', () => {
 
       const frame = {
         type: 'heartbeat',
-        room_id: 'test-room',
+        conversation_id: 'test-room',
         timestamp: new Date().toISOString(),
         data: {},
       }
@@ -155,7 +155,7 @@ describe('SSEConnection', () => {
       const { instance } = await connectAndOpen({ onMessage: onMessage as never })
 
       const base = {
-        type: 'task_update', room_id: 'test-room', timestamp: new Date().toISOString(),
+        type: 'task_update', conversation_id: 'test-room', timestamp: new Date().toISOString(),
       }
       const first = { ...base, data: { message_id: 'first', status: 'working' } }
       const second = { ...base, data: { message_id: 'second', status: 'completed' } }
@@ -326,7 +326,7 @@ describe('SSEConnection', () => {
 
   describe('connection state', () => {
     it('should report correct connection state lifecycle', async () => {
-      const connection = new SSEConnection({ roomId: 'test-room' })
+      const connection = new SSEConnection({ conversationId: 'test-room' })
       expect(connection.isConnected()).toBe(false)
 
       const connectPromise = connection.connect()
@@ -339,7 +339,7 @@ describe('SSEConnection', () => {
     })
 
     it('should return correct readyState values', async () => {
-      const connection = new SSEConnection({ roomId: 'test-room' })
+      const connection = new SSEConnection({ conversationId: 'test-room' })
       // CLOSED = 2
       expect(connection.getConnectionState()).toBe(2)
 
@@ -358,7 +358,7 @@ describe('SSEConnection', () => {
         () => new Promise<string | null>((resolve) => { resolveToken = resolve })
       )
 
-      const connection = new SSEConnection({ roomId: 'test-room', getToken })
+      const connection = new SSEConnection({ conversationId: 'test-room', getToken })
       const connectPromise = connection.connect()
 
       connection.disconnect()
@@ -378,7 +378,7 @@ describe('SSEConnection', () => {
 
       const countBefore = MockSSEStream.getFetchCallCount()
 
-      const connection = new SSEConnection({ roomId: 'test-room', getToken })
+      const connection = new SSEConnection({ conversationId: 'test-room', getToken })
       connection.connect()
 
       connection.disconnect()

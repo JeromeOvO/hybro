@@ -12,11 +12,11 @@ from execution.idempotency import (
 
 def _request(**overrides) -> ExecutionRequest:
     data = {
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "sender_id": "user-1",
         "sender_name": "Display Name",
         "message": {
-            "room_id": "room-1",
+            "conversation_id": "room-1",
             "message_id": "draft-1",
             "message_created_at": "2026-08-01T12:00:00Z",
             "message_type": "user",

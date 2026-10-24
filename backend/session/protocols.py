@@ -13,6 +13,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
+from common.dto import (
+    AgentMessageInput,
+    CreateRoomRequest,
+    MembershipUpdateRequest,
+    RoomInfo,
+    RoomMessageInfo,
+    SavedUserMessage,
+    UserMessageInput,
+)
 from common.protocols import AgentNetworkTargetResolver
 from models.session import (
     SessionClosed,
@@ -23,6 +32,39 @@ from models.session import (
     SessionStatus,
 )
 from session.models import SessionRecord
+
+
+@runtime_checkable
+class RoomRegistry(Protocol):
+    async def get_room(self, conversation_id: str) -> RoomInfo | None: ...
+    async def get_room_agents(self, conversation_id: str) -> list[str]: ...
+    async def get_room_owner(self, conversation_id: str) -> str | None: ...
+
+
+@runtime_checkable
+class RoomManagement(Protocol):
+    async def create_room(self, request: CreateRoomRequest) -> RoomInfo: ...
+    async def delete_room(self, conversation_id: str, owner_id: str) -> bool: ...
+    async def update_room(
+        self, conversation_id: str, updates: dict
+    ) -> RoomInfo | None: ...
+    async def update_membership(
+        self, conversation_id: str, request: MembershipUpdateRequest
+    ) -> RoomInfo: ...
+
+
+@runtime_checkable
+class RoomMessageStore(Protocol):
+    async def save_user_message(
+        self, conversation_id: str, message: UserMessageInput
+    ) -> SavedUserMessage: ...
+    async def save_agent_message(
+        self, conversation_id: str, message: AgentMessageInput
+    ) -> str: ...
+    async def update_agent_message_status(
+        self, message_id: str, status: str, **kwargs
+    ) -> bool: ...
+    async def get_message(self, message_id: str) -> RoomMessageInfo | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,14 +131,17 @@ class SessionStore(Protocol):
 
 @runtime_checkable
 class ConversationEventsPort(Protocol):
-    async def latest_seq(self, room_id: str) -> int: ...
+    async def latest_seq(self, conversation_id: str) -> int: ...
     async def read_range(
-        self, room_id: str, *, after: int = 0, limit: int = 500
+        self, conversation_id: str, *, after: int = 0, limit: int = 500
     ) -> list[dict[str, Any]]: ...
 
 
 __all__ = [
     "ConversationEventsPort",
+    "RoomManagement",
+    "RoomMessageStore",
+    "RoomRegistry",
     "SessionAccess",
     "SessionOwner",
     "SessionService",

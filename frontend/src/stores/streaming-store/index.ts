@@ -30,7 +30,7 @@ export interface StreamBuffer {
    * to prevent operations on one room from accidentally clearing buffers
    * that belong to a different room.
    */
-  roomId: string
+  conversationId: string
   clientRequestId?: string
   userMessageId?: string
   /**
@@ -62,7 +62,7 @@ interface StreamingState {
    */
   append: (
     id: string,
-    roomId: string,
+    conversationId: string,
     chunk: ArtifactData,
     isAppend: boolean,
     metadata?: StreamBufferMetadata,
@@ -81,13 +81,13 @@ interface StreamingState {
   clearByClientRequestId: (clientRequestId: string) => void
 
   /**
-   * Clear all buffers that belong to the given roomId.
+   * Clear all buffers that belong to the given conversationId.
    * Use for room-switch cleanup (useRoomReset) where ALL buffers for the
    * room must be discarded unconditionally.
-   * Room affiliation is enforced via StreamBuffer.roomId — buffers from
+   * Room affiliation is enforced via StreamBuffer.conversationId — buffers from
    * other rooms are never touched.
    */
-  clearRoom: (roomId: string) => void
+  clearRoom: (conversationId: string) => void
 
   /**
    * Clear only the buffers whose message_id appears in the provided set.
@@ -101,7 +101,7 @@ interface StreamingState {
 export const useStreamingStore = create<StreamingState>()((set) => ({
   buffers: {},
 
-  append: (id, roomId, chunk, isAppend, metadata) => set((state) => {
+  append: (id, conversationId, chunk, isAppend, metadata) => set((state) => {
     const now = Date.now()
 
     // Evict orphaned buffers — those not updated within STALE_BUFFER_TTL_MS.
@@ -116,7 +116,7 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
           console.warn(
             '[streamingStore] evicted stale buffer for message %s (room %s, idle %ds)',
             bufferId,
-            buf.roomId,
+            buf.conversationId,
             Math.round((now - buf.lastUpdatedAt) / 1000),
           )
         }
@@ -137,7 +137,7 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
           text,
           artifacts: nextArtifacts,
           isComplete: existing?.isComplete ?? false,
-          roomId,
+          conversationId,
           clientRequestId: metadata?.clientRequestId ?? existing?.clientRequestId,
           userMessageId: metadata?.userMessageId ?? existing?.userMessageId,
           lastUpdatedAt: now,
@@ -177,11 +177,11 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
     return changed ? { buffers: nextBuffers } : state
   }),
 
-  clearRoom: (roomId) => set((state) => {
+  clearRoom: (conversationId) => set((state) => {
     const nextBuffers: Record<string, StreamBuffer> = {}
     let changed = false
     for (const [id, buf] of Object.entries(state.buffers)) {
-      if (buf.roomId === roomId) {
+      if (buf.conversationId === conversationId) {
         changed = true
       } else {
         nextBuffers[id] = buf

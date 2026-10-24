@@ -22,11 +22,10 @@ vi.mock('@/hooks/useRoomSSE', () => ({
 vi.mock('@/lib/api/room', () => ({
   inquiryRoomSetting: vi.fn().mockResolvedValue({
     success: true,
-    room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
+    room: { conversation_id: 'room-1', room_name: 'Test', room_agent_set: {} },
   }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),
-  inquiryRoomMessagesByRoomId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
-  updateRoomAgentSet: vi.fn().mockResolvedValue({ success: true }),
+  inquiryRoomMessagesByConversationId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
 }))
 
 vi.mock('@/lib/api/agent', () => ({
@@ -73,7 +72,7 @@ describe('useRoomWebhook consumer contract', () => {
     const { useRoomWebhook } = await import('@/hooks/useRoomWebhook')
     const { result } = renderHook(
       () => useRoomWebhook({
-        roomId: 'room-1',
+        conversationId: 'room-1',
         userId: 'u1',
         userName: 'Test',
         getToken: async () => 'token',
@@ -111,7 +110,7 @@ describe('useRoomWebhook consumer contract', () => {
     const { useRoomWebhook } = await import('@/hooks/useRoomWebhook')
     const { result } = renderHook(
       () => useRoomWebhook({
-        roomId: 'room-1',
+        conversationId: 'room-1',
         userId: 'u1',
         userName: 'Test',
         getToken: async () => 'token',
@@ -139,7 +138,7 @@ describe('useRoomWebhook consumer contract', () => {
     const { useRoomWebhook } = await import('@/hooks/useRoomWebhook')
     const { result } = renderHook(
       () => useRoomWebhook({
-        roomId: 'room-1',
+        conversationId: 'room-1',
         userId: 'u1',
         userName: 'Test',
         getToken: async () => 'token',

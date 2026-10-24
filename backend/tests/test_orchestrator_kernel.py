@@ -7,11 +7,6 @@ import pytest
 from execution.orchestrator.budget import BudgetExceeded, BudgetPolicy
 from execution.orchestrator.compaction import DeterministicFakeCompactor
 from execution.orchestrator.context import CompiledContext
-from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryRunStoreResult,
-)
 from execution.orchestrator.kernel import KernelConflict
 from execution.orchestrator.models import (
     AssistantMessage,
@@ -39,6 +34,11 @@ from tests._orchestrator_helpers import (
     make_kernel,
     make_run,
     tool_events,
+)
+from tests.orchestrator_harness.fake_tools import RecordingFakeToolRuntime
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryRunStoreResult,
 )
 
 
@@ -154,7 +154,7 @@ async def test_recovery_adopts_durable_final_after_active_assistant_id_was_clear
     )
     kernel, _, runtime, _ = await make_kernel([], run=run)
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,
@@ -210,7 +210,7 @@ async def test_recovery_repairs_stale_offset_from_durable_chunks_before_aborting
     )
     kernel, _, runtime, _ = await make_kernel([final_events("recovered")], run=run)
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,
@@ -1448,6 +1448,25 @@ async def test_canonical_ask_user_suspends_and_resumes_with_durable_answer():
     assert flushed[0].content[0].text == "Shanghai"
 
 
+def test_interaction_answers_are_recorded_once_per_round():
+    from execution.orchestrator.kernel import _with_interaction_answers
+    from execution.orchestrator.models import (
+        ToolInteractionAnswer,
+        ToolInteractionAnswers,
+    )
+
+    round_1 = ToolInteractionAnswers(
+        interaction_id="interaction-1",
+        answers=[ToolInteractionAnswer(question_id="q", answer="first")],
+    )
+    round_2 = ToolInteractionAnswers(interaction_id="interaction-2", answers=[])
+    known = _with_interaction_answers([], round_1)
+    # Every later observation of the same continuation replays round 1.
+    assert _with_interaction_answers(known, round_1) == [round_1]
+    assert _with_interaction_answers(known, None) == [round_1]
+    assert _with_interaction_answers(known, round_2) == [round_1, round_2]
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -1557,7 +1576,7 @@ async def test_recovery_keeps_multi_batch_turn_open_when_entry_still_parked():
     stored = await store.load(next(iter(store.runs)))
     assert stored is not None
 
-    async def read_events(_room_id, _run_id):
+    async def read_events(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 1,

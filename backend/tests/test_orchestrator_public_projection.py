@@ -25,7 +25,7 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
         sequence=7,
         timestamp=datetime.now(UTC),
         payload=payload or {},
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="msg-1",
         client_request_id="crid-1",
     )
@@ -54,104 +54,13 @@ def test_non_public_lifecycle_events_translate_to_none():
     translator = PublicProjectionTranslator()
     for event_type in (
         "session_started",
-        "run_started",
-        "turn_started",
         "model_attempt_started",
         "model_attempt_failed",
-        "message_completed",
-        "turn_completed",
+        "model_turn_completed",
+        "orchestrator_decision",
         "run_waiting_external",
     ):
         assert translator.translate(_event(event_type)) is None
-
-
-def test_llm_retry_scheduled_redacts_retryable():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "model_retry_scheduled",
-            {
-                "attempt": 2,
-                "error_class": "rate_limit",
-                "retry_delay_ms": 1250,
-                "retryable": True,
-                "model": "gpt-4o",
-                "provider": "openai",
-            },
-        )
-    )
-    assert public is not None
-    assert public.kind == "llm_retry_scheduled"
-    assert public.event_id == "public:run-1:llm_retry_scheduled:7"
-    assert public.room_id == "room-1"
-    assert public.user_message_id == "msg-1"
-    assert public.client_request_id == "crid-1"
-    assert public.payload == {
-        "attempt": 2,
-        "error_class": "rate_limit",
-        "retry_delay_ms": 1250,
-    }
-    # retryable never enters the public payload.
-    assert "retryable" not in public.payload
-
-
-def test_llm_call_completed_carries_usage_metadata():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "model_turn_completed",
-            {
-                "model": "gpt-4o",
-                "provider": "openai",
-                "attempt": 1,
-                "outcome": "completed",
-                "duration_ms": 812,
-                "usage": {"input": 2100, "output": 340},
-                "finish_reason": "stop",
-            },
-        )
-    )
-    assert public is not None
-    assert public.kind == "llm_call_completed"
-    assert public.payload == {
-        "model": "gpt-4o",
-        "provider": "openai",
-        "attempt": 1,
-        "outcome": "completed",
-        "duration_ms": 812,
-        "usage": {"input": 2100, "output": 340},
-        "finish_reason": "stop",
-    }
-
-
-def test_orchestrator_decision_requires_plan_steps():
-    translator = PublicProjectionTranslator()
-    public = translator.translate(
-        _event(
-            "orchestrator_decision",
-            {
-                "plan_steps": [
-                    {"agent": "Weather Agent", "summary": "Fetch the forecast"},
-                    {"agent": "Broker Agent", "summary": ""},
-                ],
-                "reason": "Two independent lookups can run in parallel.",
-            },
-        )
-    )
-    assert public is not None
-    assert public.kind == "orchestrator_decision"
-    assert public.payload == {
-        "chosen_agents": ["Weather Agent", "Broker Agent"],
-        "plan_steps": [
-            {"agent": "Weather Agent", "summary": "Fetch the forecast"},
-            {"agent": "Broker Agent", "summary": ""},
-        ],
-        "reason": "Two independent lookups can run in parallel.",
-    }
-
-    # Empty plans produce no public event.
-    assert (
-        translator.translate(_event("orchestrator_decision", {"plan_steps": []}))
-        is None
-    )
 
 
 def test_canonical_tool_label_enforces_configured_secret_policy():
@@ -165,9 +74,8 @@ def test_canonical_tool_label_enforces_configured_secret_policy():
             "agent_label": "Weather token=hunter2",
             "arguments": {},
         },
-    ).model_copy(update={"lifecycle_family": "canonical"})
+    )
     public = PublicProjectionTranslator(
-        lifecycle_family="canonical",
         secret_values=("hunter2",),
     ).translate(event)
     assert public is not None
@@ -188,16 +96,14 @@ async def test_canonical_label_secret_never_reaches_persisted_room_event():
             "agent_label": f"Weather {sentinel}",
             "arguments": {},
         },
-    ).model_copy(update={"lifecycle_family": "canonical"})
-    projected = PublicProjectionTranslator(
-        lifecycle_family="canonical", secret_values=(sentinel,)
-    ).translate(event)
+    )
+    projected = PublicProjectionTranslator(secret_values=(sentinel,)).translate(event)
     assert projected is not None
     store = InMemoryRoomEventStore()
     publisher = make_publisher(transport=FakeTransport(), room_events=store)
     await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id=projected.room_id,
+            conversation_id=projected.conversation_id,
             event_id=projected.event_id,
             run_id=projected.run_id,
             seq=projected.seq,
@@ -211,106 +117,12 @@ async def test_canonical_label_secret_never_reaches_persisted_room_event():
     assert "[REDACTED]" in str(persisted)
 
 
-def test_tool_call_accepted_redacts_arguments():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "tool_execution_started",
-            {
-                "call_id": "call-1",
-                "tool_name": "weather_lookup",
-                "agent_label": "Weather Agent",
-                "arguments": {
-                    "city": "Shanghai",
-                    "days": 3,
-                    "secret_api_key": "never-leak-me",
-                },
-            },
-        )
-    )
-    assert public is not None
-    assert public.kind == "tool_call_accepted"
-    assert public.payload["call_id"].startswith("inv_")
-    assert public.payload["call_id"] != "call-1"
-    assert public.payload["tool_name"] == "Weather Agent"
-    assert public.payload["arg_summary"] == {}
-    assert "never-leak-me" not in str(public.payload)
-
-
-def test_tool_call_accepted_denies_unknown_argument_projection():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "tool_execution_started",
-            {
-                "tool_name": "weather_lookup",
-                "arguments": {"city": "x" * 5000},
-            },
-        )
-    )
-    assert public is not None
-    assert public.payload["arg_summary"] == {}
-
-
-def test_tool_call_completed_carries_result_summary_and_exit_code():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "tool_execution_completed",
-            {
-                "call_id": "call-1",
-                "status": "completed",
-                "tool_name": "weather_lookup",
-                "result_status": "completed",
-                "result_text": "Sunny, 24C",
-                "duration_ms": 120,
-            },
-        )
-    )
-    assert public is not None
-    assert public.kind == "tool_call_completed"
-    assert public.payload["call_id"].startswith("inv_")
-    assert public.payload | {"call_id": "<opaque>"} == {
-        "call_id": "<opaque>",
-        "tool_name": "weather_lookup",
-        "result_summary": "",
-        "exit_code": 0,
-        "duration_ms": 120,
-    }
-
-
-def test_tool_call_completed_maps_failure_error_code():
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "tool_execution_completed",
-            {
-                "tool_name": "weather_lookup",
-                "result_status": "failed",
-                "result_error_code": "E503",
-                "result_error_message": "upstream down",
-            },
-        )
-    )
-    assert public is not None
-    # A non-numeric provider error still has a truthful failed public outcome.
-    assert public.payload["exit_code"] == 1
-    public = PublicProjectionTranslator().translate(
-        _event(
-            "tool_execution_completed",
-            {
-                "tool_name": "weather_lookup",
-                "result_status": "failed",
-                "result_error_code": 42,
-            },
-        )
-    )
-    assert public is not None
-    assert public.payload["exit_code"] == 42
-
-
 def test_translator_missing_room_id_degrades_to_empty_string():
     event = _event("model_retry_scheduled", {"attempt": 2, "error_class": "timeout"})
-    event = event.model_copy(update={"room_id": None})
+    event = event.model_copy(update={"conversation_id": None})
     public = PublicProjectionTranslator().translate(event)
     assert public is not None
-    assert public.room_id == ""
+    assert public.conversation_id == ""
 
 
 def _agent_catalog():
@@ -345,17 +157,13 @@ def _agent_catalog():
 
 
 def _canonical_tool_event(event_type: str, payload: dict):
-    return _event(event_type, payload).model_copy(
-        update={"lifecycle_family": "canonical"}
-    )
+    return _event(event_type, payload)
 
 
 def test_canonical_run_started_identity_ignores_recovery_payload_ids():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     durable_started_at = datetime(2030, 1, 1, tzinfo=UTC)
-    initial = _event("run_started", {"mode": "ultimate"}).model_copy(
-        update={"lifecycle_family": "canonical"}
-    )
+    initial = _event("run_started", {"mode": "ultimate"})
     recovery = _event(
         "run_started",
         {
@@ -363,7 +171,7 @@ def test_canonical_run_started_identity_ignores_recovery_payload_ids():
             "public_event_id": "public:run-1:run_started",
             "started_at": durable_started_at,
         },
-    ).model_copy(update={"lifecycle_family": "canonical", "sequence": 99})
+    ).model_copy(update={"sequence": 99})
 
     initial_public = translator.translate(initial)
     recovery_public = translator.translate(recovery)
@@ -375,7 +183,7 @@ def test_canonical_run_started_identity_ignores_recovery_payload_ids():
 
 
 def test_canonical_agent_execution_exposes_base_name_and_kind():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     public = translator.translate(
         _canonical_tool_event(
             "tool_execution_started",
@@ -399,7 +207,7 @@ def test_canonical_agent_execution_exposes_base_name_and_kind():
 
 
 def test_canonical_agent_execution_omits_private_a2a_transport_metadata():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     public = translator.translate(
         _canonical_tool_event(
             "tool_execution_started",
@@ -434,7 +242,7 @@ def test_canonical_agent_execution_omits_private_a2a_transport_metadata():
 
 
 def test_canonical_agent_execution_end_marks_private_detail_available():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     public = translator.translate(
         _canonical_tool_event(
             "tool_execution_completed",
@@ -459,8 +267,51 @@ def test_canonical_agent_execution_end_marks_private_detail_available():
     assert "Clear, 22C" not in str(public.payload)
 
 
+@pytest.mark.parametrize(
+    ("status", "code", "expected"),
+    [
+        (
+            "failed",
+            "llm_quota_exceeded",
+            {"error_code": "llm_quota_exceeded", "error_message": "Quota exceeded"},
+        ),
+        ("failed", "bad code", {}),
+        ("completed", "llm_quota_exceeded", {}),
+    ],
+)
+def test_canonical_agent_execution_end_exposes_agent_error_only_when_failed(
+    status, code, expected
+):
+    public = PublicProjectionTranslator().translate(
+        _canonical_tool_event(
+            "tool_execution_completed",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_weather_0001",
+                "tool_name": "agent_weather",
+                "agent_label": "Weather Agent - Forecast",
+                "result_status": status,
+                "result_is_error": status == "failed",
+                "result_text": "",
+                "result_error_code": code,
+                "result_error_message": "Quota exceeded",
+                "duration_ms": 120,
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+    assert public is not None
+    details = {
+        key: public.payload[key]
+        for key in ("error_code", "error_message")
+        if key in public.payload
+    }
+    assert details == expected
+
+
 def test_canonical_unknown_tool_is_plain_tool_execution_without_target():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     public = translator.translate(
         _canonical_tool_event(
             "tool_execution_started",
@@ -482,7 +333,7 @@ def test_canonical_unknown_tool_is_plain_tool_execution_without_target():
 
 
 def test_model_decision_projects_answered_from_context_and_no_progress():
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
 
     answered = translator.translate(
         _event(

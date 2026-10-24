@@ -29,7 +29,7 @@ export async function optimisticallyUpsertCreatedRoom(
     return {
       items: [
         { ...room, last_activity_at: new Date(optimisticActivity).toISOString() },
-        ...(history?.items.filter(item => item.room_id !== room.room_id) ?? []),
+        ...(history?.items.filter(item => item.conversation_id !== room.conversation_id) ?? []),
       ],
     }
   })
@@ -38,17 +38,17 @@ export async function optimisticallyUpsertCreatedRoom(
 export async function optimisticallyMarkRoomProcessing(
   queryClient: QueryClient,
   userId: string,
-  roomId: string,
+  conversationId: string,
   lastActivityAt: string,
 ): Promise<() => void> {
   const queryKey = roomHistoryQueryKey(userId)
   await queryClient.cancelQueries({ queryKey, exact: true })
   const previousRoom = queryClient
     .getQueryData<RoomHistoryResponse>(queryKey)
-    ?.items.find(item => item.room_id === roomId)
+    ?.items.find(item => item.conversation_id === conversationId)
 
   queryClient.setQueryData<RoomHistoryResponse>(queryKey, history => history ? {
-    items: history.items.map(item => item.room_id === roomId
+    items: history.items.map(item => item.conversation_id === conversationId
       ? { ...item, last_activity_at: lastActivityAt, status: 'processing' }
       : item),
   } : history)
@@ -56,7 +56,7 @@ export async function optimisticallyMarkRoomProcessing(
   return () => {
     if (!previousRoom) return
     queryClient.setQueryData<RoomHistoryResponse>(queryKey, history => history ? {
-      items: history.items.map(item => item.room_id === roomId
+      items: history.items.map(item => item.conversation_id === conversationId
         ? {
             ...item,
             last_activity_at: previousRoom.last_activity_at,

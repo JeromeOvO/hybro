@@ -97,7 +97,7 @@ export function handleProcessingStatus(
 
   const status = sseMessage.data.status
   const store = useMessageStore.getState()
-  const { roomId, lifecycle } = ctx
+  const { conversationId, lifecycle } = ctx
 
   if (
     status === PROCESSING_STATUS.QUEUED
@@ -123,13 +123,13 @@ export function handleProcessingStatus(
     const lifecycleMessageId = lifecycle.getMessageId()
     const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
 
-    const resolvedClientMessageId = resolveUserMessageId(roomId, clientReqId)
+    const resolvedClientMessageId = resolveUserMessageId(conversationId, clientReqId)
     const userMsgId =
       resolvedClientMessageId ??
       relatedMessageId ??
       (sseMessage.data.message_id as string | undefined) ??
       lifecycleMessageId
-    const processingUserEntity = findProcessingStatusUserEntity(roomId, {
+    const processingUserEntity = findProcessingStatusUserEntity(conversationId, {
       messageId: userMsgId,
       clientRequestId: clientReqId,
       relatedMessageId,
@@ -148,10 +148,7 @@ export function handleProcessingStatus(
         || stageMessage.includes('evaluat')
         || stageMessage.includes('planning')
         || stageMessage.includes('delegat')
-      const holdForSynthesis =
-        processingUserEntity.turnCompletionKind === 'synthesis'
-        || isOrchestrationStage
-      if (!holdForSynthesis) {
+      if (!isOrchestrationStage) {
         return
       }
     }
@@ -162,7 +159,7 @@ export function handleProcessingStatus(
 
     // Durable cancellation owns the current turn. Ignore late forward-progress
     // updates until a terminal processing status settles it.
-    if (useRoomUiStore.getState().getRoomFlags(roomId).cancelling) {
+    if (useRoomUiStore.getState().getRoomFlags(conversationId).cancelling) {
       return
     }
 
@@ -174,7 +171,7 @@ export function handleProcessingStatus(
     }
 
     appendProcessingStatusLog(
-      roomId,
+      conversationId,
       processingUserEntity,
       processingDetailsToLogMessage(sseMessage.data.details),
       sseMessage.timestamp,
@@ -192,9 +189,9 @@ export function handleProcessingStatus(
 
   const lifecycleMessageId = lifecycle.getMessageId()
   const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
-  const resolvedClientMessageId = resolveUserMessageId(roomId, clientReqId)
+  const resolvedClientMessageId = resolveUserMessageId(conversationId, clientReqId)
   const terminalUserMsgId = resolvedClientMessageId ?? relatedMessageId ?? sseMessage.data.message_id ?? lifecycleMessageId
-  const terminalUser = findProcessingStatusUserEntity(roomId, {
+  const terminalUser = findProcessingStatusUserEntity(conversationId, {
     messageId: terminalUserMsgId,
     clientRequestId: clientReqId,
     relatedMessageId,
@@ -229,7 +226,7 @@ export function handleProcessingStatus(
     lifecycle.stopProcessing({ clearMessageId: false })
     ctx.setCancelling(false)
     lifecycle.disarmCancelTimeout()
-    store.removeMessage(lifecycle.placeholderId(roomId))
+    store.removeMessage(lifecycle.placeholderId(conversationId))
     lifecycle.dismissPlaceholder()
 
     const turnClientRequestId = clientReqId ?? sseMessage.data.client_request_id
@@ -247,7 +244,7 @@ export function handleProcessingStatus(
         toast.info('Processing stopped by user')
         store.upsertMessage({
           id: `cancel-confirm-${Date.now()}`,
-          roomId,
+          conversationId,
           messageType: 'agent',
           content: 'Processing was stopped by the user.',
           senderName: 'System',
@@ -256,7 +253,7 @@ export function handleProcessingStatus(
           timestamp: new Date().toISOString(),
           isEphemeral: true,
         }, 'optimistic')
-        store.cancelAllNonTerminal(roomId)
+        store.cancelAllNonTerminal(conversationId)
       } else if (status === PROCESSING_STATUS.FAILED) {
         toast.error(`Processing failed: ${processingDetailsToLogMessage(sseMessage.data.details) ?? 'Unknown error'}`)
       } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
@@ -275,34 +272,15 @@ export function handleProcessingStatus(
         status === PROCESSING_STATUS.ERROR ||
         status === PROCESSING_STATUS.REJECTED ||
         status === PROCESSING_STATUS.RATE_LIMITED ? 'failed' : 'completed'
-      const rawKind = sseMessage.data.details?.turn_completion_kind
-      const incomingKind: 'synthesis' | 'deterministic' | undefined =
-        rawKind === 'synthesis' || rawKind === 'deterministic' ? rawKind : undefined
-
-      if (!existingUserMsg.turnTerminalStatus || (incomingKind && !existingUserMsg.turnCompletionKind)) {
+      if (!existingUserMsg.turnTerminalStatus) {
         store.upsertMessage({
           id: resolvedTerminalUserMsgId,
-          roomId,
+          conversationId,
           messageType: existingUserMsg.messageType,
           content: existingUserMsg.content,
           senderName: existingUserMsg.senderName,
           timestamp: existingUserMsg.timestamp,
-          turnTerminalStatus: existingUserMsg.turnTerminalStatus || terminalStatus,
-          turnCompletionKind: existingUserMsg.turnCompletionKind || incomingKind,
-        }, 'sse')
-      } else if (
-        existingUserMsg.turnCompletionKind === 'deterministic'
-        && incomingKind === 'synthesis'
-        && terminalStatus === 'completed'
-      ) {
-        store.upsertMessage({
-          id: resolvedTerminalUserMsgId,
-          roomId,
-          messageType: existingUserMsg.messageType,
-          content: existingUserMsg.content,
-          senderName: existingUserMsg.senderName,
-          timestamp: existingUserMsg.timestamp,
-          turnCompletionKind: 'synthesis',
+          turnTerminalStatus: terminalStatus,
         }, 'sse')
       }
     }

@@ -13,7 +13,8 @@ from common.dto.hitl import A2AInteractionSpec
 from common.utils.logger import get_logger
 
 from ..kernel import KernelConflict
-from ..models import TextPart, ToolResult
+from ..models import TextPart
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import InvocationCheckpointReader
 from .cancellation import A2ACancellationCoordinator
 from .errors import (
@@ -80,9 +81,9 @@ class A2ACallRecoveryService:
         dispatch: A2ADispatchPort,
         observations: NormalizedObservationRecorder,
         recover_dispatch: RecoverDispatch,
+        hitl: HITLApplicationPort,
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-call-recovery",
-        hitl: HITLApplicationPort | None = None,
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
         canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
@@ -146,7 +147,9 @@ class A2ACallRecoveryService:
         if claimed is None:
             return False
         record = claimed
-        if not await self.room_epochs.verify_active(record.room_id, record.room_epoch):
+        if not await self.room_epochs.verify_active(
+            record.conversation_id, record.room_epoch
+        ):
             return await self._expire(record, now=now, code="room_epoch_gone")
         if (
             now > record.dispatch_snapshot.deadline_at
@@ -333,50 +336,6 @@ class A2ACallRecoveryService:
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
-            if self.hitl is None:
-                # Without a HITL port, only the legacy untyped silent-complete
-                # path is safe; typed specs must wait for a wired composition.
-                if observation.interaction_spec is not None:
-                    return (
-                        await self._release(
-                            record,
-                            now=now,
-                            delay=record.runtime_policy.retry_backoff_initial_seconds,
-                        )
-                        is not None
-                    )
-                content = list(observation.content or [])
-                if not content:
-                    content = [TextPart(text="The Agent requested additional input.")]
-                result = ToolResult(
-                    call_id=record.invocation_id,
-                    tool_name=record.tool_name,
-                    status="completed",
-                    content=content,
-                    artifact_refs=list(
-                        dict.fromkeys(
-                            [*record.artifact_refs, *(observation.artifact_refs or [])]
-                        )
-                    ),
-                    error_code=None,
-                    error_message=None,
-                )
-                terminal = transition_call(
-                    record,
-                    to_state="completed",
-                    updated_at=datetime.now(UTC),
-                    artifact_refs=result.artifact_refs,
-                    terminal_result=result,
-                    terminal_result_digest=sha256(
-                        result.model_dump_json().encode()
-                    ).hexdigest(),
-                )
-                winner, exact = await self._cas_or_load_winner(
-                    terminal, expected_state_version=record.state_version
-                )
-                return exact or (
-                    winner is not None and winner.state in TERMINAL_AGENT_CALL_STATES
-                )
             try:
 
                 async def _cas(
@@ -542,13 +501,7 @@ class A2ACallRecoveryService:
         if self.run_store is None:
             return False
         run = await self.run_store.load(record.run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def _expire(
         self, record: AgentCallLedgerRecord, *, now: datetime, code: str
@@ -907,7 +860,7 @@ def dispatch_command(
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
         materialized_resources=list(materialized_resources or []),
-        room_id=record.room_id,
+        conversation_id=record.conversation_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,
     )

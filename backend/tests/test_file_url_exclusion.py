@@ -1,4 +1,4 @@
-from dal.runtime_store.parts.parsing import _strip_file_urls
+from conversation.repository.message_documents import _strip_file_urls
 
 
 class TestStripFileUrls:

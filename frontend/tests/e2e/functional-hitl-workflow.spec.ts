@@ -14,7 +14,7 @@ async function getTravelPlannerAgentId(request: APIRequestContext): Promise<stri
       const data = await resp.json()
       const agents = data.agents || []
       for (const a of agents) {
-        const name = (a.agent_card?.name || '').toLowerCase()
+        const name = (a.name || '').toLowerCase()
         if (name.includes('travel') || name.includes('planner')) {
           return a.agent_id || DEFAULT_TRAVEL_PLANNER_AGENT_ID
         }
@@ -55,12 +55,12 @@ function findTerminalSynthesis(
 
 async function pollPendingHitl(
   request: APIRequestContext,
-  roomId: string,
+  conversationId: string,
   timeoutMs = 45_000,
 ): Promise<Record<string, unknown>[]> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${roomId}/hitl/pending`)
+    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${conversationId}/hitl/pending`)
     expect(pendingResp.ok()).toBeTruthy()
     const data = await pendingResp.json()
     const requests = (data.requests || []) as Record<string, unknown>[]
@@ -75,11 +75,9 @@ async function pollPendingHitl(
 
 async function fetchRoomMessages(
   request: APIRequestContext,
-  roomId: string,
+  conversationId: string,
 ): Promise<Record<string, unknown>[]> {
-  const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
-    data: { room_id: roomId },
-  })
+  const historyResp = await request.get(`${BACKEND_URL}/rooms/${encodeURIComponent(conversationId)}/messages`)
   if (!historyResp.ok()) {
     return []
   }
@@ -89,13 +87,14 @@ async function fetchRoomMessages(
 
 async function waitForTerminalSynthesis(
   request: APIRequestContext,
-  roomId: string,
+  conversationId: string,
   clientRequestId: string,
-  timeoutMs = 75_000,
+  // Live supervisor runs with real Agents regularly take over a minute.
+  timeoutMs = 240_000,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const messages = await fetchRoomMessages(request, roomId)
+    const messages = await fetchRoomMessages(request, conversationId)
     const synthesis = findTerminalSynthesis(messages, clientRequestId)
     if (synthesis) {
       return synthesis
@@ -107,12 +106,12 @@ async function waitForTerminalSynthesis(
 
 async function waitForNoPendingHitl(
   request: APIRequestContext,
-  roomId: string,
+  conversationId: string,
   timeoutMs = 30_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${roomId}/hitl/pending`)
+    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${conversationId}/hitl/pending`)
     if (pendingResp.ok()) {
       const data = await pendingResp.json()
       const requests = (data.requests || []) as Record<string, unknown>[]
@@ -152,8 +151,17 @@ function userMessageInTimeline(page: Page, text: string) {
   return page.locator('.conversation-turn .conversation-user-message-text').filter({ hasText: text })
 }
 
-function synthesisInTimeline(page: Page) {
-  return conversationTimeline(page).getByText(/Day 1:|Custom Travel Plan/)
+function synthesisInTimeline(page: Page, synthesisText: string) {
+  // Model wording varies per run, so match a slice of the persisted synthesis.
+  // Markdown-formatted lines render across several elements, so pick a plain
+  // line without inline markup.
+  const plainLine = synthesisText
+    .split('\n')
+    // Drop list markers, which render as bullets rather than text.
+    .map(line => line.trim().replace(/^(?:[-+]|\d+[.)])\s+/, ''))
+    .filter(line => line.length >= 20 && !/[*_`#|\[\]<>]/.test(line))
+    .pop() ?? synthesisText.trim()
+  return conversationTimeline(page).getByText(plainLine.slice(0, 40), { exact: false }).first()
 }
 
 test.describe('Functional HITL & Timeline Hydration Flow', () => {
@@ -161,31 +169,31 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     page,
     request,
   }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(480_000)
     const travelAgentId = await getTravelPlannerAgentId(request)
 
-    const createResp = await request.post(`${BACKEND_URL}/roomCenter/createNewRoom`, {
+    const createResp = await request.post(`${BACKEND_URL}/rooms`, {
       data: {
         room_name: 'E2E Functional Test Room',
         room_owner_name: 'Developer Local',
+        membership_seed_input: 'manual',
         room_agent_ids: [travelAgentId],
         extend_info: { use_supervisor: true },
       },
     })
     expect(createResp.ok()).toBeTruthy()
     const roomData = await createResp.json()
-    const roomId = roomData.room_id
-    expect(roomId).toBeTruthy()
+    const conversationId = roomData.conversation_id
+    expect(conversationId).toBeTruthy()
 
     const promptText = `Generate a travel plan e2e-${Date.now()}`
     const answerText = 'Kyoto, 3 days, $1500 budget'
     const clientRequestId = `e2e-req-${Date.now()}`
-    const sendResp = await request.post(`${BACKEND_URL}/roomCenter/sendMessage`, {
+    const sendResp = await request.post(`${BACKEND_URL}/rooms/${encodeURIComponent(conversationId)}/messages`, {
       data: {
-        room_id: roomId,
         user_input: promptText,
         message: {
-          room_id: roomId,
+          conversation_id: conversationId,
           message_id: '',
           message_type: 'user',
           message_content: {
@@ -202,36 +210,53 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     })
     expect(sendResp.ok()).toBeTruthy()
 
-    await page.goto(`/room/${roomId}`)
+    await page.goto(`/room/${conversationId}`)
     await expect(userMessageInTimeline(page, promptText)).toBeVisible({ timeout: 30000 })
 
-    const pendingRequests = await pollPendingHitl(request, roomId)
-    expect(pendingRequests.length).toBeGreaterThan(0)
-    for (const req of pendingRequests) {
-      const submitResp = await request.post(`${BACKEND_URL}/rooms/${roomId}/hitl/respond-batch`, {
-        data: {
-          interaction_id: req.interaction_id,
-          answers: [{ request_id: req.request_id, user_input: answerText }],
-          client_request_id: req.client_request_id || clientRequestId,
-        },
+    // Model-first HITL lets the supervisor answer an Agent's question itself,
+    // so a user-facing question is not guaranteed; answer it when one appears.
+    const pendingRequests = await pollPendingHitl(request, conversationId)
+    // An interaction may ask several questions; answer each one as a single
+    // batch, as the room UI does.
+    if (pendingRequests.length === 0) {
+      test.info().annotations.push({
+        type: 'hitl',
+        description: 'No user-facing question appeared; the supervisor answered the Agent itself.',
       })
-      expect(submitResp.ok()).toBeTruthy()
+    }
+    // Group by interaction id and version, since a later round can reuse the id.
+    const byInteraction = new Map<string, typeof pendingRequests>()
+    for (const req of pendingRequests) {
+      const key = `${String(req.interaction_id)}@${String(req.interaction_version)}`
+      byInteraction.set(key, [...(byInteraction.get(key) ?? []), req])
+    }
+    for (const reqs of byInteraction.values()) {
+      const interactionId = String(reqs[0].interaction_id)
+      const submitResp = await request.post(`${BACKEND_URL}/rooms/${conversationId}/hitl/respond-batch`, {
+        data: {
+          interaction_id: interactionId,
+          answers: reqs.map(req => ({ request_id: req.request_id, user_input: answerText })),
+          client_request_id: reqs[0].client_request_id || clientRequestId,
+        },
+        timeout: 180_000,
+      })
+      expect(submitResp.ok(), `${submitResp.status()} ${await submitResp.text()}`).toBeTruthy()
       const submitBody = await submitResp.json()
       expect(submitBody.status).toMatch(/accepted|applied/)
     }
     await autoRespondHitlViaUiIfPresent(page, answerText)
-    await waitForNoPendingHitl(request, roomId)
+    await waitForNoPendingHitl(request, conversationId)
 
-    const synthesis = await waitForTerminalSynthesis(request, roomId, clientRequestId)
+    const synthesis = await waitForTerminalSynthesis(request, conversationId, clientRequestId)
     const synthesisText = messageText(synthesis)
     expect(synthesisText.length).toBeGreaterThan(30)
 
     await page.reload()
     await expect(userMessageInTimeline(page, promptText)).toBeVisible({ timeout: 30000 })
     await expect.poll(async () => {
-      const messages = await fetchRoomMessages(request, roomId)
+      const messages = await fetchRoomMessages(request, conversationId)
       return findTerminalSynthesis(messages, clientRequestId)
     }, { timeout: 30_000 }).toBeTruthy()
-    await expect(synthesisInTimeline(page)).toBeVisible({ timeout: 30_000 })
+    await expect(synthesisInTimeline(page, synthesisText)).toBeVisible({ timeout: 30_000 })
   })
 })

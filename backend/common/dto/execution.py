@@ -46,7 +46,7 @@ AgentScopeInput = Annotated[
 
 
 class ExecutionRequest(FrozenDTO):
-    room_id: str
+    conversation_id: str
     sender_id: str
     sender_name: str | None = None
     message: dict[str, JsonValue] | None = None
@@ -61,25 +61,8 @@ class ExecutionRequest(FrozenDTO):
     )
 
 
-class ExecutionResult(FrozenDTO):
-    success: bool
-    run_id: str | None = None
-    message_id: str | None = None
-    error: str | None = None
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class WorkflowState(FrozenDTO):
-    run_id: str
-    room_id: str
-    state: str
-    updated_at: datetime
-    current_agent_id: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class ExecutionAck(FrozenDTO):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     dispatch_root_message_id: str | None = None
     user_id: str | None = None
@@ -103,7 +86,7 @@ class CancellationAck(FrozenDTO):
 
 class RunInfo(FrozenDTO):
     run_id: str
-    room_id: str
+    conversation_id: str
     state: RunState | str
     trigger_message_id: str | None = None
     agent_id: str | None = None
@@ -117,7 +100,7 @@ class RunInfo(FrozenDTO):
 
 class HITLRequest(FrozenDTO):
     request_id: str
-    room_id: str
+    conversation_id: str
     user_message_id: str
     source: Literal["agent", "supervisor"]
     prompt: str
@@ -156,7 +139,6 @@ class HITLRequest(FrozenDTO):
     question_index: int = 0
     status: Literal[
         "pending",
-        "processing",
         "answer_recorded",
         "responded",
         "resolved",
@@ -193,24 +175,11 @@ class HITLResponse(FrozenDTO):
     client_request_id: str | None = None
 
 
-class AgentEvent(FrozenDTO):
-    # Deprecated Common compatibility DTO. Phase 7b runtime-normalized agent
-    # events live in execution.dispatch.agent_event.
-    room_id: str
-    agent_id: str
-    message_id: str
-    event_type: Literal["partial", "final", "status_update", "error", "input_required"]
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-    hub_id: str | None = None
-
-
 __all__ = [
-    "AgentEvent",
     "AgentScopeInput",
     "AllAgentsScope",
     "ExecutionAck",
     "ExecutionRequest",
-    "ExecutionResult",
     "HITLRequest",
     "MentionAgentScope",
     "HITLResponse",
@@ -218,5 +187,4 @@ __all__ = [
     "RunInfo",
     "RunState",
     "SavedGroupAgentScope",
-    "WorkflowState",
 ]

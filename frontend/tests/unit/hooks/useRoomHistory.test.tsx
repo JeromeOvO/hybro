@@ -13,7 +13,7 @@ afterEach(cleanup)
 
 describe('useRoomHistory', () => {
   it('shares the chat-history cache key', async () => {
-    listRoomHistory.mockResolvedValue({ items: [{ room_id: 'r', title: 'T', last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status: 'awaiting_input' }] })
+    listRoomHistory.mockResolvedValue({ items: [{ conversation_id: 'r', title: 'T', last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status: 'awaiting_input' }] })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
     const { result } = renderHook(() => useRoomHistory({ userId: 'u', enabled: true }), { wrapper })

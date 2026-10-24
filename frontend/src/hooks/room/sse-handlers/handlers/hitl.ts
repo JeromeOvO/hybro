@@ -27,7 +27,7 @@ export async function handleHitlRequest(
   if (!request_id || !message_id) return
 
   const store = useMessageStore.getState()
-  const { lifecycle, hitlRequestIndex, roomId } = ctx
+  const { lifecycle, hitlRequestIndex, conversationId } = ctx
 
   const eventClientRequestId =
     typeof sseMessage.data.client_request_id === 'string' &&
@@ -36,13 +36,13 @@ export async function handleHitlRequest(
       : undefined
   const hasEventTurnIdentity = !!eventClientRequestId || !!related_user_message_id || !!related_message_id
   const processingUser =
-    findProcessingStatusUserEntity(roomId, {
+    findProcessingStatusUserEntity(conversationId, {
       clientRequestId: eventClientRequestId,
       relatedMessageId: related_user_message_id ?? related_message_id,
       latestWithLogs: !hasEventTurnIdentity,
     }) ??
     (!hasEventTurnIdentity
-      ? findProcessingStatusUserEntity(roomId, {
+      ? findProcessingStatusUserEntity(conversationId, {
           messageId: lifecycle.getMessageId(),
           latestWithLogs: true,
         })
@@ -66,7 +66,7 @@ export async function handleHitlRequest(
     userMatchesLifecycle ||
     (!activeClientRequestId && !lifecycleMessageId && !!processingUser)
   if (isCurrentTurnHitl) {
-    store.removeMessage(lifecycle.placeholderId(roomId))
+    store.removeMessage(lifecycle.placeholderId(conversationId))
     lifecycle.dismissPlaceholder()
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing({ clearMessageId: false })
@@ -78,7 +78,7 @@ export async function handleHitlRequest(
   }
 
   const incoming = buildPendingHitlIncomingMessage({
-    roomId,
+    conversationId,
     messageId: message_id,
     requestId: request_id,
     source,
@@ -112,7 +112,7 @@ export async function handleHitlRequest(
   ) {
     store.upsertMessage({
       id: legacyProjection.id,
-      roomId,
+      conversationId,
       messageType: 'agent',
       content: legacyProjection.content,
       senderName: legacyProjection.senderName,
@@ -124,7 +124,7 @@ export async function handleHitlRequest(
   const requestKey = hitlRequestKey(interaction_id, request_id)
   hitlRequestIndex.current.set(requestKey, incoming.id)
 
-  appendEvent(roomId, {
+  appendEvent(conversationId, {
     kind: 'hitl_requested',
     timestamp: sseMessage.timestamp,
     agentId: agent_id ?? undefined,
@@ -204,7 +204,7 @@ export function handleHitlResponse(
 
   store.upsertMessage({
     id: entity.id,
-    roomId: ctx.roomId,
+    conversationId: ctx.conversationId,
     messageType: 'agent',
     content: resolvedContent,
     senderName: entity.senderName,
@@ -224,7 +224,7 @@ export function handleHitlResponse(
   if (resolved) {
     ctx.hitlRequestIndex.current.delete(requestKey)
     ctx.hitlRequestIndex.current.delete(request_id)
-    appendEvent(ctx.roomId, {
+    appendEvent(ctx.conversationId, {
       kind: 'hitl_answered',
       timestamp: sseMessage.timestamp,
       agentId: entity.agentId,

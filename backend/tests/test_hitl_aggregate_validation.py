@@ -4,39 +4,35 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
-from execution.hitl.exceptions import HITLRoutingFailedError
-from execution.hitl.service import HITLService
-from execution.hitl.validation import (
+from approval.exceptions import HITLRoutingFailedError
+from approval.service import HITLService
+from approval.validation import (
     HITLAggregateCorruptionError,
     validate_command_route_consistency,
     validate_exact_member_inventory,
     validate_route_classifications,
 )
+from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from models.hitl import (
     HITLInteraction,
     HITLInteractionStatus,
     HITLRequest,
-    HITLResumeCommand,
     HITLSupervisorEffectCommand,
 )
 
 
 def _aggregate() -> dict:
     snapshot = HITLRouteSnapshot(
-        route=HITLApplicationRoute.A2A_RESUME,
-        task_id="task-1",
-        context_id="context-1",
-        continuation_message_id="message-1",
-        agent_id="agent-1",
+        route=HITLApplicationRoute.SUPERVISOR_RUN,
+        orchestration_run_id="run-1",
     )
     return {
         "schema_version": 3,
         "interaction_id": "interaction-1",
         "room_id": "room-1",
         "user_message_id": "message-1",
-        "orchestration_run_id": None,
-        "application_route": "a2a_resume",
+        "orchestration_run_id": "run-1",
+        "application_route": "supervisor_run",
         "public_source": "agent",
         "evidence_origin": "agent",
         "route_snapshot": snapshot.model_dump(mode="python"),
@@ -66,8 +62,8 @@ def _rows() -> list[dict]:
             "question_count": 2,
             "room_id": "room-1",
             "user_message_id": "message-1",
-            "orchestration_run_id": None,
-            "application_route": "a2a_resume",
+            "orchestration_run_id": "run-1",
+            "application_route": "supervisor_run",
             "public_source": "agent",
             "evidence_origin": "agent",
             "prompt": f"Question {index + 1}?",
@@ -104,20 +100,6 @@ def test_missing_creation_inventory_and_schema_v3_fail_closed():
 
 
 def test_effect_commands_forbid_extra_authority_fields():
-    a2a = {
-        "schema_version": 3,
-        "command_id": "command-1",
-        "interaction_id": "interaction-1",
-        "application_revision": 1,
-        "task_id": "task-1",
-        "context_id": "context-1",
-        "continuation_message_id": "message-1",
-        "agent_id": "agent-1",
-        "outbound_message_id": "outbound-1",
-        "answer_request_ids": ["request-1"],
-        "answer_digest": "digest",
-        "authority_override": "untrusted",
-    }
     supervisor = {
         "schema_version": 3,
         "command_id": "command-2",
@@ -128,8 +110,6 @@ def test_effect_commands_forbid_extra_authority_fields():
         "answer_digest": "digest",
         "authority_override": "untrusted",
     }
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        HITLResumeCommand.model_validate(a2a)
     with pytest.raises(ValidationError, match="Extra inputs"):
         HITLSupervisorEffectCommand.model_validate(supervisor)
 
@@ -144,9 +124,9 @@ def test_route_fingerprint_corruption_fails_closed():
 
 def test_mixed_member_target_fails_before_effect_validation():
     rows = _rows()
-    rows[1]["application_route"] = "supervisor_run"
+    rows[1]["orchestration_run_id"] = "run-other"
 
-    with pytest.raises(HITLAggregateCorruptionError, match="application_route"):
+    with pytest.raises(HITLAggregateCorruptionError, match="orchestration_run_id"):
         validate_exact_member_inventory(_aggregate(), rows)
 
 
@@ -161,13 +141,9 @@ def test_command_target_mismatch_fails_before_effect():
     command = {
         "schema_version": 3,
         "command_id": "command-1",
-        "kind": "a2a_resume",
+        "kind": "supervisor_resume",
         "interaction_id": "interaction-1",
-        "task_id": "corrupt-task",
-        "context_id": "context-1",
-        "continuation_message_id": "message-1",
-        "agent_id": "agent-1",
-        "outbound_message_id": "outbound-1",
+        "orchestration_run_id": "corrupt-run",
         "application_revision": 1,
         "answer_request_ids": ["request-1", "request-2"],
         "answer_digest": "digest",
@@ -198,8 +174,6 @@ def _cancellation_service(
 
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
 
     async def update_request(request_id, **updates):
         row = next(row for row in rows if row["request_id"] == request_id)
@@ -225,7 +199,7 @@ async def test_cancel_request_terminalizes_exact_aggregate_inventory():
     rows = _persisted_rows()
     service, persistence, lifecycle = _cancellation_service(aggregate, rows)
 
-    await service.cancel_request("request-1", room_id="room-1")
+    await service.cancel_request("request-1", conversation_id="room-1")
 
     lifecycle.terminalize_interaction.assert_awaited_once()
     assert persistence.cas_update_hitl_request_strict.await_count == 2
@@ -243,7 +217,7 @@ async def test_cancel_request_fingerprint_corruption_fails_before_writes_or_effe
     service, persistence, lifecycle = _cancellation_service(aggregate, rows)
 
     with pytest.raises(HITLRoutingFailedError, match="fingerprint"):
-        await service.cancel_request("request-1", room_id="room-1")
+        await service.cancel_request("request-1", conversation_id="room-1")
 
     lifecycle.terminalize_interaction.assert_not_awaited()
     persistence.cas_update_hitl_request_strict.assert_not_awaited()
@@ -261,7 +235,7 @@ async def test_cancel_request_records_terminal_state_before_retryable_effect_fai
     )
 
     with pytest.raises(RuntimeError, match="side effects remain pending"):
-        await service.cancel_request("request-1", room_id="room-1")
+        await service.cancel_request("request-1", conversation_id="room-1")
 
     assert persistence.cas_update_hitl_request_strict.await_count == 2
     assert persistence.update_hitl_request.await_count == 2
@@ -280,7 +254,7 @@ async def test_request_interaction_validates_complete_inventory_before_first_wri
 
     with pytest.raises(ValueError, match="question 1"):
         await service.request_interaction(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="message-1",
             interaction_id="interaction-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -309,7 +283,7 @@ async def test_supervisor_route_run_mismatch_fails_before_first_write():
 
     with pytest.raises(ValueError, match="orchestration_run_id"):
         await service.request_interaction(
-            room_id="room-1",
+            conversation_id="room-1",
             user_message_id="message-1",
             interaction_id="interaction-1",
             application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -391,7 +365,7 @@ async def test_materialization_retry_resumes_inventory_to_open_once(crash_on_cre
         orchestration_run_id="run-1",
     )
     kwargs = dict(
-        room_id="room-1",
+        conversation_id="room-1",
         user_message_id="message-1",
         interaction_id="interaction-1",
         application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -454,8 +428,6 @@ async def test_terminal_retry_converges_after_per_member_crash(
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
     persistence.update_hitl_request = AsyncMock(side_effect=update_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
     lifecycle = MagicMock()
     lifecycle.get_interaction_strict = AsyncMock(return_value=aggregate)
     lifecycle.mark_interaction_terminal_reconciled = AsyncMock(return_value=True)
@@ -517,8 +489,6 @@ async def test_multi_question_terminal_order_closes_all_hitl_before_run(
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
     persistence.update_hitl_request = AsyncMock(side_effect=update_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
     lifecycle = MagicMock()
     lifecycle.get_interaction_strict = AsyncMock(return_value=aggregate)
     lifecycle.mark_interaction_terminal_reconciled = AsyncMock(

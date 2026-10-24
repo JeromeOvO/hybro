@@ -12,18 +12,27 @@ class RequestConcurrencyLimitMiddleware:
         path: str,
         max_concurrent: int,
         method: str = "POST",
+        include_subpaths: bool = False,
     ) -> None:
         self.app = app
         self.path = path.rstrip("/")
         self.max_concurrent = max_concurrent
         self.method = method
+        # Subpaths share one admission pool, for routes with path parameters.
+        self.include_subpaths = include_subpaths
         self._active = 0
+
+    def _matches(self, route_path: str) -> bool:
+        route_path = route_path.rstrip("/")
+        return route_path == self.path or (
+            self.include_subpaths and route_path.startswith(f"{self.path}/")
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] != "http"
             or scope.get("method") != self.method
-            or get_route_path(scope).rstrip("/") != self.path
+            or not self._matches(get_route_path(scope))
         ):
             await self.app(scope, receive, send)
             return

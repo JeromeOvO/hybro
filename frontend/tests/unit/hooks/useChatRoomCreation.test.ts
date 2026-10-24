@@ -34,16 +34,13 @@ import { toast } from 'sonner'
 import { useChatRoomCreation } from '@/hooks/useChatRoomCreation'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
+import { createAgent } from '../../fixtures'
 
 const mockCreateNewRoom = createNewRoom as ReturnType<typeof vi.fn>
 const mockGetAllAgents = getAllAgents as ReturnType<typeof vi.fn>
 const mockSuggestAgents = suggestAgents as ReturnType<typeof vi.fn>
 
-const mockAgent: Agent = {
-  agent_id: 'agent-1',
-  agent_card: { name: 'Test Agent' } as Agent['agent_card'],
-  agent_status: 'active' as Agent['agent_status'],
-}
+const mockAgent: Agent = createAgent({ agent_id: 'agent-1', name: 'Test Agent' })
 
 const defaultProps = {
   userId: 'user-1',
@@ -147,52 +144,49 @@ describe('useChatRoomCreation', () => {
         useChatRoomCreation({ ...defaultProps, userId: undefined })
       )
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('User information not available')
     })
 
     it('should fail when message is empty', async () => {
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('   ')
+        conversationId = await result.current.createRoomWithMessage('   ')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Message cannot be empty')
     })
 
     it('should create room with correct payload', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-123' },
+        room: { conversation_id: 'room-123' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello world', {
+        conversationId = await result.current.createRoomWithMessage('Hello world', {
           selectedAgents: [mockAgent],
           roomName: 'My Room',
         })
       })
 
-      expect(roomId!).toBe('room-123')
+      expect(conversationId!).toBe('room-123')
       expect(mockCreateNewRoom).toHaveBeenCalledWith(
         'My Room',
-        'user-1',
         'Test User',
         defaultProps.getToken,
-        { 'agent-1': 'Test Agent' },
         { use_supervisor: true, initialMessage: 'Hello world' },
-        undefined,
         {
           membership_seed_input: 'manual',
           room_agent_ids: ['agent-1'],
@@ -205,7 +199,7 @@ describe('useChatRoomCreation', () => {
     it('should auto-generate room name from message when not provided', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-456' },
+        room: { conversation_id: 'room-456' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -220,7 +214,7 @@ describe('useChatRoomCreation', () => {
     it('should truncate long auto-generated room names', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-789' },
+        room: { conversation_id: 'room-789' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -237,7 +231,7 @@ describe('useChatRoomCreation', () => {
     it('should store pending room data in zustand', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-store' },
+        room: { conversation_id: 'room-store' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -261,19 +255,19 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Server down')
     })
 
     it('should derive membership_seed_input: saved_group when targetGroup is a saved group', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-seeded' },
+        room: { conversation_id: 'room-seeded' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -282,7 +276,7 @@ describe('useChatRoomCreation', () => {
         await result.current.createRoomWithMessage('Hello', { targetGroup: 'group-abc' })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toEqual({
         membership_seed_input: 'saved_group',
         seed_group_id: 'group-abc',
@@ -292,7 +286,7 @@ describe('useChatRoomCreation', () => {
     it('should NOT derive membership from builtin groups (all_agents)', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-all' },
+        room: { conversation_id: 'room-all' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -301,14 +295,14 @@ describe('useChatRoomCreation', () => {
         await result.current.createRoomWithMessage('Hello', { targetGroup: 'all_agents' })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toBeUndefined()
     })
 
     it('should carry targetGroup in handoff for builtin groups', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-carry' },
+        room: { conversation_id: 'room-carry' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -326,7 +320,7 @@ describe('useChatRoomCreation', () => {
     it('should prefer selectedAgents over saved group seed', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-manual' },
+        room: { conversation_id: 'room-manual' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -338,13 +332,11 @@ describe('useChatRoomCreation', () => {
         })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toEqual({
         membership_seed_input: 'manual',
         room_agent_ids: ['agent-1'],
       })
-      const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
-      expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
       expect(pending?.agentScope).toEqual({ source: 'room_default' })
       expect(pending?.mode).toBe('supervisor')
@@ -353,7 +345,7 @@ describe('useChatRoomCreation', () => {
     it('should preserve explicit mention dispatch when selectedAgents seed the room', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-manual-mention' },
+        room: { conversation_id: 'room-manual-mention' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -366,13 +358,11 @@ describe('useChatRoomCreation', () => {
         })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toEqual({
         membership_seed_input: 'manual',
         room_agent_ids: ['agent-1'],
       })
-      const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
-      expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual-mention']
       expect(pending).toEqual({
         initialMessage: 'Hello <@agent-mentioned|Mentioned>',
@@ -386,7 +376,7 @@ describe('useChatRoomCreation', () => {
     it('should not seed or persist targetGroup when explicit dispatch uses mentions', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-mention' },
+        room: { conversation_id: 'room-mention' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -398,7 +388,7 @@ describe('useChatRoomCreation', () => {
         })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toBeUndefined()
       const pending = useRoomUiStore.getState().pendingRoomData['room-mention']
       expect(pending).toEqual({
@@ -413,7 +403,7 @@ describe('useChatRoomCreation', () => {
     it('should not seed targetGroup when explicit non-mention dispatch is provided', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-explicit-all' },
+        room: { conversation_id: 'room-explicit-all' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -425,7 +415,7 @@ describe('useChatRoomCreation', () => {
         })
       })
 
-      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      const membershipArg = mockCreateNewRoom.mock.calls[0][4]
       expect(membershipArg).toBeUndefined()
       const pending = useRoomUiStore.getState().pendingRoomData['room-explicit-all']
       expect(pending).toEqual({
@@ -445,30 +435,30 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Rate limited')
     })
 
-    it('should return null when room_id is missing (line 130)', async () => {
+    it('should return null when conversation_id is missing (line 130)', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: '' },
+        room: { conversation_id: '' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
-      expect(toast.error).toHaveBeenCalledWith('Room created but no room_id returned')
+      expect(conversationId!).toBeNull()
+      expect(toast.error).toHaveBeenCalledWith('Room created but no conversation_id returned')
     })
 
     it('should return null when room object is null (line 142)', async () => {
@@ -479,12 +469,12 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let roomId: string | null
+      let conversationId: string | null
       await act(async () => {
-        roomId = await result.current.createRoomWithMessage('Hello')
+        conversationId = await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(roomId!).toBeNull()
+      expect(conversationId!).toBeNull()
       expect(toast.error).toHaveBeenCalledWith('Failed to create room')
     })
 
@@ -505,7 +495,7 @@ describe('useChatRoomCreation', () => {
     it('should create room then navigate', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-nav' },
+        room: { conversation_id: 'room-nav' },
       })
 
       const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
@@ -525,7 +515,7 @@ describe('useChatRoomCreation', () => {
     it('should place a newly created room first in the cached history', async () => {
       activeQueryClient.setQueryData<RoomHistoryResponse>(roomHistoryQueryKey('user-1'), {
         items: [{
-          room_id: 'existing-room',
+          conversation_id: 'existing-room',
           title: 'Existing room',
           last_activity_at: '2099-08-01T00:00:00.000Z',
           is_pinned: false,
@@ -535,7 +525,7 @@ describe('useChatRoomCreation', () => {
       })
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-nav' },
+        room: { conversation_id: 'room-nav' },
       })
       const cancelSpy = vi.spyOn(activeQueryClient, 'cancelQueries')
       const invalidateSpy = vi.spyOn(activeQueryClient, 'invalidateQueries')
@@ -548,7 +538,7 @@ describe('useChatRoomCreation', () => {
       const history = activeQueryClient.getQueryData<RoomHistoryResponse>(
         roomHistoryQueryKey('user-1'),
       )
-      expect(history?.items.map(item => item.room_id)).toEqual([
+      expect(history?.items.map(item => item.conversation_id)).toEqual([
         'room-nav',
         'existing-room',
       ])
@@ -598,7 +588,7 @@ describe('useChatRoomCreation', () => {
     it('should create and navigate with agents', async () => {
       mockCreateNewRoom.mockResolvedValue({
         success: true,
-        room: { room_id: 'room-agent' },
+        room: { conversation_id: 'room-agent' },
       })
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))

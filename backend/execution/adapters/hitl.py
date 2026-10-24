@@ -11,7 +11,7 @@ records. This module provides:
   ``InMemoryHITLApplicationPort`` semantics exactly (route fingerprint,
   authenticated answerer, verified auth references, answer idempotency).
 
-The Mongo-backed store lives in ``dal/orchestrator/hitl.py`` so step 5b only has
+The Mongo-backed store lives in ``execution/repository/orchestrator/hitl.py`` so step 5b only has
 to construct and inject it.
 """
 
@@ -23,14 +23,11 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Protocol
 
-from common.dto.hitl import (
-    A2AInteractionSpec,
-    HITLQuestionAnswer,
-    HITLRouteSnapshotV2,
-)
+from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 from execution.orchestrator.a2a_runtime.models import (
     AgentCallLedgerRecord,
     DurableHITLAnswerRecord,
+    HITLRouteSnapshotV2,
     VerifiedAuthReferenceBinding,
 )
 
@@ -50,11 +47,11 @@ class HITLApplicationStore(Protocol):
     ) -> StoredHITLInteraction | None: ...
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]: ...
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]: ...
 
     async def mark_eligible(self, interaction_id: str) -> str: ...
@@ -127,21 +124,23 @@ class InMemoryHITLApplicationStore:
         return self._interactions.get(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         return [
             i
             for i in self._interactions.values()
-            if i.route.room_id == room_id and i.eligible and i.abandoned is None
+            if i.route.conversation_id == conversation_id
+            and i.eligible
+            and i.abandoned is None
         ]
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[StoredHITLInteraction]:
         return [
             i
             for i in self._interactions.values()
-            if i.route.room_id == room_id
+            if i.route.conversation_id == conversation_id
             and i.eligible
             and i.abandoned is None
             and i.published
@@ -264,7 +263,7 @@ class DurableHITLApplicationPort:
             orchestration_run_id=call.run_id,
             call_record_id=call.call_record_id,
             invocation_id=call.invocation_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             binding_id=call.binding_id,
             agent_id=call.agent_id,
@@ -309,9 +308,9 @@ class DurableHITLApplicationPort:
         return await self._hitl_store.mark_eligible(interaction_id)
 
     async def get_eligible_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
-        docs = await self._hitl_store.get_eligible_interactions(room_id)
+        docs = await self._hitl_store.get_eligible_interactions(conversation_id)
         return [
             (
                 A2AInteractionSpec.model_validate(doc.spec.model_dump(mode="python")),
@@ -322,9 +321,9 @@ class DurableHITLApplicationPort:
         ]
 
     async def get_published_interactions(
-        self, room_id: str
+        self, conversation_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
-        docs = await self._hitl_store.get_published_interactions(room_id)
+        docs = await self._hitl_store.get_published_interactions(conversation_id)
         actionable: list[StoredHITLInteraction] = []
         for doc in docs:
             answer = await self._hitl_store.load_answer(
@@ -465,6 +464,16 @@ def answers_identical(
     return _answer_identity(first) == _answer_identity(second)
 
 
+class HITLMessageCancellationAdapter:
+    """Cancel the open HITL requests of a user message after its Run is claimed."""
+
+    def __init__(self, hitl_manager) -> None:
+        self._hitl_manager = hitl_manager
+
+    async def cancel_requests_for_message(self, message_id: str) -> None:
+        await self._hitl_manager.cancel_requests_for_message(message_id)
+
+
 def _digest_json(value: object) -> str:
     canonical = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -475,6 +484,7 @@ def _digest_json(value: object) -> str:
 __all__ = [
     "DurableHITLApplicationPort",
     "HITLApplicationStore",
+    "HITLMessageCancellationAdapter",
     "InMemoryHITLApplicationStore",
     "StoredHITLInteraction",
     "answers_identical",

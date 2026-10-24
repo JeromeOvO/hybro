@@ -19,14 +19,14 @@ function findRequestMessage(
 ): MessageEntity | null {
   if (agent.relatedMessageId) {
     const related = entities[agent.relatedMessageId]
-    if (related?.messageType === 'user' && related.roomId === agent.roomId) return related
+    if (related?.messageType === 'user' && related.conversationId === agent.conversationId) return related
   }
 
   if (agent.clientRequestId) {
     for (const id of orderedIds) {
       const candidate = entities[id]
       if (
-        candidate?.roomId === agent.roomId &&
+        candidate?.conversationId === agent.conversationId &&
         candidate.messageType === 'user' &&
         candidate.clientRequestId === agent.clientRequestId
       ) {
@@ -38,7 +38,7 @@ function findRequestMessage(
   const userMessageIds = new Set<string>()
   for (const id of orderedIds) {
     const candidate = entities[id]
-    if (candidate?.roomId === agent.roomId && candidate.messageType === 'user') {
+    if (candidate?.conversationId === agent.conversationId && candidate.messageType === 'user') {
       userMessageIds.add(candidate.id)
     }
   }
@@ -51,14 +51,14 @@ function findRequestMessage(
   )
   if (routedTurnId !== 'unresolved') {
     const routed = entities[routedTurnId]
-    if (routed?.messageType === 'user' && routed.roomId === agent.roomId) return routed
+    if (routed?.messageType === 'user' && routed.conversationId === agent.conversationId) return routed
   }
 
   return null
 }
 
 export function selectAgentResponseDetail(
-  roomId: string,
+  conversationId: string,
   messageId: string | null | undefined,
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
@@ -66,7 +66,7 @@ export function selectAgentResponseDetail(
 ): AgentResponseDetail | null {
   if (!messageId) return null
   const agent = entities[messageId]
-  if (!agent || agent.roomId !== roomId || agent.messageType !== 'agent') return null
+  if (!agent || agent.conversationId !== conversationId || agent.messageType !== 'agent') return null
 
   const theme = agent.relatedMessageId || agent.clientRequestId
     ? getAgentTheme(agent.agentId, agent.senderName)

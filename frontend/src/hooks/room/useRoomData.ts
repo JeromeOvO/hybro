@@ -11,7 +11,7 @@ import { roomUsesSupervisorByDefault } from '@/lib/types/chat-mode'
 export type RoomWithActiveRuns = Room & { active_runs?: ActiveRunRefWire[] | null }
 
 export function useRoomData(
-  roomId: string,
+  conversationId: string,
   getToken: (() => Promise<string | null>) | undefined,
   primeAgentNameCache: (entries: Record<string, string>) => void,
   allAgentsData: Agent[] | undefined,
@@ -19,15 +19,15 @@ export function useRoomData(
   const activeRoomLoad = useRef<string | null>(null)
 
   const roomQuery = useQuery({
-    queryKey: ['room', roomId],
-    enabled: !!roomId && activeRoomLoad.current !== roomId,
+    queryKey: ['room', conversationId],
+    enabled: !!conversationId && activeRoomLoad.current !== conversationId,
     retry: 0,
     staleTime: 1000 * 30,
     queryFn: async ({ signal }): Promise<RoomWithActiveRuns | null> => {
-      activeRoomLoad.current = roomId
+      activeRoomLoad.current = conversationId
 
       try {
-        const response = await inquiryRoomSetting(roomId, getToken, signal)
+        const response = await inquiryRoomSetting(conversationId, getToken, signal)
         if (!response.success || !response.room) {
           throw new Error(response.error || 'Failed to load room')
         }
@@ -43,8 +43,8 @@ export function useRoomData(
         if (allAgentsData) {
           const catalogEntries: Record<string, string> = {}
           allAgentsData.forEach((agent) => {
-            if (agent.agent_id && agent.agent_card?.name) {
-              catalogEntries[agent.agent_id] = agent.agent_card.name
+            if (agent.agent_id && agent.name) {
+              catalogEntries[agent.agent_id] = agent.name
             }
           })
           primeAgentNameCache(catalogEntries)

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from common.dto.base import accepts_stored_conversation_id
 from common.types import Task
 from common.utils.time import utcnow
 from models.quote import UserQuoteCreatePayload
@@ -36,7 +37,9 @@ class MembershipOriginStatus(StrEnum):
 
 
 class Room(BaseModel):
-    room_id: str = Field(default_factory=lambda: uuid4().hex)
+    conversation_id: str = accepts_stored_conversation_id(
+        default_factory=lambda: uuid4().hex
+    )
     room_name: str
     room_owner_id: str
     room_owner_name: str
@@ -50,18 +53,13 @@ class Room(BaseModel):
     # The product that owns this conversation container: "chat" or "session".
     owner_product: str = "chat"
 
-    # Legacy provenance field — kept for backward compatibility during rollout.
-    # Canonical fields below take precedence when present.
-    applied_from_group: str | None = None
-
-    # Canonical provenance fields
+    # Provenance fields
     membership_origin: MembershipOrigin | None = None
     membership_origin_status: MembershipOriginStatus | None = None
     source_group_id: str | None = None
     source_group_name: str | None = None
 
     extend_info: Any | None = None
-    processing_message_id: str | None = None
     lifecycle_state: str = "active"
     deletion_id: str | None = None
     deletion_started_at: datetime | None = None
@@ -80,7 +78,7 @@ class Room(BaseModel):
 
 
 class Message(BaseModel):
-    room_id: str
+    conversation_id: str = accepts_stored_conversation_id()
     message_id: str
     message_created_at: datetime = Field(default_factory=utcnow)
 
@@ -129,7 +127,6 @@ class RoomMessage(Message):
     parent_message_id: str | None = None
     run_id: str | None = None
     # Canonical frontend correlation key for turn identity.
-    # For legacy rows this is backfilled to message_id via migration.
     client_request_id: str | None = None
     related_message_id: str | None = None
     message_content: MessageContent
@@ -178,12 +175,7 @@ class RoomAgentMessage(RoomMessage):
         return v
 
     # Task tracking fields (consolidated from a2a_tasks collection)
-    # Note: message_id is used as the primary key for task lookups (webhook URL, etc.)
     # The following fields are set when task tracking is enabled for this message:
-    webhook_token_hash: str | None = None  # Hashed token for webhook auth
-    pending_continuation: dict | None = (
-        None  # Queue state for resuming after push notification
-    )
     last_notified_state: str | None = (
         None  # Last SSE-notified state (prevents duplicates)
     )

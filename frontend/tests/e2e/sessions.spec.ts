@@ -10,8 +10,8 @@ const ANSWER = 'Kyoto, Japan, 3 days starting next Monday, budget $1500, mid-ran
 async function travelPlannerId(request: APIRequestContext): Promise<string> {
   const resp = await request.get(`${BACKEND_URL}/agent/getAllAgents?active_only=true`)
   expect(resp.ok()).toBeTruthy()
-  const agents = ((await resp.json()).agents || []) as { agent_id: string; agent_card?: { name?: string } }[]
-  const agent = agents.find(a => /travel|planner/i.test(a.agent_card?.name || ''))
+  const agents = ((await resp.json()).agents || []) as { agent_id: string; name?: string }[]
+  const agent = agents.find(a => /travel|planner/i.test(a.name || ''))
   if (!agent) throw new Error('Travel Planner Agent is not registered')
   return agent.agent_id
 }
@@ -118,7 +118,7 @@ test.describe('Sessions', () => {
 
     // The chat history excludes the session container.
     const record = await (await request.get(`${BACKEND_URL}/sessions/${sessionId}/record`)).json()
-    const history = await (await request.get(`${BACKEND_URL}/roomCenter/history`)).json()
-    expect((history.items as { room_id: string }[]).map(item => item.room_id)).not.toContain(record.conversation_id)
+    const history = await (await request.get(`${BACKEND_URL}/rooms`)).json()
+    expect((history.items as { conversation_id: string }[]).map(item => item.conversation_id)).not.toContain(record.conversation_id)
   })
 })

@@ -123,7 +123,7 @@ function mergeIncoming(
   if (!existing) {
     return {
       id: incoming.id,
-      roomId: incoming.roomId,
+      conversationId: incoming.conversationId,
       messageType: incoming.messageType,
       content: incoming.content,
       senderName: incoming.senderName,
@@ -250,7 +250,7 @@ function mergeIncoming(
 
   return {
     id: incoming.id,
-    roomId: incoming.roomId,
+    conversationId: incoming.conversationId,
     messageType: incoming.messageType,
     content: incoming.content,
     senderName: incoming.messageType === 'agent'

@@ -43,7 +43,7 @@ function createLifecycle(): ProcessingLifecycle {
     resetPlaceholder: vi.fn(),
     resetProcessingResolved: vi.fn(),
     setPendingRunEventAck: vi.fn(),
-    placeholderId: vi.fn((roomId: string) => `placeholder:${roomId}`),
+    placeholderId: vi.fn((conversationId: string) => `placeholder:${conversationId}`),
     startProcessing: vi.fn(),
     setSendGuard: vi.fn(),
     stopProcessing: vi.fn(),
@@ -58,7 +58,7 @@ function createLifecycle(): ProcessingLifecycle {
 const initialHistory: RoomHistoryResponse = {
   items: [
     {
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       title: 'Room 1',
       last_activity_at: '2026-08-01T00:00:00.000Z',
       is_pinned: false,
@@ -66,7 +66,7 @@ const initialHistory: RoomHistoryResponse = {
       status: 'idle',
     },
     {
-      room_id: 'room-2',
+      conversation_id: 'room-2',
       title: 'Room 2',
       last_activity_at: '2026-08-02T00:00:00.000Z',
       is_pinned: false,
@@ -97,7 +97,7 @@ describe('useSendMessage room-history rollback', () => {
       'room-1',
       'user-1',
       'User',
-      { room_id: 'room-1' },
+      { conversation_id: 'room-1' },
       async () => 'token',
       false,
       true,
@@ -129,7 +129,7 @@ describe('useSendMessage room-history rollback', () => {
     const history = activeQueryClient.getQueryData<RoomHistoryResponse>(
       roomHistoryQueryKey('user-1'),
     )
-    expect(history?.items.find(item => item.room_id === 'room-1')).toMatchObject({
+    expect(history?.items.find(item => item.conversation_id === 'room-1')).toMatchObject({
       status: 'processing',
     })
     expect(cancelSpy).toHaveBeenCalledWith({
@@ -154,7 +154,7 @@ describe('useSendMessage room-history rollback', () => {
       activeQueryClient.setQueryData<RoomHistoryResponse>(
         roomHistoryQueryKey('user-1'),
         history => history ? {
-          items: history.items.map(item => item.room_id === 'room-1'
+          items: history.items.map(item => item.conversation_id === 'room-1'
             ? { ...item, title: 'Renamed concurrently' }
             : item),
         } : history,
@@ -166,7 +166,7 @@ describe('useSendMessage room-history rollback', () => {
 
     expect(activeQueryClient.getQueryData<RoomHistoryResponse>(
       roomHistoryQueryKey('user-1'),
-    )?.items.find(item => item.room_id === 'room-1')).toEqual({
+    )?.items.find(item => item.conversation_id === 'room-1')).toEqual({
       ...initialHistory.items[0],
       title: 'Renamed concurrently',
     })
@@ -177,6 +177,31 @@ describe('useSendMessage room-history rollback', () => {
 
     expect(await send()).toBe(false)
     expect(activeQueryClient.getQueryData(roomHistoryQueryKey('user-1'))).toEqual(initialHistory)
+  })
+
+  it('sends every quote as a structured quote without plain display fields', async () => {
+    sendMessageMock.mockResolvedValueOnce({ success: true, message_id: 'message-1' })
+
+    expect(await send({
+      quoteData: {
+        content: '  Sunny, 21C  ',
+        messageId: 'orchestrator:run-1:inv_weather_0001',
+        senderName: 'Weather Agent',
+        sourceKind: 'agent',
+      },
+    })).toBe(true)
+
+    const params = sendMessageMock.mock.calls[0][0]
+    expect(params.structuredQuote).toEqual({
+      text: 'Sunny, 21C',
+      source_message_id: 'orchestrator:run-1:inv_weather_0001',
+      source_kind: 'agent',
+      sender_display_name: 'Weather Agent',
+      source_agent_id: null,
+    })
+    expect(params).not.toHaveProperty('quotedText')
+    expect(params).not.toHaveProperty('quotedSenderName')
+    expect(params).not.toHaveProperty('relatedMessageId')
   })
 
   it('restores history when the quote is too long', async () => {

@@ -41,7 +41,7 @@ class _PreparedStreamingResponse(StreamingResponse):
 @router.post("/upload")
 async def upload_file(
     file: UploadFile,
-    room_id: str = Form(...),
+    conversation_id: str = Form(...),
     user: ClerkUser = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
@@ -51,14 +51,14 @@ async def upload_file(
 
     Accepts multipart/form-data with:
     - file: The file to upload
-    - room_id: The room this file belongs to
+    - conversation_id: The room this file belongs to
 
     Returns FileUploadResponse with a stable authenticated content URL.
     """
 
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
-    owner_id = await room_ownership.get_room_owner(room_id)
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id is required")
+    owner_id = await room_ownership.get_room_owner(conversation_id)
     if owner_id is None:
         raise HTTPException(status_code=404, detail="Room not found")
     if owner_id != user.user_id:
@@ -66,7 +66,7 @@ async def upload_file(
             status_code=403,
             detail="You do not have permission to access this room",
         )
-    require_chat_room(await store.get_room_by_room_id(room_id))
+    require_chat_room(await store.get_room_by_room_id(conversation_id))
 
     try:
         file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -79,7 +79,7 @@ async def upload_file(
             file_bytes=file_bytes,
             filename=file.filename or "unnamed",
             owner_id=user.user_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             content_type=file.content_type,
         )
     except FileStoragePlatformError as exc:

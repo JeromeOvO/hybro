@@ -48,7 +48,7 @@ describe('presentation in the chat store path', () => {
   it('flows from the projection to the pending question', () => {
     const presentation = parseHitlPresentation({ header: 'Destination', allow_other: true })
     const incoming = buildPendingHitlIncomingMessage({
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageId: 'agent-msg-1',
       requestId: 'destination',
       source: 'agent',

@@ -29,14 +29,11 @@ import { createNewRoom } from '@/lib/api/room'
 import { useChatRoomCreation } from '@/hooks/useChatRoomCreation'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
+import { createAgent } from '../../fixtures'
 
 const mockCreateNewRoom = createNewRoom as ReturnType<typeof vi.fn>
 
-const mockAgent: Agent = {
-  agent_id: 'agent-1',
-  agent_card: { name: 'Test Agent' } as Agent['agent_card'],
-  agent_status: 'active' as Agent['agent_status'],
-}
+const mockAgent: Agent = createAgent({ agent_id: 'agent-1', name: 'Test Agent' })
 
 const defaultProps = {
   userId: 'user-1',
@@ -58,7 +55,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should include use_supervisor: true in extendInfo when useSupervisor is true', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-1' },
+      room: { conversation_id: 'room-sv-1' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -73,15 +70,12 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
 
     expect(mockCreateNewRoom).toHaveBeenCalledWith(
       'Supervisor Room',
-      'user-1',
       'Test User',
       defaultProps.getToken,
-      { 'agent-1': 'Test Agent' },
       expect.objectContaining({
         use_supervisor: true,
         initialMessage: 'Hello',
       }),
-      undefined,
       {
         membership_seed_input: 'manual',
         room_agent_ids: ['agent-1'],
@@ -92,7 +86,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should include use_supervisor: false in extendInfo when useSupervisor is false', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-2' },
+      room: { conversation_id: 'room-sv-2' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -103,14 +97,14 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', false)
   })
 
   it('should default use_supervisor to true when useSupervisor is not provided', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-3' },
+      room: { conversation_id: 'room-sv-3' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -120,7 +114,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     // When useSupervisor is omitted, default is now true (Ultimate mode)
     expect(extendInfoArg.use_supervisor).toBe(true)
   })
@@ -128,7 +122,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should omit debateMode from extendInfo', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-4' },
+      room: { conversation_id: 'room-sv-4' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -140,7 +134,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toEqual(expect.objectContaining({
       use_supervisor: true,
       initialMessage: 'Hello',
@@ -150,7 +144,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should pass use_supervisor through createAndNavigate', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-5' },
+      room: { conversation_id: 'room-sv-5' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -161,7 +155,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', true)
     expect(mockPush).toHaveBeenCalledWith('/room/room-sv-5')
   })
@@ -169,7 +163,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
   it('should pass use_supervisor through createWithAgentsAndNavigate', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: 'room-sv-6' },
+      room: { conversation_id: 'room-sv-6' },
     })
 
     const { result } = renderHook(() => useChatRoomCreation(defaultProps))
@@ -180,7 +174,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', true)
     expect(mockPush).toHaveBeenCalledWith('/room/room-sv-6')
   })

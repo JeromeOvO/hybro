@@ -70,7 +70,6 @@ class HITLInteractionKind(StrEnum):
 
 class HITLApplicationRoute(StrEnum):
     SUPERVISOR_RUN = "supervisor_run"
-    A2A_RESUME = "a2a_resume"
 
 
 class HITLPublicSource(StrEnum):
@@ -372,92 +371,41 @@ class HITLRouteSnapshot(_HITLContract):
             "continuation_message_id",
             "agent_id",
         )
-        if self.route == HITLApplicationRoute.SUPERVISOR_RUN:
-            if self.orchestration_run_id is None:
-                raise ValueError("supervisor_run requires orchestration_run_id")
-            if any(getattr(self, field_name) is not None for field_name in a2a_fields):
-                raise ValueError("supervisor_run must not include an A2A target")
-            return self
-
-        if self.orchestration_run_id is not None:
-            raise ValueError("a2a_resume must not include orchestration_run_id")
-        required_a2a_fields = (
-            "task_id",
-            "context_id",
-            "continuation_message_id",
-            "agent_id",
-        )
-        for field_name in required_a2a_fields:
-            value = getattr(self, field_name)
-            if value is None:
-                raise ValueError(f"a2a_resume requires {field_name}")
-            if _is_provisional_identifier(value):
-                raise ValueError(
-                    f"{field_name} must be authoritative and non-provisional"
-                )
+        if self.orchestration_run_id is None:
+            raise ValueError("supervisor_run requires orchestration_run_id")
+        if any(getattr(self, field_name) is not None for field_name in a2a_fields):
+            raise ValueError("supervisor_run must not include an A2A target")
         return self
+
+    def _fingerprint_payload(self) -> dict[str, object]:
+        """Canonical fingerprint input with literal stored keys, None included."""
+
+        return {
+            "schema_version": self.schema_version,
+            "route": self.route.value,
+            "orchestration_run_id": self.orchestration_run_id,
+            "task_id": self.task_id,
+            "context_id": self.context_id,
+            "continuation_message_id": self.continuation_message_id,
+            "agent_id": self.agent_id,
+        }
 
     @property
     def fingerprint(self) -> str:
-        """SHA-256 of the snapshot's canonical JSON representation."""
+        """SHA-256 of the snapshot's canonical JSON representation.
 
+        The hash is persisted as ``route_fingerprint`` and recomputed during
+        validation, so its input uses literal keys independent of attribute names.
+        """
+
+        canonical = self._fingerprint_payload()
         canonical_json = json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
+            {key: value for key, value in canonical.items() if value is not None},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
         )
         return hashlib.sha256(canonical_json.encode()).hexdigest()
-
-
-class HITLRouteSnapshotV2(_HITLContract):
-    """Invocation-owned route added for the orchestrator runtime."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    schema_version: Literal[2] = 2
-    route: Literal["orchestrator_tool"] = "orchestrator_tool"
-    orchestration_run_id: _NonBlankId
-    call_record_id: _NonBlankId
-    invocation_id: _NonBlankId
-    room_id: _NonBlankId
-    room_epoch: _StrictVersion
-    binding_id: _NonBlankId
-    agent_id: _NonBlankId
-    task_id: _NonBlankId | None = None
-    context_id: _NonBlankId | None = None
-    interaction_revision: _StrictVersion
-    interaction_fingerprint: _NonBlankId
-
-    @model_validator(mode="after")
-    def validate_authoritative_aliases(self) -> Self:
-        for value in (self.task_id, self.context_id):
-            if value is not None and _is_provisional_identifier(value):
-                raise ValueError("V2 route aliases must be authoritative")
-        return self
-
-    @property
-    def fingerprint(self) -> str:
-        canonical_json = json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        return hashlib.sha256(canonical_json.encode()).hexdigest()
-
-
-HITLRouteSnapshotUnion = Annotated[
-    HITLRouteSnapshot | HITLRouteSnapshotV2,
-    Field(discriminator="schema_version"),
-]
-
-
-def _is_provisional_identifier(value: str) -> bool:
-    normalized = value.casefold()
-    return normalized in {"pending", "provisional", "unknown"} or normalized.startswith(
-        ("pending-", "relay-pending-", "provisional-")
-    )
 
 
 __all__ = [
@@ -478,8 +426,6 @@ __all__ = [
     "HITLQuestionAnswer",
     "HITLQuestionSpec",
     "HITLRouteSnapshot",
-    "HITLRouteSnapshotUnion",
-    "HITLRouteSnapshotV2",
     "HITLSingleChoiceAnswer",
     "HITLTextAnswer",
 ]

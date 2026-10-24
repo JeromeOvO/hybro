@@ -2,9 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from common.file_upload_constants import (  # noqa: F401 - legacy model re-export
-    MAX_INLINE_CONVERSIONS_PER_MESSAGE,
-)
+from common.dto.base import accepts_stored_conversation_id
 from common.utils.time import utcnow
 
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -34,7 +32,7 @@ class FileUploadMetadata(BaseModel):
     """Stored in MongoDB `room_files` collection."""
 
     file_id: str
-    room_id: str
+    conversation_id: str = accepts_stored_conversation_id()
     owner_id: str
     source: str = "user_upload"
     mime_type: str

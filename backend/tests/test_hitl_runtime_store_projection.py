@@ -10,7 +10,8 @@ import pytest
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
-from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
+from approval.repository import HITLRequestStore
+from conversation.repository import ConversationMessageStore
 from models.hitl import HITLPromptType
 
 
@@ -57,11 +58,11 @@ class _FakeCollection:
             and "status" in clauses[0]
         ):
             identity = dict(clauses[0])
-            room_id = identity.pop("room_id", None)
+            conversation_id = identity.pop("room_id", None)
             status = identity.pop("status", None)
             source = identity.pop("public_source", None)
             recorded_query = {
-                "room_id": room_id,
+                "room_id": conversation_id,
                 "status": status,
                 "public_source": source,
                 "$or": [identity],
@@ -117,11 +118,14 @@ def _store(
     *,
     hitl_requests: _FakeCollection | None = None,
     room_agent_messages: _FakeCollection | None = None,
-) -> HITLRuntimeStorePart:
-    return HITLRuntimeStorePart(
+) -> HITLRequestStore:
+    return HITLRequestStore(
         hitl_requests=hitl_requests or _FakeCollection(),
-        room_agent_messages=room_agent_messages or _FakeCollection(),
-        room_user_messages=_FakeCollection(),
+        message_writer=ConversationMessageStore(
+            room_agent_messages=room_agent_messages or _FakeCollection(),
+            room_user_messages=_FakeCollection(),
+            message_repository=object(),
+        ),
     )
 
 
@@ -216,7 +220,7 @@ async def test_scoped_pending_query_uses_agent_message_identity_only():
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id="display-msg-1",
         continuation_message_id="continuation-msg-1",
         agent_id="agent-1",
@@ -259,7 +263,7 @@ async def test_public_pending_query_returns_none_for_ambiguous_identities():
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id="display-msg-1",
         continuation_message_id="continuation-msg-1",
         agent_id="agent-1",
@@ -290,7 +294,7 @@ async def test_pending_query_without_display_or_continuation_identity_returns_no
     store = _store(hitl_requests=hitl_requests)
 
     result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
+        conversation_id="room-1",
         display_message_id=None,
         continuation_message_id=None,
         agent_id="agent-1",
@@ -1085,7 +1089,7 @@ async def test_persist_pending_hitl_rejects_delayed_cross_interaction_projection
         "uq_pending_hitl_continuation_message",
     ],
 )
-async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
+async def test_ensure_indexes_raises_when_critical_unique_index_fails(
     index_name,
 ):
     error = RuntimeError(f"{index_name} failed")
@@ -1095,7 +1099,7 @@ async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
     store = _store(hitl_requests=hitl_requests)
 
     with pytest.raises(RuntimeError, match=f"{index_name} failed"):
-        await store.ensure_hitl_indexes()
+        await store.ensure_indexes()
 
     assert any(
         kwargs.get("name") == index_name
@@ -1111,7 +1115,7 @@ async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
         "uq_pending_hitl_continuation_message",
     ],
 )
-async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflict(
+async def test_ensure_indexes_recreates_critical_index_when_options_conflict(
     index_name,
 ):
     error = OperationFailure(
@@ -1123,7 +1127,7 @@ async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflic
     )
     store = _store(hitl_requests=hitl_requests)
 
-    await store.ensure_hitl_indexes()
+    await store.ensure_indexes()
 
     matching_calls = [
         kwargs
@@ -1135,7 +1139,7 @@ async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflic
 
 
 @pytest.mark.asyncio
-async def test_ensure_hitl_indexes_recreates_noncritical_index_when_options_conflict():
+async def test_ensure_indexes_recreates_noncritical_index_when_options_conflict():
     index_name = "uq_hitl_interaction_question"
     error = OperationFailure(
         f"Index with name: {index_name} already exists with different options",
@@ -1146,7 +1150,7 @@ async def test_ensure_hitl_indexes_recreates_noncritical_index_when_options_conf
     )
     store = _store(hitl_requests=hitl_requests)
 
-    await store.ensure_hitl_indexes()
+    await store.ensure_indexes()
 
     matching_calls = [
         kwargs

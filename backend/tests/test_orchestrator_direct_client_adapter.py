@@ -10,17 +10,17 @@ from google.protobuf.json_format import MessageToDict
 
 from a2a_adapter.client_facade import A2AClientFacadeError
 from a2a_adapter.orchestrator_direct_client import (
+    FREE_TEXT_INTERACTION_PREFIX,
+    FREE_TEXT_QUESTION_ID,
     DirectCallAddress,
     OrchestratorDirectA2AClient,
+    _agent_error,
+    _extract_interaction_spec,
     endpoint_scope_digest,
-)
-from a2a_adapter.task_status import (
-    build_completed_text_task,
-    build_failed_text_task,
-    build_task_status,
 )
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_ERROR_METADATA_KEY,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
     HYBRO_A2A_INTERACTION_METADATA_KEY,
     HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
@@ -40,11 +40,8 @@ from common.dto.hitl import (
 from common.types import (
     Artifact,
     DataPart,
-    FileContent,
-    FilePart,
     Message,
     MessageRole,
-    Part,
     Task,
     TaskState,
     TextPart,
@@ -65,6 +62,11 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.models import ToolResult
+from tests._a2a_task_builders import (
+    build_completed_text_task,
+    build_failed_text_task,
+    build_task_status,
+)
 
 NOW = datetime.now(UTC)
 
@@ -72,14 +74,39 @@ NOW = datetime.now(UTC)
 def _card() -> dict:
     return {
         "name": "Agent",
-        "url": "https://agent.example/a2a",
         "version": "1.0.0",
         "capabilities": {},
+        "supportedInterfaces": [
+            {
+                "url": "https://agent.example/a2a",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
     }
 
 
 def _task_dict(task: Task) -> dict:
     return task.model_dump(mode="json", by_alias=True)
+
+
+def _file_task_result(name: str, encoded_b64: str) -> dict:
+    """A completed task frame as ``client_facade`` yields it (ProtoJSON)."""
+    return {
+        "id": "task-1",
+        "contextId": "ctx-1",
+        "kind": "task",
+        "status": {"state": "TASK_STATE_COMPLETED"},
+        "artifacts": [
+            {
+                "artifactId": "art-1",
+                "name": name,
+                "parts": [
+                    {"raw": encoded_b64, "filename": name, "mediaType": "image/png"}
+                ],
+            }
+        ],
+    }
 
 
 def _dispatch_command(**updates) -> A2ADispatchCommand:
@@ -117,7 +144,7 @@ def _continuation_command() -> A2AContinuationCommand:
         requesting_subject_digest=sha256(b"user-1").hexdigest(),
         task_id="task-1",
         context_id="context-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         created_at=NOW,
     )
@@ -133,7 +160,7 @@ def _model_reply_command() -> A2AModelReplyCommand:
         requesting_subject_digest=sha256(b"user-1").hexdigest(),
         task_id="task-1",
         context_id="context-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         message_text="continue",
         created_at=NOW,
@@ -496,6 +523,18 @@ async def test_send_input_required_builds_interaction_receipt():
     assert observation.event_kind == "input_required"
     assert observation.status is None
     assert observation.content[0].text == ("I need the client name and coverage limit.")
+    spec = observation.interaction_spec
+    assert spec is not None
+    assert spec["interaction_id"].startswith(FREE_TEXT_INTERACTION_PREFIX)
+    assert spec["questions"] == [
+        {
+            "question_id": FREE_TEXT_QUESTION_ID,
+            "interaction_kind": "questionnaire",
+            "prompt": "I need the client name and coverage limit.",
+            "answer_kind": "text",
+            "required": True,
+        }
+    ]
 
 
 async def test_send_inline_data_artifact_reaches_observation_with_text():
@@ -706,12 +745,9 @@ async def test_open_stream_accumulates_artifact_refs_into_terminal_tool_result()
                     "name": "cover.png",
                     "parts": [
                         {
-                            "kind": "file",
-                            "file": {
-                                "name": "cover.png",
-                                "mimeType": "image/png",
-                                "bytes": encoded_b64,
-                            },
+                            "raw": encoded_b64,
+                            "filename": "cover.png",
+                            "mediaType": "image/png",
                         }
                     ],
                 },
@@ -761,35 +797,14 @@ async def test_open_stream_accumulates_artifact_refs_into_terminal_tool_result()
 
 async def test_send_reraises_recoverable_materialization_errors():
     encoded_b64 = base64.b64encode(b"png-bytes").decode()
-    task = Task(
-        id="task-1",
-        context_id="ctx-1",
-        status=build_task_status(TaskState.completed),
-        artifacts=[
-            Artifact(
-                artifact_id="art-1",
-                name="cover.png",
-                parts=[
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                name="cover.png",
-                                mime_type="image/png",
-                                bytes=encoded_b64,
-                            )
-                        )
-                    )
-                ],
-            )
-        ],
-    )
+    task = _file_task_result("cover.png", encoded_b64)
 
     class StaleEpochOwner:
         async def commit(self, **kwargs):
             raise StaleRoomEpochError("artifact Room epoch is no longer active")
 
     async def send(card, message, kwargs):
-        return {"kind": "task", "result": _task_dict(task)}
+        return {"kind": "task", "result": task}
 
     client = _client(FakeSdk(send=send), epoch_owner=StaleEpochOwner())
     with pytest.raises(StaleRoomEpochError, match="no longer active"):
@@ -806,36 +821,20 @@ async def test_send_reraises_recoverable_materialization_errors():
         await client.send(_dispatch_command())
 
 
-async def test_send_malformed_artifact_stays_terminal_failure():
-    task = Task(
-        id="task-1",
-        context_id="ctx-1",
-        status=build_task_status(TaskState.completed),
-        artifacts=[
-            Artifact(
-                artifact_id="art-1",
-                name="broken.png",
-                parts=[
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                name="broken.png",
-                                mime_type="image/png",
-                                bytes="not-valid-base64@@@",
-                            )
-                        )
-                    )
-                ],
-            )
-        ],
+async def test_send_oversized_artifact_stays_terminal_failure(monkeypatch):
+    from a2a_adapter import artifact_storage
+
+    monkeypatch.setattr(artifact_storage, "MAX_FILE_RAW_BYTES", 4)
+    task = _file_task_result(
+        "broken.png", base64.b64encode(b"more than four bytes").decode()
     )
 
     class EpochOwner:
         async def commit(self, **kwargs):
-            raise AssertionError("commit must not run for invalid base64")
+            raise AssertionError("commit must not run for an oversized file")
 
     async def send(card, message, kwargs):
-        return {"kind": "task", "result": _task_dict(task)}
+        return {"kind": "task", "result": task}
 
     receipt = await _client(FakeSdk(send=send), epoch_owner=EpochOwner()).send(
         _dispatch_command()
@@ -1075,7 +1074,7 @@ async def test_extract_interaction_spec_requires_status_message_metadata():
         artifacts=None,
     )
 
-    assert _extract_interaction_spec(task) is None
+    assert _extract_interaction_spec(task, event_kind="input_required") is None
 
 
 async def test_continue_task_preserves_endpoint_scope_for_later_rounds():
@@ -1142,3 +1141,95 @@ async def test_unknown_task_identity_returns_delivery_uncertain():
     client = _client(FakeSdk(cancel=cancel))
     receipt = await client.cancel(_cancellation_command())
     assert receipt.outcome == "delivery_uncertain"
+
+
+def _status_task(state, *, text=None, message_id="msg-1", metadata=None) -> Task:
+    status = build_task_status(state)
+    status.message = (
+        Message(
+            role=MessageRole.AGENT,
+            parts=[TextPart(text=text)] if text else [],
+            message_id=message_id,
+            metadata=metadata,
+        )
+        if text is not None or metadata is not None
+        else None
+    )
+    return Task(id="task-1", context_id="ctx-1", status=status, artifacts=None)
+
+
+def test_free_text_spec_is_stable_per_question_and_skipped_without_text():
+    first = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?"),
+        event_kind="input_required",
+    )
+    again = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?"),
+        event_kind="input_required",
+    )
+    next_round = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?", message_id="m2"),
+        event_kind="input_required",
+    )
+    empty = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text=""),
+        event_kind="input_required",
+    )
+    auth = _extract_interaction_spec(
+        _status_task(TaskState.auth_required, text="Sign in"),
+        event_kind="auth_required",
+    )
+
+    assert first == again
+    assert first["interaction_id"] != next_round["interaction_id"]
+    assert empty is None
+    assert auth is None
+
+
+def test_free_text_continuation_is_a_plain_a2a_reply():
+    command = _continuation_command().model_copy(
+        update={
+            "interaction_id": f"{FREE_TEXT_INTERACTION_PREFIX}abc",
+            "answers": [
+                HITLQuestionAnswer(
+                    question_id=FREE_TEXT_QUESTION_ID,
+                    answer=HITLTextAnswer(text="Formal, please"),
+                )
+            ],
+        }
+    )
+    message = _client(FakeSdk())._build_continuation_message(
+        command,
+        address=DirectCallAddress(
+            call_record_id="call-1",
+            task_id="task-1",
+            context_id="context-1",
+            endpoint_scope="https://agent.example/a2a",
+            agent_id="agent-1",
+        ),
+    )
+
+    assert message["parts"] == [{"kind": "text", "text": "Formal, please"}]
+    assert message["metadata"] == {"agent_id": "agent-1"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            {"code": "llm_quota_exceeded", "message": "Quota exceeded"},
+            ("llm_quota_exceeded", "Quota exceeded"),
+        ),
+        ({"code": "bad code!", "message": "x"}, (None, None)),
+        ({"code": "ok", "message": "m" * 900}, ("ok", "m" * 500)),
+        ("not-a-mapping", (None, None)),
+    ],
+)
+def test_agent_error_reads_only_bounded_documented_fields(raw, expected):
+    task = _status_task(
+        TaskState.failed,
+        text="failed",
+        metadata={HYBRO_A2A_ERROR_METADATA_KEY: raw},
+    )
+
+    assert _agent_error(task) == expected

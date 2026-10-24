@@ -1,3 +1,4 @@
+import type { Agent } from '@/lib/types/agent'
 import type { IncomingMessage } from '@/stores/message-store/types'
 import type { SSEMessage } from '@/lib/types/sse'
 import { TASK_STATE } from '@/lib/types/sse'
@@ -15,7 +16,7 @@ export function createMessage(overrides: Partial<IncomingMessage> = {}): Incomin
   const id = overrides.id || `msg-${messageCounter}`
   return {
     id,
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: `Test message ${messageCounter}`,
     senderName: 'Test Agent',
@@ -84,7 +85,7 @@ export function createEphemeralMessage(overrides: Partial<IncomingMessage> = {})
 }
 
 export function createRoom(overrides: Partial<{
-  room_id: string
+  conversation_id: string
   room_name: string
   room_owner_id: string
   room_owner_name: string
@@ -93,7 +94,7 @@ export function createRoom(overrides: Partial<{
 }> = {}) {
   roomCounter++
   return {
-    room_id: `room-${roomCounter}`,
+    conversation_id: `room-${roomCounter}`,
     room_name: `Test Room ${roomCounter}`,
     room_owner_id: 'test-user',
     room_owner_name: 'Test User',
@@ -103,27 +104,31 @@ export function createRoom(overrides: Partial<{
   }
 }
 
-export function createAgent(overrides: Partial<{
-  agent_id: string
-  provider_id: string
-  agent_status: string
-  agent_card: {
-    name: string
-    description: string
-    url: string
-    version: string
-  }
-}> = {}) {
+export function createAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     agent_id: 'agent-1',
-    provider_id: 'provider-1',
-    agent_status: 'active',
-    agent_card: {
-      name: 'Test Agent',
-      description: 'A test agent',
-      url: 'http://localhost:8001',
-      version: '1.0.0',
+    name: 'Test Agent',
+    description: '',
+    version: '1.0.0',
+    provider_organization: null,
+    icon_url: null,
+    documentation_url: null,
+    skills: [],
+    capabilities: {
+      streaming: false,
+      push_notifications: false,
+      state_transition_history: false,
+      extensions: false,
     },
+    default_input_modes: ['text'],
+    default_output_modes: ['text'],
+    provider_id: 'provider-1',
+    provider_name: null,
+    status: 'active',
+    source: 'cloud',
+    is_public: true,
+    public_url: null,
+    call_count: 0,
     ...overrides,
   }
 }
@@ -134,7 +139,7 @@ export function createSSEMessage(
 ): SSEMessage {
   return {
     type,
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     timestamp: new Date().toISOString(),
     data,
   } as SSEMessage

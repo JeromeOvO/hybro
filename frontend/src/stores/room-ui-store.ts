@@ -12,7 +12,7 @@ export interface PendingChatHandoff {
   seedAgents?: Agent[]
 }
 
-type RoomId = string
+type ConversationId = string
 
 /** Max detail-pane scroll snapshots retained (LRU by last access). */
 const MAX_DETAIL_SCROLL_SNAPSHOTS = 32
@@ -74,54 +74,54 @@ export const DEFAULT_ROOM_FLAGS: RoomFlags = {
   activeRunTriggerMessageIds: [],
 }
 
-function patchRoom(rooms: Record<RoomId, RoomFlags>, roomId: RoomId, patch: Partial<RoomFlags>): Record<RoomId, RoomFlags> {
-  return { ...rooms, [roomId]: { ...(rooms[roomId] ?? DEFAULT_ROOM_FLAGS), ...patch } }
+function patchRoom(rooms: Record<ConversationId, RoomFlags>, conversationId: ConversationId, patch: Partial<RoomFlags>): Record<ConversationId, RoomFlags> {
+  return { ...rooms, [conversationId]: { ...(rooms[conversationId] ?? DEFAULT_ROOM_FLAGS), ...patch } }
 }
 
 interface RoomUiState {
-  rooms: Record<RoomId, RoomFlags>
+  rooms: Record<ConversationId, RoomFlags>
   /** Pending initial messages for rooms (replaces sessionStorage) */
-  pendingRoomData: Record<RoomId, PendingRoomData>
+  pendingRoomData: Record<ConversationId, PendingRoomData>
   /** One-shot handoff from an Agent detail page to the new-chat composer. */
   pendingChatHandoff: PendingChatHandoff | null
-  pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
-  localSendSeqByRoom: Record<RoomId, number>
-  initialHydrationSeqByRoom: Record<RoomId, number>
-  conversationScrollByRoom: Record<RoomId, ConversationScrollSnapshot>
+  pendingTurnSkeletons: Record<ConversationId, PendingTurnSkeleton | undefined>
+  localSendSeqByRoom: Record<ConversationId, number>
+  initialHydrationSeqByRoom: Record<ConversationId, number>
+  conversationScrollByRoom: Record<ConversationId, ConversationScrollSnapshot>
   detailScrollByMessageId: Record<string, ConversationScrollSnapshot>
-  selectedAgentMessageIdByRoom: Record<RoomId, string | undefined>
+  selectedAgentMessageIdByRoom: Record<ConversationId, string | undefined>
 
-  // Per-room flag setters (roomId, value)
-  setSending: (roomId: RoomId, v: boolean) => void
-  setProcessing: (roomId: RoomId, v: boolean) => void
-  setCancelling: (roomId: RoomId, v: boolean) => void
-  setSseEnabled: (roomId: RoomId, v: boolean) => void
-  setSseConnected: (roomId: RoomId, v: boolean) => void
-  setSseError: (roomId: RoomId, v: string | null) => void
-  setTurnBasedTimeline: (roomId: RoomId, v: boolean) => void
-  setActiveRunTriggerMessageIds: (roomId: RoomId, ids: string[]) => void
+  // Per-room flag setters (conversationId, value)
+  setSending: (conversationId: ConversationId, v: boolean) => void
+  setProcessing: (conversationId: ConversationId, v: boolean) => void
+  setCancelling: (conversationId: ConversationId, v: boolean) => void
+  setSseEnabled: (conversationId: ConversationId, v: boolean) => void
+  setSseConnected: (conversationId: ConversationId, v: boolean) => void
+  setSseError: (conversationId: ConversationId, v: string | null) => void
+  setTurnBasedTimeline: (conversationId: ConversationId, v: boolean) => void
+  setActiveRunTriggerMessageIds: (conversationId: ConversationId, ids: string[]) => void
 
   // Non-reactive getter for getState() callers
-  getRoomFlags: (roomId: RoomId) => RoomFlags
+  getRoomFlags: (conversationId: ConversationId) => RoomFlags
   // Delete a single room's entry (falls back to defaults on next read)
-  resetRoom: (roomId: RoomId) => void
+  resetRoom: (conversationId: ConversationId) => void
   resetAll: () => void
 
   /** Store a pending initial message + target group for a room */
-  setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
+  setPendingRoomData: (conversationId: ConversationId, data: PendingRoomData) => void
   /** Consume (read + delete) pending data for a room */
-  consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+  consumePendingRoomData: (conversationId: ConversationId) => PendingRoomData | null
   setPendingChatHandoff: (handoff: PendingChatHandoff) => void
   clearPendingChatHandoff: () => void
-  setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
-  markLocalSend: (roomId: RoomId) => void
-  markInitialHydrated: (roomId: RoomId) => void
-  saveConversationScroll: (roomId: RoomId, snapshot: ConversationScrollSnapshot) => void
-  getConversationScroll: (roomId: RoomId) => ConversationScrollSnapshot | undefined
+  setPendingTurnSkeleton: (conversationId: ConversationId, value?: PendingTurnSkeleton) => void
+  markLocalSend: (conversationId: ConversationId) => void
+  markInitialHydrated: (conversationId: ConversationId) => void
+  saveConversationScroll: (conversationId: ConversationId, snapshot: ConversationScrollSnapshot) => void
+  getConversationScroll: (conversationId: ConversationId) => ConversationScrollSnapshot | undefined
   saveDetailPaneScroll: (messageId: string, snapshot: ConversationScrollSnapshot) => void
   getDetailPaneScroll: (messageId: string) => ConversationScrollSnapshot | undefined
-  openAgentDetail: (roomId: RoomId, messageId: string) => void
-  closeAgentDetail: (roomId: RoomId) => void
+  openAgentDetail: (conversationId: ConversationId, messageId: string) => void
+  closeAgentDetail: (conversationId: ConversationId) => void
 }
 
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
@@ -135,33 +135,33 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   detailScrollByMessageId: {},
   selectedAgentMessageIdByRoom: {},
 
-  setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
-  setProcessing: (roomId, v) => set(s => ({
-    rooms: patchRoom(s.rooms, roomId, v
+  setSending: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { sending: v }) })),
+  setProcessing: (conversationId, v) => set(s => ({
+    rooms: patchRoom(s.rooms, conversationId, v
       ? { processing: true }
       : { processing: false, activeRunTriggerMessageIds: [] }),
   })),
-  setCancelling: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { cancelling: v }) })),
-  setSseEnabled: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseEnabled: v }) })),
-  setSseConnected: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseConnected: v }) })),
-  setSseError: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseError: v }) })),
-  setTurnBasedTimeline: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { turnBasedTimeline: v }) })),
-  setActiveRunTriggerMessageIds: (roomId, ids) => set(s => ({
-    rooms: patchRoom(s.rooms, roomId, { activeRunTriggerMessageIds: ids }),
+  setCancelling: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { cancelling: v }) })),
+  setSseEnabled: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { sseEnabled: v }) })),
+  setSseConnected: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { sseConnected: v }) })),
+  setSseError: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { sseError: v }) })),
+  setTurnBasedTimeline: (conversationId, v) => set(s => ({ rooms: patchRoom(s.rooms, conversationId, { turnBasedTimeline: v }) })),
+  setActiveRunTriggerMessageIds: (conversationId, ids) => set(s => ({
+    rooms: patchRoom(s.rooms, conversationId, { activeRunTriggerMessageIds: ids }),
   })),
 
-  getRoomFlags: (roomId) => get().rooms[roomId] ?? DEFAULT_ROOM_FLAGS,
+  getRoomFlags: (conversationId) => get().rooms[conversationId] ?? DEFAULT_ROOM_FLAGS,
 
-  resetRoom: (roomId) =>
+  resetRoom: (conversationId) =>
     set(s => {
       const rooms = { ...s.rooms }
-      delete rooms[roomId]
+      delete rooms[conversationId]
       const localSendSeqByRoom = { ...s.localSendSeqByRoom }
-      delete localSendSeqByRoom[roomId]
+      delete localSendSeqByRoom[conversationId]
       const initialHydrationSeqByRoom = { ...s.initialHydrationSeqByRoom }
-      delete initialHydrationSeqByRoom[roomId]
+      delete initialHydrationSeqByRoom[conversationId]
       const selectedAgentMessageIdByRoom = { ...s.selectedAgentMessageIdByRoom }
-      delete selectedAgentMessageIdByRoom[roomId]
+      delete selectedAgentMessageIdByRoom[conversationId]
       return { rooms, localSendSeqByRoom, initialHydrationSeqByRoom, selectedAgentMessageIdByRoom }
     }),
 
@@ -178,19 +178,19 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       selectedAgentMessageIdByRoom: {},
     }),
 
-  setPendingRoomData: (roomId, data) =>
+  setPendingRoomData: (conversationId, data) =>
     set((state) => ({
       pendingRoomData: {
         ...state.pendingRoomData,
-        [roomId]: data,
+        [conversationId]: data,
       },
     })),
-  consumePendingRoomData: (roomId) => {
-    const data = get().pendingRoomData[roomId] || null
+  consumePendingRoomData: (conversationId) => {
+    const data = get().pendingRoomData[conversationId] || null
     if (data) {
       set((state) => {
         const copy = { ...state.pendingRoomData }
-        delete copy[roomId]
+        delete copy[conversationId]
         return { pendingRoomData: copy }
       })
     }
@@ -198,35 +198,35 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   },
   setPendingChatHandoff: (handoff) => set({ pendingChatHandoff: handoff }),
   clearPendingChatHandoff: () => set({ pendingChatHandoff: null }),
-  setPendingTurnSkeleton: (roomId, value) =>
+  setPendingTurnSkeleton: (conversationId, value) =>
     set((state) => {
       const copy = { ...state.pendingTurnSkeletons }
-      if (!value) delete copy[roomId]
-      else copy[roomId] = value
+      if (!value) delete copy[conversationId]
+      else copy[conversationId] = value
       return { pendingTurnSkeletons: copy }
     }),
-  markLocalSend: (roomId) =>
+  markLocalSend: (conversationId) =>
     set((state) => ({
       localSendSeqByRoom: {
         ...state.localSendSeqByRoom,
-        [roomId]: (state.localSendSeqByRoom[roomId] ?? 0) + 1,
+        [conversationId]: (state.localSendSeqByRoom[conversationId] ?? 0) + 1,
       },
     })),
-  markInitialHydrated: (roomId) =>
+  markInitialHydrated: (conversationId) =>
     set((state) => ({
       initialHydrationSeqByRoom: {
         ...state.initialHydrationSeqByRoom,
-        [roomId]: (state.initialHydrationSeqByRoom[roomId] ?? 0) + 1,
+        [conversationId]: (state.initialHydrationSeqByRoom[conversationId] ?? 0) + 1,
       },
     })),
-  saveConversationScroll: (roomId, snapshot) =>
+  saveConversationScroll: (conversationId, snapshot) =>
     set((state) => ({
       conversationScrollByRoom: {
         ...state.conversationScrollByRoom,
-        [roomId]: snapshot,
+        [conversationId]: snapshot,
       },
     })),
-  getConversationScroll: (roomId) => get().conversationScrollByRoom[roomId],
+  getConversationScroll: (conversationId) => get().conversationScrollByRoom[conversationId],
   saveDetailPaneScroll: (messageId, snapshot) =>
     set((state) => ({
       detailScrollByMessageId: touchDetailScrollSnapshot(
@@ -236,46 +236,46 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       ),
     })),
   getDetailPaneScroll: (messageId) => get().detailScrollByMessageId[messageId],
-  openAgentDetail: (roomId, messageId) =>
+  openAgentDetail: (conversationId, messageId) =>
     set((state) => ({
       selectedAgentMessageIdByRoom: {
         ...state.selectedAgentMessageIdByRoom,
-        [roomId]: messageId,
+        [conversationId]: messageId,
       },
     })),
-  closeAgentDetail: (roomId) =>
+  closeAgentDetail: (conversationId) =>
     set((state) => {
       const selectedAgentMessageIdByRoom = { ...state.selectedAgentMessageIdByRoom }
-      delete selectedAgentMessageIdByRoom[roomId]
+      delete selectedAgentMessageIdByRoom[conversationId]
       return { selectedAgentMessageIdByRoom }
     }),
 }))
 
 /** Narrow selector: room processing lifecycle flag only. */
-export function useRoomProcessing(roomId: string): boolean {
-  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).processing)
+export function useRoomProcessing(conversationId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).processing)
 }
 
-export function useRoomSending(roomId: string): boolean {
-  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).sending)
+export function useRoomSending(conversationId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).sending)
 }
 
-export function useRoomCancelling(roomId: string): boolean {
-  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).cancelling)
+export function useRoomCancelling(conversationId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).cancelling)
 }
 
-export function useRoomSseEnabled(roomId: string): boolean {
-  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).sseEnabled)
+export function useRoomSseEnabled(conversationId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).sseEnabled)
 }
 
-export function useLocalSendSeq(roomId: string): number {
-  return useRoomUiStore(s => s.localSendSeqByRoom[roomId] ?? 0)
+export function useLocalSendSeq(conversationId: string): number {
+  return useRoomUiStore(s => s.localSendSeqByRoom[conversationId] ?? 0)
 }
 
-export function useInitialHydrationSeq(roomId: string): number {
-  return useRoomUiStore(s => s.initialHydrationSeqByRoom[roomId] ?? 0)
+export function useInitialHydrationSeq(conversationId: string): number {
+  return useRoomUiStore(s => s.initialHydrationSeqByRoom[conversationId] ?? 0)
 }
 
-export function useSelectedAgentMessageId(roomId: string): string | undefined {
-  return useRoomUiStore(s => s.selectedAgentMessageIdByRoom[roomId])
+export function useSelectedAgentMessageId(conversationId: string): string | undefined {
+  return useRoomUiStore(s => s.selectedAgentMessageIdByRoom[conversationId])
 }

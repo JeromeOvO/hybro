@@ -7,6 +7,7 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import Protocol
 
 from pydantic import ValidationError
 
@@ -15,12 +16,15 @@ from common.dto.hitl import A2AInteractionSpec
 from ..kernel import KernelConflict
 from ..models import (
     TextPart,
+    ToolInteractionAnswer,
+    ToolInteractionAnswers,
     ToolInteractionQuestion,
     ToolObservation,
     ToolSuspension,
 )
-from ..ports import InvocationCheckpointReader, InvocationOutcomeCheckpointReader
+from ..ports import InvocationCheckpointReader
 from .errors import RecoverableAdapterError, RecoverableCheckpointError
+from .hitl_prompt import model_answer_text
 from .ledger import (
     TERMINAL_AGENT_CALL_STATES,
     ConflictingTerminalObservation,
@@ -50,6 +54,24 @@ from .terminal_interactions import TerminalInteractionFinalizer
 ObservationNormalizer = Callable[
     [bytes], NormalizedA2AObservation | Awaitable[NormalizedA2AObservation]
 ]
+
+
+class InvocationOutcomeCheckpointReader(Protocol):
+    async def is_run_terminal(self, run_id: str) -> bool: ...
+
+    async def is_outcome_checkpointed(
+        self,
+        run_id: str,
+        invocation_id: str,
+        outcome_digest: str,
+    ) -> bool: ...
+
+    async def has_processed_observation(
+        self,
+        run_id: str,
+        invocation_id: str,
+        observation_id: str,
+    ) -> bool: ...
 
 
 class ObservationIngressError(ValueError):
@@ -131,7 +153,7 @@ class A2AObservationIngress(NormalizedObservationRecorder):
             payload_digest=payload_digest,
             received_at=datetime.now(UTC),
             binding_scope=observation.binding_scope,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             call_record_id=call.call_record_id,
             task_id=observation.task_id,
@@ -156,7 +178,7 @@ class A2AObservationIngress(NormalizedObservationRecorder):
                     existing.payload_digest,
                     payload_digest,
                 ),
-                room_id=existing.room_id,
+                conversation_id=existing.conversation_id,
                 room_epoch=existing.room_epoch,
                 source_identity=observation.source_identity,
                 accepted_observation_id=existing.observation_id,
@@ -336,7 +358,7 @@ class A2AObservationProcessor:
         if record is None:
             return await self._release_inbox(claimed, state="pending")
         if (
-            claimed.room_id != record.room_id
+            claimed.conversation_id != record.conversation_id
             or claimed.room_epoch != record.room_epoch
             or claimed.call_record_id != record.call_record_id
         ):
@@ -906,7 +928,9 @@ class A2AObservationProcessor:
         )
         if renewed is None:
             return None
-        if not await self.room_epochs.verify_active(record.room_id, record.room_epoch):
+        if not await self.room_epochs.verify_active(
+            record.conversation_id, record.room_epoch
+        ):
             try:
                 if interaction_id is not None:
                     await self.terminal_interactions.finalize_interaction(
@@ -937,7 +961,7 @@ class A2AObservationProcessor:
                 conflict.persisted_digest,
                 conflict.conflicting_digest,
             ),
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             room_epoch=record.room_epoch,
             source_identity=claimed.source_identity,
             accepted_observation_id=(
@@ -1062,11 +1086,26 @@ def _to_tool_observation(
             interaction_fingerprint=interaction_fingerprint,
             questions=questions,
         )
+    command = record.continuation_command
     return ToolObservation(
         observation_id=observation.observation_id,
         invocation_id=record.invocation_id,
         outcome=outcome,
         observed_at=observation.observed_at,
+        interaction_answers=(
+            ToolInteractionAnswers(
+                interaction_id=command.interaction_id,
+                answers=[
+                    ToolInteractionAnswer(
+                        question_id=answer.question_id,
+                        answer=model_answer_text(answer.answer),
+                    )
+                    for answer in command.answers
+                ],
+            )
+            if command is not None
+            else None
+        ),
     )
 
 

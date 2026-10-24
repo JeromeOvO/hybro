@@ -6,16 +6,9 @@ from datetime import UTC, datetime
 
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     ModelStreamEvent,
     OrchestratorRunState,
@@ -32,6 +25,14 @@ from execution.orchestrator.session import (
     DefaultRunFactory,
     EventCancellationSignal,
     RoomAgentSessionConfig,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
@@ -125,10 +126,14 @@ def profile(
 def session_config(**profile_kwargs) -> RoomAgentSessionConfig:
     return RoomAgentSessionConfig(
         session_id="session-1",
-        room_id="room-1",
+        conversation_id="room-1",
         profile=profile(**profile_kwargs),
         candidate_scope=CandidateScopeSnapshot(
-            snapshot_id="scope-1", source="test", room_id="room-1", agent_ids=[]
+            snapshot_id="scope-1",
+            source="test",
+            conversation_id="room-1",
+            agent_ids=[],
+            authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
         room_epoch=1,
         requesting_subject_id="user-1",

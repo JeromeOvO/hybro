@@ -1,8 +1,8 @@
 import { apiPost, apiGet } from '../api-client'
 import { getApiUrl } from '../utils'
 
-function hitlUrl(roomId: string): string {
-  return getApiUrl(`rooms/${roomId}/hitl`)
+function hitlUrl(conversationId: string): string {
+  return getApiUrl(`rooms/${conversationId}/hitl`)
 }
 
 export interface HitlPendingRequest {
@@ -51,13 +51,13 @@ export interface HitlPendingResponse {
 const HITL_RESPOND_TIMEOUT_MS = 180_000
 
 export async function respondToHitlBatch(
-  roomId: string,
+  conversationId: string,
   interactionId: string,
   answers: HitlBatchAnswer[],
   clientRequestId: string | undefined,
   getToken?: () => Promise<string | null>,
 ): Promise<HitlRespondResponse> {
-  return apiPost<HitlRespondResponse>(`${hitlUrl(roomId)}/respond-batch`, {
+  return apiPost<HitlRespondResponse>(`${hitlUrl(conversationId)}/respond-batch`, {
     interaction_id: interactionId,
     answers: answers.map(answer => ({
       request_id: answer.requestId,
@@ -68,13 +68,13 @@ export async function respondToHitlBatch(
 }
 
 export async function cancelHitl(
-  roomId: string,
+  conversationId: string,
   interactionId: string,
   interactionVersion: number,
   clientRequestId: string,
   getToken?: () => Promise<string | null>,
 ): Promise<{ status: string; interaction_id: string; interaction_version: number }> {
-  return apiPost(`${hitlUrl(roomId)}/interactions/${interactionId}/cancel`, {
+  return apiPost(`${hitlUrl(conversationId)}/interactions/${interactionId}/cancel`, {
     interaction_id: interactionId,
     expected_interaction_version: interactionVersion,
     client_request_id: clientRequestId,
@@ -82,8 +82,8 @@ export async function cancelHitl(
 }
 
 export async function fetchPendingHitlRequests(
-  roomId: string,
+  conversationId: string,
   getToken?: () => Promise<string | null>,
 ): Promise<HitlPendingResponse> {
-  return apiGet<HitlPendingResponse>(`${hitlUrl(roomId)}/pending`, getToken)
+  return apiGet<HitlPendingResponse>(`${hitlUrl(conversationId)}/pending`, getToken)
 }

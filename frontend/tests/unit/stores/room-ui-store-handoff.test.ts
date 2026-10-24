@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { useRoomUiStore } from "@/stores/room-ui-store"
+import { createAgent } from "../../fixtures"
 
 describe("PendingRoomData handoffMode", () => {
   beforeEach(() => {
@@ -31,7 +32,7 @@ describe("PendingRoomData handoffMode", () => {
     expect(data!.handoffMode).toBeUndefined()
   })
 
-  it("scopes handoffMode per roomId", () => {
+  it("scopes handoffMode per conversationId", () => {
     const store = useRoomUiStore.getState()
     store.setPendingRoomData("room-a", {
       initialMessage: "Prefill msg",
@@ -51,18 +52,12 @@ describe("PendingRoomData handoffMode", () => {
     const store = useRoomUiStore.getState()
     store.setPendingChatHandoff({
       draft: "Tell me a story",
-      seedAgents: [{
-        agent_id: "agent-1",
-        agent_card: { name: "Weather Agent" } as never,
-      }],
+      seedAgents: [createAgent({ agent_id: "agent-1", name: "Weather Agent" })],
     })
 
     expect(useRoomUiStore.getState().pendingChatHandoff).toEqual({
       draft: "Tell me a story",
-      seedAgents: [{
-        agent_id: "agent-1",
-        agent_card: { name: "Weather Agent" },
-      }],
+      seedAgents: [createAgent({ agent_id: "agent-1", name: "Weather Agent" })],
     })
 
     useRoomUiStore.getState().clearPendingChatHandoff()

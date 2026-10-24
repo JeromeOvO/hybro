@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
+from agent.facade import AgentRepository
 from api_gateway.dependencies import (
     APIGatewayDeps,
     bind_api_gateway_deps,
@@ -27,7 +28,6 @@ from common.eventing import (
     InternalEventPublisher,
 )
 from common.health_check import RuntimeHealthCheck
-from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.observability import (
     MetricsCollector,
     get_instance_id,
@@ -35,36 +35,22 @@ from common.observability import (
     traced_create_task,
 )
 from common.protocols import (
-    AgentCallCounter,
     AgentCardResolver,
     AgentExclusionReader,
-    AgentManagement,
     AgentMatcher,
     AgentRegistry,
-    AgentRegistryWriter,
-    AgentRepository,
-    AttachmentMetadataReader,
-    ContentStorageRepository,
     EventPublisher,
     ExecutionEngine,
     FileStorage,
     HITLManager,
     LeaderElector,
-    LLMGateway,
-    MemoryRepository,
     MongoCollection,
     MongoDAL,
     RedisKV,
     RedisPubSub,
-    RedisStreams,
     RoomDistributedLock,
     RoomHistoryReader,
-    RoomManagement,
-    RoomMembershipSeedSource,
-    RoomMessageStore,
     RoomOwnershipReader,
-    RoomRegistry,
-    SSETransport,
 )
 from common.utils.time import utcnow
 from context_memory import (
@@ -72,34 +58,25 @@ from context_memory import (
     ContextMemoryFacade,
     MemoryMongoRepository,
 )
-from context_memory.config import (
-    CompactionConfig,
-    ContextMemoryLLMConfig,
-    MemorySearchConfig,
-    TokenBudgetConfig,
-)
+from context_memory.config import CompactionConfig
+from context_memory.ports import ContentStorageRepository, MemoryRepository
 from conversation import ConversationFacade, MessageMongoRepository, RoomMongoRepository
+from conversation.attachments import AttachmentMetadataReader
+from conversation.membership import RoomMembershipSeedSource
 from conversation.membership_source import RepositoryRoomMembershipSeedSource
 from conversation.repository import RoomQuoteMongoRepository
-from conversation.timeline import (
-    TIMELINE_MIGRATION_MARKER_COLLECTION,
-    TIMELINE_MIGRATION_MARKER_ID,
-    TIMELINE_MIGRATION_VERSION,
-)
 from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.event_publisher import EventPublisherImpl
 from delivery.facade import DeliveryFacade
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
-from delivery.types import TaskRunner
+from delivery.types import SSETransport, TaskRunner
 from execution.adapters.canary_metrics import collect_metrics
-from execution.cancellation import (
-    CancellationConfig,
-    CancellationRuntime,
-    CancellationStartupPolicy,
-    RedisCancellationTransport,
-)
+from execution.orchestrator.a2a_runtime.call_counting import AgentCallCounter
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
+from execution.orchestrator.public_text import sanitize_public_text
+from execution.repository.active_runs import CanonicalActiveRunRoomReader
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
@@ -114,7 +91,7 @@ from jobs.orchestrator_workers import (
     orchestrator_projection_job,
     orchestrator_recovery_job,
 )
-from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
+from jobs.stale_task_checker import stale_task_checker
 from models.room import UserAttachment
 from orchestrator_composition import (
     OrchestratorCompositionError,
@@ -122,13 +99,14 @@ from orchestrator_composition import (
     create_orchestrator_runtime,
     validate_orchestrator_runtime,
 )
-from room_files import LocalFileContentStore, RoomFiles
+from room_files import LocalFileContentStore, RoomFiles, RoomLifecycleStore
 from session import MongoSessionRepository, SessionFacade, SessionWaiter
-
-logger = get_logger(__name__)
+from session.protocols import RoomManagement, RoomMessageStore, RoomRegistry
 
 if TYPE_CHECKING:
-    from dal.runtime_store import RuntimeRepositoryStore
+    from dal.redis.streams import RedisStreamsImpl
+
+logger = get_logger(__name__)
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -139,17 +117,20 @@ def check_multi_worker_safety(
     eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_service_connected: bool,
-    change_stream_connected: bool,
+    mongo_supports_transactions: bool,
 ) -> None:
-    """Refuse to start under gunicorn without fully connected Redis.
+    """Refuse to start under gunicorn without Redis or Mongo transactions.
 
     Gunicorn workers are separate processes. Without Redis:
     - SSE broadcast is local-only (cross-worker delivery fails)
     - Background jobs run N times (no leader election)
     - Room locks use asyncio.Lock only (no cross-process coordination)
+    Without Mongo transactions (a replica set or mongos), room events fall back
+    to a non-transactional write path that concurrent workers can interleave.
 
     Raises:
         RuntimeError: if gunicorn detected and any Redis service is not connected
+            or MongoDB cannot run transactions
     """
     if not is_gunicorn:
         return
@@ -163,17 +144,20 @@ def check_multi_worker_safety(
         problems.append("Delivery KV not connected")
     if not redis_service_connected:
         problems.append("RedisService (key-value) not connected")
-    if not change_stream_connected:
-        problems.append("Cancellation change stream not connected")
+    if not mongo_supports_transactions:
+        problems.append(
+            "MongoDB does not support transactions "
+            "(not a replica set or mongos, or the probe failed)"
+        )
 
     if problems:
         raise RuntimeError(
-            "Running under gunicorn requires all DAL Redis services. "
-            "Issues: " + "; ".join(problems) + ". "
-            "Fix: set REDIS_URL to a running Redis instance, "
-            "or use 'uvicorn main:app' for single-process mode."
+            "Running under gunicorn requires all DAL Redis services and a "
+            "MongoDB replica set or mongos. Issues: " + "; ".join(problems) + ". "
+            "Fix: set REDIS_URL to a running Redis instance and run MongoDB as a "
+            "replica set, or use 'uvicorn main:app' for single-process mode."
         )
-    logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
+    logger.info("Multi-worker safety check passed: gunicorn + Redis + transactions")
 
 
 @dataclass
@@ -285,10 +269,13 @@ def validate_runtime_bindings(
     errors: list[str] = []
 
     from chat.service import chat_service
-    from conversation.runtime import conversation_runtime
 
-    for missing in conversation_runtime.missing_required_bindings():
-        errors.append(f"conversation.{missing}")
+    conversation_runtime = getattr(app.state, "conversation_runtime", None)
+    if conversation_runtime is None:
+        errors.append("app.state.conversation_runtime")
+    else:
+        for missing in conversation_runtime.missing_required_bindings():
+            errors.append(f"conversation.{missing}")
     for missing in chat_service.missing_required_bindings():
         errors.append(f"chat.{missing}")
 
@@ -318,88 +305,6 @@ def validate_runtime_bindings(
         )
 
     logger.info("All startup bindings verified")
-
-
-async def _resolve_orchestrator_agent_facts(
-    *,
-    run: Any,
-    runtime: Any,
-    call_id: str,
-) -> dict[str, Any] | None:
-    """Resolve label/agent/task/result facts for a call from the durable Run."""
-    from execution.orchestrator.models import AssistantMessage
-
-    entry = next(
-        (
-            item
-            for batch in run.tool_batches
-            for item in batch.entries
-            if item.call_id == call_id
-        ),
-        None,
-    )
-    tool_name = (
-        entry.invocation.tool.definition.name
-        if entry is not None and entry.invocation is not None
-        else None
-    )
-    catalog_entry = next(
-        (
-            item
-            for item in run.tool_catalog.entries
-            if tool_name is not None and item.definition.name == tool_name
-        ),
-        None,
-    )
-    from execution.orchestrator.public_text import enforce_public_label_policy
-
-    raw_label = (
-        catalog_entry.definition.label.strip()
-        if catalog_entry is not None and catalog_entry.definition.label.strip()
-        else "Agent"
-    )
-    label = enforce_public_label_policy(
-        raw_label,
-        secret_values=getattr(runtime, "public_secret_values", ()),
-    )
-    agent_id: str | None = None
-    binding = None
-    if catalog_entry is not None:
-        try:
-            binding = await runtime.binding_store.load(catalog_entry.binding.binding_id)
-        except Exception:
-            binding = None
-        agent_id = binding.agent_id if binding is not None else None
-    raw_agent_name = (
-        binding.agent_display_name
-        if binding is not None and binding.agent_display_name
-        else (
-            raw_label
-            if getattr(run, "lifecycle_family", "legacy") == "legacy"
-            else "Unknown agent"
-        )
-    )
-    agent_name = enforce_public_label_policy(
-        raw_agent_name,
-        secret_values=getattr(runtime, "public_secret_values", ()),
-    )
-    task_text = ""
-    for message in run.transcript:
-        if not isinstance(message, AssistantMessage):
-            continue
-        for call in message.tool_calls:
-            if call.call_id == call_id and isinstance(call.arguments, dict):
-                task = call.arguments.get("task")
-                if isinstance(task, str) and task.strip():
-                    task_text = task.strip()[:4000]
-    result = entry.buffered_terminal_result if entry is not None else None
-    return {
-        "label": label,
-        "agent_name": agent_name,
-        "agent_id": agent_id or "",
-        "task_text": task_text or f"Delegate work to {label}.",
-        "result": result,
-    }
 
 
 def _latest_canonical_parent_id(records: list[dict[str, object]]) -> str | None:
@@ -435,339 +340,6 @@ def _canonical_final_message_end_parent_id(
     return str(parent.get("room_event_id") or "") or None if parent else None
 
 
-async def _emit_working_card(
-    *,
-    delivery: Any,
-    run: Any,
-    message_id: str,
-    task_id: str,
-    label: str,
-    agent_id: str,
-    task_text: str,
-    now: datetime,
-) -> None:
-    """Emit task_submitted + working task_update for a live agent card."""
-    canonical = run.lifecycle_family == "canonical"
-    public_call_id = message_id.rsplit(":", 1)[-1] if canonical else None
-    await delivery.send_task_submitted(
-        room_id=run.room_id,
-        message_id=message_id,
-        task_id=task_id,
-        agent_name=label,
-        agent_id=None if canonical else (agent_id or None),
-        run_id=run.run_id if canonical else None,
-        opaque_public_call_id=public_call_id,
-        status="working",
-        related_message_id=run.request.user_message_id,
-        created_at=now.isoformat(),
-        step_number=None,
-        total_steps=None,
-        task_content=None if canonical else f"Requesting {label}",
-        client_request_id=run.client_request_id,
-    )
-    await delivery.send_task_update(
-        room_id=run.room_id,
-        message_id=message_id,
-        status="working",
-        run_id=run.run_id if canonical else None,
-        opaque_public_call_id=public_call_id,
-        status_message=None if canonical else f"Requesting {label}",
-        agent_id=None if canonical else (agent_id or None),
-        related_message_id=run.request.user_message_id,
-        client_request_id=run.client_request_id,
-    )
-
-
-def _map_orchestrator_terminal_state(status: str | None) -> str:
-    """Map a kernel ToolResultStatus to its legacy TaskState value.
-
-    Kept as a module-level pure function (returning strings, not the
-    ``TaskState`` enum) so it stays import-cycle-free and unit-testable;
-    ``TaskState`` itself is imported lazily inside the projection worker.
-    """
-    return {
-        "completed": "completed",
-        "failed": "failed",
-        "canceled": "canceled",
-        "rejected": "rejected",
-        "expired": "expired",
-    }.get(status or "failed", "failed")
-
-
-async def _resolve_orchestrator_tool_artifacts(
-    *,
-    runtime: Any,
-    run: Any,
-    label: str,
-    task_id: str,
-    result: Any,
-) -> tuple[list[Any], list[dict[str, Any]]]:
-    if result is None or not getattr(result, "artifact_refs", None):
-        return [], []
-
-    from common.types import Artifact, FileContent, Part, RoomArtifactPart
-
-    artifacts = []
-    sse_parts = []
-    file_storage = getattr(runtime, "file_storage", None) or getattr(
-        runtime, "room_files", None
-    )
-    for pos, ref in enumerate(result.artifact_refs):
-        if not isinstance(ref, str) or not ref:
-            continue
-        file_id = None
-        if "/files/" in ref:
-            file_id = (
-                ref.rsplit("/", 2)[-2]
-                if ref.endswith("/content")
-                else ref.rsplit("/", 1)[-1]
-            )
-
-        file_meta = None
-        if file_storage and file_id:
-            try:
-                file_meta = await file_storage.get_for_room_file(run.room_id, file_id)
-            except Exception:
-                file_meta = None
-
-        is_image = "image" in label.lower() or (
-            file_meta and str(file_meta.get("mime_type", "")).startswith("image/")
-        )
-        file_name = (file_meta.get("file_name") if file_meta else None) or (
-            "generated_image.png" if is_image else f"artifact-{pos}"
-        )
-        mime_type = (file_meta.get("mime_type") if file_meta else None) or (
-            "image/png"
-            if is_image or file_name.endswith(".png")
-            else "application/octet-stream"
-        )
-        size_bytes = file_meta.get("size_bytes") if file_meta else None
-        sha256 = file_meta.get("sha256") if file_meta else None
-
-        meta_dict = {
-            "file_id": file_id or f"file-{pos}",
-            "file_name": file_name,
-            "mime_type": mime_type,
-        }
-        if size_bytes is not None:
-            meta_dict["size_bytes"] = size_bytes
-        if sha256 is not None:
-            meta_dict["sha256"] = sha256
-
-        file_content = FileContent(
-            uri=ref,
-            name=file_name,
-            mime_type=mime_type,
-        )
-        part = Part(
-            root=RoomArtifactPart(kind="file", file=file_content, metadata=meta_dict)
-        )
-        artifacts.append(
-            Artifact(
-                artifact_id=f"art-{task_id}-{pos}",
-                name=file_name,
-                parts=[part],
-                metadata=meta_dict,
-            )
-        )
-        sse_parts.append(
-            {
-                "kind": "file",
-                "file": {
-                    "uri": ref,
-                    "name": file_name,
-                    "mime_type": mime_type,
-                },
-                "metadata": meta_dict,
-            }
-        )
-    return artifacts, sse_parts
-
-
-async def _project_orchestrator_agent_activity(
-    event: Any,
-    runtime: Any,
-    message_store: Any,
-    delivery: Any = None,
-) -> None:
-    """Project a kernel tool lifecycle event into room_agent_messages.
-
-    Facts are derived from the durable Run, never from the in-flight event
-    payload alone, so concurrent lifecycle listeners cannot race each other
-    into inconsistent documents. The ``orchestrator_run_id`` extend field
-    fences these rows from the legacy orphan detector.
-    """
-    from common.types import Task, TaskState, TaskStatus
-    from models.room import MessageContent, RoomAgentMessage
-
-    payload = event.payload or {}
-    call_id = payload.get("call_id")
-    if not isinstance(call_id, str) or not call_id:
-        return
-    run = await runtime.run_store.load(event.run_id)
-    if run is None or run.tool_catalog is None:
-        return
-    facts = await _resolve_orchestrator_agent_facts(
-        run=run, runtime=runtime, call_id=call_id
-    )
-    label = facts["label"]
-    agent_name = facts["agent_name"]
-    public_call_id = call_id
-    if run.lifecycle_family == "canonical":
-        public_call_id = next(
-            (
-                entry.opaque_public_call_id
-                for batch in run.tool_batches
-                for entry in batch.entries
-                if entry.call_id == call_id and entry.opaque_public_call_id
-            ),
-            "",
-        )
-        if not public_call_id:
-            return
-    now = datetime.now(UTC)
-    message_id = f"orchestrator:{run.run_id}:{public_call_id}"
-    common = dict(
-        room_id=run.room_id,
-        message_id=message_id,
-        message_created_at=now,
-        message_type="agent",
-        user_id=run.request.requesting_subject_id,
-        agent_id=("" if run.lifecycle_family == "canonical" else facts["agent_id"]),
-        run_id=run.run_id,
-        client_request_id=run.client_request_id,
-        related_message_id=run.request.user_message_id,
-        task_content=(
-            "" if run.lifecycle_family == "canonical" else f"Requesting {label}"
-        ),
-        task_created_at=now,
-        task_updated_at=now,
-    )
-    task_id = f"orchestrator-task-{public_call_id}"
-
-    if event.event_type == "tool_execution_started":
-        document = RoomAgentMessage(
-            **common,
-            message_content=MessageContent(
-                message_text=(
-                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
-                ),
-                message_task=Task(
-                    id=task_id,
-                    kind="task",
-                    status=TaskStatus(
-                        state=TaskState.working, timestamp=now.isoformat()
-                    ),
-                    artifacts=[],
-                ),
-            ),
-            extend_info={
-                "public_task_label": f"Requesting {label}",
-                "public_dispatch_text": (
-                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
-                ),
-                "public_agent_name": agent_name,
-                "orchestrator_run_id": run.run_id,
-            },
-        )
-        await message_store.upsert_room_agent_message(document)
-        # Canonical Agent Cards are folded from tool_execution_* room events;
-        # task_submitted/task_update are not emitted for canonical Runs. The
-        # legacy conversation surface keeps its task_* card contract.
-        if delivery is not None and run.lifecycle_family != "canonical":
-            await _emit_working_card(
-                delivery=delivery,
-                run=run,
-                message_id=message_id,
-                task_id=task_id,
-                label=agent_name,
-                agent_id=facts["agent_id"],
-                task_text=(
-                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
-                ),
-                now=now,
-            )
-        return
-
-    # message_completed: durable result text and terminal task state.
-    # Map the kernel's ToolResultStatus faithfully instead of collapsing
-    # every non-completed outcome into "failed": a rejected/canceled/expired
-    # agent call must render as its own card state, not "Failed".
-    result = facts["result"]
-    state = TaskState(
-        _map_orchestrator_terminal_state(
-            result.status if result is not None else "failed"
-        )
-    )
-    text_parts = [
-        part.text
-        for part in result.content
-        if result is not None and hasattr(part, "text") and part.text
-    ]
-    if run.lifecycle_family == "canonical":
-        result_text = ""
-    elif text_parts:
-        result_text = "\n".join(text_parts)[:8000]
-    else:
-        import json as _json
-
-        data_parts = [
-            _json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
-            for part in (result.content if result is not None else [])
-            if hasattr(part, "data")
-        ]
-        result_text = "\n".join(data_parts)[:8000] or facts["task_text"]
-
-    artifacts, sse_parts = await _resolve_orchestrator_tool_artifacts(
-        runtime=runtime,
-        run=run,
-        label=label,
-        task_id=task_id,
-        result=result,
-    )
-
-    document = RoomAgentMessage(
-        **common,
-        message_content=MessageContent(
-            message_text=result_text,
-            message_task=Task(
-                id=task_id,
-                kind="task",
-                status=TaskStatus(state=state, timestamp=now.isoformat()),
-                artifacts=artifacts,
-            ),
-        ),
-        extend_info={
-            "public_task_label": f"Requesting {label}",
-            "public_dispatch_text": (
-                "" if run.lifecycle_family == "canonical" else facts["task_text"]
-            ),
-            "public_agent_name": agent_name,
-            "orchestrator_run_id": run.run_id,
-        },
-    )
-    await message_store.upsert_room_agent_message(document)
-    # Canonical Agent Cards are folded from tool_execution_* room events;
-    # task_submitted/task_update are not emitted for canonical Runs. The
-    # legacy conversation surface keeps its task_* card contract.
-    if delivery is not None and run.lifecycle_family != "canonical":
-        await delivery.send_task_update(
-            room_id=run.room_id,
-            message_id=message_id,
-            status=str(state.value),
-            content=result_text,
-            run_id=None,
-            opaque_public_call_id=None,
-            agent_name=agent_name,
-            agent_id=facts["agent_id"] or None,
-            related_message_id=run.request.user_message_id,
-            client_request_id=run.client_request_id,
-            task_content=f"Requesting {label}",
-            parts=sse_parts if sse_parts else None,
-            delivery_id=(f"orchestrator:{run.run_id}:{call_id}:terminal:{state.value}"),
-        )
-
-
 async def terminalize_canonical_hitl_run(
     orchestrator_runtime: Any,
     request: Any,
@@ -790,7 +362,7 @@ async def terminalize_canonical_hitl_run(
     if orchestrator_runtime is None or not run_id:
         return False
     run = await orchestrator_runtime.run_store.load(run_id)
-    if run is None or run.lifecycle_family != "canonical":
+    if run is None:
         return False
     if run.tool_catalog is None:
         raise RuntimeError("canonical HITL owner has no Tool catalog")
@@ -823,10 +395,9 @@ async def terminalize_canonical_hitl_run(
                 sequence=current.state_version,
                 timestamp=datetime.now(UTC),
                 payload=payload,
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family=current.lifecycle_family,
             )
         )
 
@@ -851,7 +422,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     Cleanup is split into two separate paths:
       Startup failure — tears down only what was opened, without entering
           the normal SSE draining path.
-      Normal shutdown — full teardown including draining and change stream
+      Normal shutdown — full teardown including SSE draining
     """
     _redis_runtime = None
     _redis_service = None
@@ -860,7 +431,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _agent_deps = None
     _delivery_facade = None
     _delivery_config = None
-    _cancellation_runtime = None
     _eventing_bus = None
     _eventing_deps = None
     _execution_deps = None
@@ -886,34 +456,28 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.capability_issue import (
                 CapabilityIssueExclusionReader,
             )
+            from agent.catalog import AgentCatalogService
             from agent.health import AgentHealthService
             from agent.inspection import AgentInspectionService
             from agent.liveness import AgentLivenessService
             from agent.matcher import AgentMatcher
-            from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
-            from agent.service import AgentService
-            from chat.route_adapter import ChatRouteAdapter
             from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
-            from context_memory.config import ContextMemoryLLMConfig
-            from conversation.agent_message_preparation import (
-                AgentMessagePreparationService,
-            )
             from conversation.deletion import RoomDeletionService
-            from conversation.runtime import (
-                conversation_runtime,
-            )
+            from conversation.runtime import ConversationRuntime
             from conversation.timeline_projection import RoomTimelineProjector
             from conversation.user_message_persistence import UserMessageCommitService
-            from dal.orchestrator.epoch_bindings import (
+            from execution.repository.orchestrator.epoch_bindings import (
                 EpochScopedOrchestratorCleanup,
                 bind_room_epoch_store,
                 require_room_epoch_store,
                 reset_room_epoch_store,
             )
-            from dal.orchestrator.event_store import MongoOrchestratorEventStore
-            from dal.orchestrator.stores import (
+            from execution.repository.orchestrator.event_store import (
+                MongoOrchestratorEventStore,
+            )
+            from execution.repository.orchestrator.stores import (
                 MongoAgentCallLedgerStore,
                 MongoAgentToolBindingStore,
                 MongoObservationConflictStore,
@@ -922,10 +486,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from llm_gateway.config import LLMGatewayConfig
-            from llm_gateway.services import (
-                AgentSelectionLLMService,
-                MessageParserLLMService,
-            )
+            from llm_gateway.services import AgentSelectionLLMService
             from local_agents import (
                 HostPortScanner,
                 LocalAgentCardProbe,
@@ -933,9 +494,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentService,
             )
 
-            # The compatibility runtime is process-global. Clear bindings from a
-            # previous failed or completed lifespan before composing this one.
-            conversation_runtime.reset_bindings()
+            # Each lifespan builds its own conversation runtime. The chat service
+            # is still process-global, so clear bindings from a previous lifespan.
+            conversation_runtime = ConversationRuntime()
+            app.state.conversation_runtime = conversation_runtime
             chat_service.reset_bindings()
             reset_room_epoch_store()
 
@@ -948,44 +510,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
                 room_files_collection=room_files_collection,
-                rooms_collection=mongo_dal.collection("rooms"),
+                room_lifecycle=RoomMongoRepository(mongo_dal),
                 room_messages_collection=mongo_dal.collection("room_user_messages"),
                 room_agent_messages_collection=mongo_dal.collection(
                     "room_agent_messages"
-                ),
-                room_owned_collections=[
-                    mongo_dal.collection(name)
-                    for name in (
-                        "room_user_messages",
-                        "room_agent_messages",
-                        "room_quotes",
-                        "room_memories",
-                        "conversation_content",
-                        "runs",
-                        "run_events",
-                        "orchestration_runs",
-                        "orchestration_run_events",
-                        "hitl_requests",
-                        "hitl_interactions",
-                        "hitl_resume_commands",
-                        "cancelled_messages",
-                        "orchestrator_runs",
-                        "orchestrator_run_events",
-                        "orchestrator_agent_tool_bindings",
-                        "orchestrator_agent_calls",
-                        "orchestrator_a2a_observations",
-                        "orchestrator_a2a_observation_conflicts",
-                        "orchestrator_room_epochs",
-                    )
-                ],
-                excluded_from_room_state_delete=(
-                    "orchestrator_room_epochs",
-                    "orchestrator_run_events",
-                    "orchestrator_runs",
-                    "orchestrator_agent_tool_bindings",
-                    "orchestrator_agent_calls",
-                    "orchestrator_a2a_observations",
-                    "orchestrator_a2a_observation_conflicts",
                 ),
                 file_dir=runtime.settings.hybro_file_dir,
                 content_url_prefix=f"{runtime.settings.api_prefix.rstrip('/')}/files",
@@ -997,33 +525,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.agent_search_index_ready = index_readiness[
                 "agent_search_index_ready"
             ]
-            app.state.memory_search_index_ready = index_readiness[
-                "memory_search_index_ready"
-            ]
-            app.state.search_indexes_ready = app.state.agent_search_index_ready and (
-                not runtime.settings.memory_search_enabled
-                or app.state.memory_search_index_ready
-            )
 
-            route_room_center = ChatRouteAdapter(
-                chat_service=chat_service,
-                conversation_runtime=conversation_runtime,
-            )
             _delivery_config = create_delivery_config(runtime.settings)
-            cancellation_startup_policy = create_cancellation_startup_policy(
-                redis_url=runtime.settings.redis_url,
-                multi_worker=runtime.settings.is_gunicorn,
-            )
             runtime_instance_id = get_instance_id()
-            _cancellation_runtime = create_cancellation_runtime(
-                mongo=mongo_dal,
-                redis_url=runtime.settings.redis_url,
-                instance_id=runtime_instance_id,
-                startup_policy=cancellation_startup_policy,
-                app_settings=runtime.settings,
-            )
-            await _cancellation_runtime.start()
-            app.state.cancellation_runtime = _cancellation_runtime
             delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
                 redis_url=runtime.settings.redis_url,
                 config=_delivery_config,
@@ -1039,16 +543,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _room_snapshot_service = SnapshotService(store=_room_event_store)
             app.state.room_snapshot_service = _room_snapshot_service
 
-            async def _room_seq_reader(room_id: str) -> int | None:
-                return await _room_event_store.latest_seq(room_id)
+            async def _room_seq_reader(conversation_id: str) -> int | None:
+                return await _room_event_store.latest_seq(conversation_id)
 
-            async def _snapshot_provider(room_id: str) -> dict[str, Any] | None:
+            async def _snapshot_provider(conversation_id: str) -> dict[str, Any] | None:
                 try:
-                    return await _room_snapshot_service.snapshot(room_id)
+                    return await _room_snapshot_service.snapshot(conversation_id)
                 except Exception:
                     logger.warning(
                         "resync snapshot build failed",
-                        extra={"room_id": room_id},
+                        extra={"conversation_id": conversation_id},
                         exc_info=True,
                     )
                     return None
@@ -1078,12 +582,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.eventing_deps = _eventing_deps
             app.state.eventing_connected = False
 
-            from a2a_adapter.runtime_service import (
-                A2ARuntimeConfig,
-                a2a_service,
-            )
-            from a2a_adapter.task_status import coerce_task_state
-            from execution.hitl.factory import create_hitl_service
+            from approval.factory import create_hitl_service
 
             agent_capability_issue_repository = (
                 create_agent_capability_issue_repository(mongo_dal)
@@ -1091,84 +590,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
             )
-            from common.observability.run_metrics import increment_counter
-            from dal.runtime_store.cancellation_repository import (
-                MongoCancellationMarkerRepository,
-            )
-            from delivery.task_notifier import TaskUpdateNotifier
-            from execution.cancellation import (
-                AgentTaskCleanupAdapter,
-                CancellationStateAdapter,
-                HITLMessageCancellationAdapter,
-            )
-            from execution.client_request_id import SSEClientRequestIdResolver
-            from execution.dispatch.task_notifications import (
-                bind_notification_store,
-                bind_task_notification_runtime,
-                notify_task_update,
-            )
-            from execution.dispatch.task_notifications import (
-                bind_processing_status_emitter as bind_task_processing_status_emitter,
-            )
-            from execution.events import (
-                emit_processing_status,
-                run_event_notification_from_payload,
-            )
-            from execution.events import (
-                emit_room_processing_status as emit_execution_room_processing_status,
-            )
-            from execution.hitl.adapters import (
-                A2AHITLContinuationAdapter,
-                HITLDeliveryAdapter,
-                HITLTaskNotificationAdapter,
-            )
-            from execution.orchestration.resources import (
+            from approval.adapters import HITLDeliveryAdapter
+            from conversation.attachment_projection import (
                 AttachmentProjectionService,
             )
-            from execution.orchestration.run_store import MongoOrchestrationRunStore
-            from execution.run_command_handler import (
-                RunCommandHandler,
-                run_event_sse_enabled,
-            )
-            from execution.run_lifecycle import RunLifecycleAdapter
-            from execution.run_lifecycle_service import bind_run_lifecycle_service
-            from execution.run_queries import RunQueryAdapter
-            from execution.task_tracking import A2ATaskTrackingService
-            from models.quote import QuotedSnippet
-
-            _execution_repos = create_execution_repositories(mongo=mongo_dal)
-            run_command_handler = RunCommandHandler(
-                run_repository=_execution_repos["run_repository"],
-                run_event_repository=_execution_repos["run_event_repository"],
-                room_files=file_storage,
-            )
-            bind_run_lifecycle_service(run_command_handler)
-
-            # ── Terminal settlement reader (defense-in-depth) ────────────
-            # The publisher consults the private run_events fact log before
-            # emitting terminal run_event/processing_status frames (Room
-            # Stream Snapshot plan §4 rule 4). Bound here because the fact
-            # repository only exists after execution composition.
-            from execution.terminal_projection import (
-                RunEventProjectionSettlementReader,
-            )
-
-            _delivery_facade.event_publisher.projection_settlement = (
-                RunEventProjectionSettlementReader(
-                    _execution_repos["run_event_repository"]
-                )
-            )
-
-            async def notify_task_update_with_string_state(**kwargs):
-                state = kwargs.get("state")
-                kwargs["state"] = coerce_task_state(state)
-                return await notify_task_update(**kwargs)
-
-            run_lifecycle = RunLifecycleAdapter(
-                command_handler=run_command_handler,
-                run_repository=_execution_repos["run_repository"],
-            )
-            app.state.execution_run_lifecycle = run_lifecycle
+            from execution.adapters.hitl import HITLMessageCancellationAdapter
+            from execution.client_request_id import SSEClientRequestIdResolver
 
             llm_gateway_config = LLMGatewayConfig.from_settings(runtime.settings)
             model_registry = ModelRegistryImpl(
@@ -1188,10 +615,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_selection_llm_service = AgentSelectionLLMService(
                 llm_provider=llm_provider
             )
-            message_parser_llm_service = MessageParserLLMService(
-                llm_provider=llm_provider
-            )
-            conversation_runtime.bind_message_parser_service(message_parser_llm_service)
             conversation_runtime.bind_capability_issue_reader(
                 agent_capability_issue_service
             )
@@ -1243,8 +666,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 writer=_agent_deps.agent_registry_writer,
             )
             app.state.local_agent_service = _local_agent_service
-            agent_compat_service = AgentService(facade=_agent_facade)
-            route_agent_center = AgentRouteAdapter(service=agent_compat_service)
             agent_matcher = AgentMatcher(facade=_agent_facade)
             agent_selection_service = AgentSelectionService(
                 matcher=agent_matcher,
@@ -1253,13 +674,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_health_service = AgentHealthService(
                 repository=_agent_deps.agent_repository
             )
-            agent_liveness_checker = AgentLivenessService(
-                health_service=agent_health_service,
-                agent_registry_writer=_agent_deps.agent_registry_writer,
+            agent_catalog = AgentCatalogService(
+                _agent_facade,
+                liveness_checker=AgentLivenessService(
+                    health_service=agent_health_service
+                ),
             )
             route_inspection_center = AgentInspectionService()
             membership_source = RepositoryRoomMembershipSeedSource(
-                agent_service_adapter=agent_compat_service
+                agent_registry=_agent_facade
             )
             _room_deps = create_room_deps(
                 mongo=mongo_dal,
@@ -1269,67 +692,54 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 epoch_store=require_room_epoch_store(),
             )
             _room_facade = _room_deps.room_registry
-            # Runtime store aggregate: callers below receive focused runtime-store parts.
-            # Do not add new broad-store consumers; bind a focused part or protocol instead.
-            runtime_store = create_runtime_repository_store(
-                mongo=mongo_dal,
-                room_deps=_room_deps,
-                agent_deps=_agent_deps,
-            )
-            agent_room_store = runtime_store.agent_room
-            message_store = runtime_store.messages
-            task_store = runtime_store.tasks
-            hitl_store = runtime_store.hitl
-            hitl_lifecycle_store = runtime_store.hitl_lifecycle
-            memory_store = runtime_store.memory
-            max_tasks_per_user = runtime_store.MAX_TASKS_PER_USER
-            max_tasks_per_room = runtime_store.MAX_TASKS_PER_ROOM
+            # Module-owned stores: each is built over its own collections and bound
+            # below through focused SimpleNamespace ports.
+            from agent.repository import AgentRuntimeStore
 
+            agent_runtime_store = AgentRuntimeStore(
+                agent_groups=mongo_dal.collection("agent_groups"),
+                agent_repository=_agent_deps.agent_repository,
+            )
+            from conversation.repository import (
+                ClientRequestIdStore,
+                ConversationMessageStore,
+                ConversationRoomStore,
+            )
+
+            message_store = ConversationMessageStore(
+                room_agent_messages=mongo_dal.collection("room_agent_messages"),
+                room_user_messages=mongo_dal.collection("room_user_messages"),
+                message_repository=_room_deps.message_repository,
+            )
+            room_store = ConversationRoomStore(
+                room_repository=_room_deps.room_repository
+            )
+            client_request_id_store = ClientRequestIdStore(message_store=message_store)
+            from approval.repository import HITLLifecycleStore, HITLRequestStore
+
+            hitl_store = HITLRequestStore(
+                hitl_requests=mongo_dal.collection("hitl_requests"),
+                message_writer=message_store,
+            )
+            hitl_lifecycle_store = HITLLifecycleStore(
+                interactions=mongo_dal.collection("hitl_interactions"),
+                resume_commands=mongo_dal.collection("hitl_resume_commands"),
+                hitl_requests=mongo_dal.collection("hitl_requests"),
+            )
+            # Room deletion asks each owning module to delete its own rows.
+            # Orchestrator collections are cleaned per room epoch instead.
+            file_storage.bind_room_state_owners(
+                (
+                    _room_deps.message_repository,
+                    RoomQuoteMongoRepository(mongo_dal),
+                    MemoryMongoRepository(mongo=mongo_dal),
+                    ContentStorageMongoRepository(mongo=mongo_dal),
+                    hitl_store,
+                    hitl_lifecycle_store,
+                )
+            )
             # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
             # boundaries are intentionally constrained to container assembly.
-            async def check_task_limits(
-                user_id: str,
-                room_id: str,
-                non_terminal_states: list[str],
-            ) -> None:
-                await task_store.check_task_limits(
-                    user_id,
-                    room_id,
-                    non_terminal_states,
-                    max_tasks_per_user=max_tasks_per_user,
-                    max_tasks_per_room=max_tasks_per_room,
-                )
-
-            task_notification_store = SimpleNamespace(
-                update_last_notified_state=message_store.update_last_notified_state,
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                update_room_agent_message_by_message_id=(
-                    message_store.update_room_agent_message_by_message_id
-                ),
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                resolve_client_request_id_for_agent_message=(
-                    task_store.resolve_client_request_id_for_agent_message
-                ),
-            )
-            a2a_task_tracking_store = SimpleNamespace(
-                check_task_limits=check_task_limits,
-                generate_webhook_token=task_store.generate_webhook_token,
-                hash_webhook_token=task_store.hash_webhook_token,
-                enable_task_tracking_on_message=(
-                    task_store.enable_task_tracking_on_message
-                ),
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                update_webhook_token_hash_on_message=(
-                    task_store.update_webhook_token_hash_on_message
-                ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_hitl_request=hitl_store.get_hitl_request,
-                update_task_on_message=task_store.update_task_on_message,
-            )
             hitl_runtime_store = SimpleNamespace(
                 count_hitl_requests_for_message=(
                     hitl_store.count_hitl_requests_for_message
@@ -1359,7 +769,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.get_room_user_message_by_message_id
                 ),
                 resolve_client_request_id_for_message_id=(
-                    task_store.resolve_client_request_id_for_message_id
+                    client_request_id_store.resolve_client_request_id_for_message_id
                 ),
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_interaction_metadata=(
@@ -1372,12 +782,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 reset_last_notified_state=message_store.reset_last_notified_state,
                 get_room_agent_message_by_message_id=(
                     message_store.get_room_agent_message_by_message_id
-                ),
-                get_pending_continuation_on_message=(
-                    task_store.get_pending_continuation_on_message
-                ),
-                save_continuation_on_user_message=(
-                    task_store.save_continuation_on_user_message
                 ),
                 get_pending_hitl_requests=hitl_store.get_pending_hitl_requests,
                 get_pending_hitl_requests_strict=(
@@ -1393,55 +797,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 cas_update_hitl_request_strict=(
                     hitl_store.cas_update_hitl_request_strict
                 ),
-                get_and_clear_continuation_on_message=(
-                    task_store.get_and_clear_continuation_on_message
-                ),
-                get_and_clear_continuation_on_user_message=(
-                    task_store.get_and_clear_continuation_on_user_message
-                ),
-                iter_stale_processing_hitl_requests=(
-                    hitl_store.iter_stale_processing_hitl_requests
-                ),
-            )
-            stale_task_store = SimpleNamespace(
-                get_stale_task_messages=task_store.get_stale_task_messages,
-                get_expired_task_messages=task_store.get_expired_task_messages,
-                get_non_tracked_stale_task_messages=(
-                    task_store.get_non_tracked_stale_task_messages
-                ),
-                find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
-                touch_task_message=task_store.touch_task_message,
-                is_message_cancelled=task_store.is_message_cancelled,
-                is_message_cancelled_strict=task_store.is_message_cancelled_strict,
-                get_room_user_message_by_message_id=(
-                    message_store.get_room_user_message_by_message_id
-                ),
-                update_task_on_message=task_store.update_task_on_message,
-                get_and_clear_continuation_on_message=(
-                    task_store.get_and_clear_continuation_on_message
-                ),
-                get_and_clear_continuation_on_user_message=(
-                    task_store.get_and_clear_continuation_on_user_message
-                ),
-                get_room_ids_with_non_terminal_runs=(
-                    task_store.get_room_ids_with_non_terminal_runs
-                ),
-                get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
-                get_stale_claimed_orchestration_messages=(
-                    message_store.get_stale_claimed_orchestration_messages
-                ),
-                update_orchestration_projection_if_status=(
-                    message_store.update_orchestration_projection_if_status
-                ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
             )
             room_runtime_store = SimpleNamespace(
                 add_room_agent_message=message_store.add_room_agent_message,
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
-                get_all_active_agents=agent_room_store.get_all_active_agents,
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
+                get_agent_by_agent_id=agent_runtime_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_runtime_store.get_agent_group_by_id,
+                get_all_active_agents=agent_runtime_store.get_all_active_agents,
+                get_room_by_room_id=room_store.get_room_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
@@ -1450,43 +812,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
 
-            async def get_quoted_snippet_by_id(quote_id: str):
-                quote_doc = await _room_deps.room_quote_repository.get_by_id(quote_id)
-                return (
-                    QuotedSnippet.model_validate(quote_doc)
-                    if quote_doc is not None
-                    else None
-                )
-
-            execution_delivery = _delivery_facade
-            task_notifier = TaskUpdateNotifier(execution_delivery)
-
-            membership_source.bind_store(agent_room_store)
-            bind_notification_store(task_notification_store)
-            bind_task_notification_runtime(
-                task_notifier=task_notifier,
-                delivery=execution_delivery,
-            )
-            a2a_service.bind_runtime_config(
-                A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
-            )
-            a2a_service.bind_task_tracking(
-                A2ATaskTrackingService(a2a_task_tracking_store)
-            )
-            a2a_service.bind_call_counter(agent_room_store)
+            membership_source.bind_store(agent_runtime_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
-                resolver=task_store,
+                resolver=client_request_id_store,
             )
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
             )
-            orchestration_run_store = MongoOrchestrationRunStore(
-                mongo_dal,
-                room_files=file_storage,
-            )
-            from execution.hitl.adapters import HITLTerminalLifecycleAdapter
-            from execution.hitl.application import HITLApplicationCoordinator
-            from execution.hitl.reconciler import HITLLifecycleReconciler
+            from approval.adapters import HITLTerminalLifecycleAdapter
+            from approval.application import HITLApplicationCoordinator
+            from approval.reconciler import HITLLifecycleReconciler
 
             hitl_application = HITLApplicationCoordinator(
                 lifecycle=hitl_lifecycle_store,
@@ -1504,18 +839,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 if orchestrator_runtime is None or not isinstance(run_id, str):
                     return
                 run = await orchestrator_runtime.run_store.load(run_id)
-                if (
-                    run is None
-                    or run.lifecycle_family != "canonical"
-                    or not run.client_request_id
-                ):
+                if run is None or not run.client_request_id:
                     return
                 if kind == "run_resumed" and run.status in {
                     "canceling",
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
+                    *TERMINAL_RUN_STATUSES,
                 }:
                     return
                 boundary_at = datetime.now(UTC)
@@ -1533,7 +861,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     }
                 )
                 event_id = f"public:{run_id}:{kind}:{interaction['interaction_id']}"
-                records = await _read_canonical_run_events(run.room_id, run_id)
+                records = await _read_canonical_run_events(run.conversation_id, run_id)
                 parent_event_id = _latest_canonical_parent_id(
                     records
                 ) or _canonical_parent_ids.get(run_id)
@@ -1542,7 +870,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     room_event_id,
                 ) = await _delivery_deps.event_publisher.emit_checked_identified(
                     RunEventNotification(
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         event_id=event_id,
                         run_id=run_id,
                         seq=run.state_version,
@@ -1554,7 +882,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
                 if room_event_id is None and status not in {
                     DeliveryEmitStatus.ALREADY_DELIVERED,
-                    DeliveryEmitStatus.DEDUPLICATED,
                 }:
                     raise RuntimeError(
                         f"canonical HITL control event {kind} was not persisted"
@@ -1610,13 +937,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             hitl_application.bind_run_answer_projector(project_supervisor_run_answer)
 
-            async def read_orchestrator_lifecycle_family(run_id: str) -> str:
-                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
-                if orchestrator_runtime is None:
-                    return "legacy"
-                run = await orchestrator_runtime.run_store.load(run_id)
-                return run.lifecycle_family if run is not None else "legacy"
-
             async def read_canonical_run_state(run_id: str) -> str:
                 orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
                 if orchestrator_runtime is None:
@@ -1629,7 +949,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 if orchestrator_runtime is None:
                     return "missing"
                 run = await orchestrator_runtime.run_store.load(run_id)
-                if run is None or run.lifecycle_family != "canonical":
+                if run is None:
                     return "missing"
                 command_id = f"cancel:{run_id}:user_requested"
                 for _attempt in range(4):
@@ -1687,7 +1007,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     orchestration_run_id=run.run_id,
                 )
                 requests = await hitl_manager.request_interaction(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     user_message_id=run.request.user_message_id,
                     interaction_id=interaction_id,
                     application_route=HITLApplicationRoute.SUPERVISOR_RUN,
@@ -1716,7 +1036,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 answers,
             ):
                 """HITL-facing port: recorded answer → suspended kernel Run."""
-                from execution.hitl.service import ContinuationLostError
+                from approval.service import ContinuationLostError
                 from execution.orchestrator.kernel import (
                     supervisor_answer_observation,
                 )
@@ -1727,13 +1047,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 run = await orchestrator_runtime.run_store.load(run_id)
                 if run is None:
                     raise ContinuationLostError("orchestration run is missing")
-                if run.status in {
-                    "canceling",
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
-                }:
+                if run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
                     return False
                 try:
                     observation = supervisor_answer_observation(
@@ -1742,11 +1056,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         answers,
                         datetime.now(UTC),
                     )
-                    session = orchestrator_runtime.session_host.get_session(run.room_id)
+                    session = orchestrator_runtime.session_host.get_session(
+                        run.conversation_id
+                    )
                     if session is not None and session.owns_run(run_id):
                         resume_result = (
                             await orchestrator_runtime.session_host.observe_tool(
-                                run.room_id, observation
+                                run.conversation_id, observation
                             )
                         )
                     else:
@@ -1769,7 +1085,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         extra={
                             "run_id": run_id,
                             "call_id": call_id,
-                            "room_id": run.room_id,
+                            "conversation_id": run.conversation_id,
                             "resume_error": f"{type(exc).__name__}: {exc}",
                         },
                         exc_info=True,
@@ -1780,81 +1096,37 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                agent_reply=A2AHITLContinuationAdapter(a2a_service),
-                continuation=A2AHITLContinuationAdapter(a2a_service),
-                task_notifications=HITLTaskNotificationAdapter(
-                    notify_task_update_with_string_state
-                ),
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
-                    orchestration_run_store,
-                    run_lifecycle,
                     canonical_terminalizer=terminalize_canonical_hitl_run_port,
                 ),
                 lifecycle=hitl_lifecycle_store,
                 application=hitl_application,
                 room_files=file_storage,
                 canonical_control_publisher=publish_canonical_hitl_control,
-                lifecycle_family_reader=read_orchestrator_lifecycle_family,
                 canonical_run_state_reader=read_canonical_run_state,
                 supervisor_resume=resume_supervisor_hitl_port,
                 canonical_cancellation_requester=request_canonical_hitl_cancellation,
                 public_secret_values=configured_public_secret_values(runtime.settings),
+                public_text_sanitizer=sanitize_public_text,
                 approval_deadline_hours=runtime.settings.approval_deadline_hours,
             )
-
-            async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
-                from a2a_adapter.remote_task import fetch_remote_task
-                from common.a2a_constants import TERMINAL_STATES
-                from common.a2a_task_projection import (
-                    extract_public_completed_status_text,
-                )
-
-                message = await message_store.get_room_agent_message_by_message_id(
-                    command.get("continuation_message_id")
-                )
-                agent_url = getattr(message, "agent_url", None) if message else None
-                if not agent_url:
-                    return None
-                card = await a2a_service.get_agent_card_from_url(agent_url)
-                task = await fetch_remote_task(card, command["task_id"])
-                if task is None or getattr(task, "status", None) is None:
-                    return None
-                state = getattr(task.status.state, "value", task.status.state)
-                terminal_values = {item.value for item in TERMINAL_STATES}
-                if state not in terminal_values:
-                    return {"advanced": False}
-                return {
-                    "advanced": True,
-                    "reconciled_from_get_task": True,
-                    "blocking": True,
-                    "task_id": task.id,
-                    "context_id": task.context_id,
-                    "task_state": state,
-                    "response_text": extract_public_completed_status_text(task) or "",
-                }
 
             hitl_reconciler = HITLLifecycleReconciler(
                 lifecycle=hitl_lifecycle_store,
                 service=hitl_manager,
                 application=hitl_application,
-                orchestration_run_store=orchestration_run_store,
-                inspect_remote_command=inspect_uncertain_hitl_command,
             )
             route_room_reader = SimpleNamespace(
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_by_room_id=room_store.get_room_by_room_id,
             )
             sse_state_reader = SimpleNamespace(
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_by_room_id=room_store.get_room_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
             )
             conversation_runtime.bind_store(room_runtime_store)
-            conversation_runtime.bind_cancellation_control(
-                cancellation_control=_cancellation_runtime,
-            )
             conversation_runtime.bind_facade(_room_facade)
-            conversation_runtime.bind_room_files(file_storage)
             conversation_runtime.bind_user_message_commit(
                 UserMessageCommitService(
                     writer=SimpleNamespace(
@@ -1871,7 +1143,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
             )
             conversation_runtime.bind_attachment_metadata_reader(file_storage)
-            conversation_runtime.bind_attachment_content_reader(file_storage)
             conversation_runtime.bind_timeline_projector(
                 RoomTimelineProjector(
                     hitl_reader=SimpleNamespace(
@@ -1882,32 +1153,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                 )
             )
-            conversation_runtime.bind_a2a_inline_file_limits(
-                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
-                max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
-            )
             chat_service.bind_facade(_room_deps.chat_facade)
+            chat_service.bind_message_reader(
+                conversation_runtime.inquiry_room_messages_by_room_id
+            )
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
-                llm_provider=llm_provider,
                 room_history_reader=_room_deps.room_history_reader,
-                search_config=MemorySearchConfig(
-                    enabled=(
-                        runtime.settings.memory_search_enabled
-                        and app.state.memory_search_index_ready
-                    ),
-                    temporal_decay_enabled=(
-                        runtime.settings.memory_search_temporal_decay_enabled
-                    ),
-                    half_life_days=runtime.settings.memory_search_half_life_days,
-                    max_results=runtime.settings.memory_search_max_results,
-                    max_candidates=runtime.settings.memory_search_max_candidates,
-                    max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
-                ),
-                llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_json_model",
-                    summary_model="context_memory_json_model",
-                ),
             )
             room_deletion = RoomDeletionService(
                 room_lifecycle=SimpleNamespace(
@@ -1950,92 +1202,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             chat_service.bind_room_deletion(room_deletion)
-            agent_message_preparation = AgentMessagePreparationService(
-                agent_url_reader=SimpleNamespace(
-                    get_agent_url_by_agent_id=(
-                        agent_compat_service.get_agent_url_by_agent_id
-                    ),
-                ),
-                agent_room_reader=SimpleNamespace(
-                    get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                    get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                ),
-                user_message_reader=SimpleNamespace(
-                    get_room_user_message_by_message_id=(
-                        message_store.get_room_user_message_by_message_id
-                    ),
-                    get_room_user_messages_by_room_id=(
-                        message_store.get_room_user_messages_by_room_id
-                    ),
-                ),
-                quote_reader=SimpleNamespace(
-                    get_quoted_snippet_by_id=get_quoted_snippet_by_id,
-                ),
-                message_lineage_reader=SimpleNamespace(
-                    get_message=_room_facade.get_message,
-                ),
-                attachment_content_reader=SimpleNamespace(
-                    get_bytes=file_storage.get_bytes,
-                ),
-                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
-                max_encoded_bytes=(
-                    runtime.settings.a2a_inline_message_max_encoded_bytes
-                ),
-                context_assembly=context_memory_facade,
-            )
-            conversation_runtime.bind_agent_message_preparation(
-                agent_message_preparation
-            )
 
             execution_facade = create_execution_facade(
                 room_center=conversation_runtime,
                 hitl_manager=hitl_manager,
-                run_lifecycle=run_lifecycle,
-                run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
-                cancellation_state=CancellationStateAdapter(_cancellation_runtime),
-                cancellation_repository=MongoCancellationMarkerRepository(
-                    mongo_dal.collection("cancelled_messages")
-                ),
-                cancellation_message_reader=(
-                    message_store.get_room_user_message_by_message_id_strict
-                ),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
-                agent_task_cleanup=AgentTaskCleanupAdapter(
-                    message_task_store=message_store,
-                    get_agent_card_from_url=a2a_service.get_agent_card_from_url,
-                    cancel_remote_task=a2a_service.cancel_remote_task,
-                    notify_task_update=notify_task_update_with_string_state,
-                ),
                 event_publisher=_delivery_deps.event_publisher,
-                run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=execution_client_request_id_resolver,
-                orchestration_run_store=orchestration_run_store,
             )
             _execution_deps = create_execution_deps(execution_facade)
 
-            from execution.terminal_projection import TerminalProjectionFinalizer
-
-            terminal_projection_finalizer = TerminalProjectionFinalizer(
-                lifecycle=run_lifecycle,
-                event_publisher=_delivery_deps.event_publisher,
-                message_store=message_store,
-                delivery=execution_delivery,
-                run_event_enabled=run_event_sse_enabled,
-                # Turn journaling is retired; no synthetic recoverable step is wired.
-                head_healer=run_command_handler.heal_head_from_events,
-            )
-            run_lifecycle.bind_terminal_finalizer(terminal_projection_finalizer)
-
-            async def emit_room_processing_status(**kwargs):
-                return await emit_execution_room_processing_status(
-                    **kwargs,
-                    run_lifecycle=run_lifecycle,
-                    event_publisher=_delivery_deps.event_publisher,
-                    run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=execution_client_request_id_resolver,
-                )
-
-            bind_task_processing_status_emitter(emit_room_processing_status)
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
@@ -2047,26 +1223,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.start()
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
-            conversation_runtime.bind_context_memory(
-                context_assembly=context_memory_facade,
-                room_memory_cleanup=context_memory_facade,
-            )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
 
         if _execution_deps is None:
             raise RuntimeError("ExecutionDeps have not been bound")
-        try:
-            healed = await _execution_deps.execution_engine.heal_diverged_runs(
-                limit=500
-            )
-        except Exception:
-            logger.warning("startup heal: failed; continuing startup", exc_info=True)
-        else:
-            if healed:
-                logger.info("startup heal: healed %s diverged run(s)", healed)
-        await hitl_store.ensure_hitl_indexes()
-        await hitl_lifecycle_store.ensure_hitl_lifecycle_indexes()
+        await hitl_store.ensure_indexes()
+        await hitl_lifecycle_store.ensure_indexes()
 
         # Init DAL Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
@@ -2099,9 +1262,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         check_multi_worker_safety(
             is_gunicorn=runtime.settings.is_gunicorn,
             delivery_pubsub_connected=bool(
-                _delivery_facade
-                and _delivery_facade.delivery_pubsub_connected
-                and _cancellation_runtime.redis_connected
+                _delivery_facade and _delivery_facade.delivery_pubsub_connected
             ),
             eventing_connected=(
                 not bool(runtime.settings.redis_url)
@@ -2111,7 +1272,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 _delivery_facade and _delivery_facade.delivery_kv_connected
             ),
             redis_service_connected=redis_kv_ready,
-            change_stream_connected=bool(_cancellation_runtime.change_stream_connected),
+            mongo_supports_transactions=(
+                await mongo_dal.supports_transactions()
+                if runtime.settings.is_gunicorn
+                else True
+            ),
         )
 
         # ── Phase 2: Background services (only after guard passes) ──
@@ -2126,101 +1291,23 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _leader, lock_name=AGENT_HEALTH_CHECKER
         )
         stale_task_checker.set_leader_election(_leader)
-        stale_task_checker.configure_timing(
-            stale_check_minutes=runtime.settings.stale_check_minutes,
-            task_expiry_hours=runtime.settings.task_expiry_hours,
-            pending_task_warning_hours=runtime.settings.pending_task_warning_hours,
-            orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
-            processing_status_expiry_minutes=runtime.settings.processing_status_expiry_minutes,
-        )
-        stale_task_checker.set_runtime_deps(
-            StaleTaskCheckerDeps(
-                store=stale_task_store,
-                rooms_collection=mongo_dal.collection("rooms"),
-                notify_task_update=notify_task_update,
-                increment_counter=increment_counter,
-                a2a_service=a2a_service,
-            )
-        )
         if _execution_deps is not None:
-            from jobs.stale_task_checker import (
-                StaleCancellationReconciliationDeps,
-                StaleHITLDeps,
-                StaleRunWatchdogEventDeps,
-                StaleTerminalProjectionDeps,
-            )
+            from jobs.stale_task_checker import StaleHITLDeps
 
-            async def emit_watchdog_run_event(
-                *,
-                room_id: str,
-                payload: dict,
-                client_request_id: str | None = None,
-            ) -> None:
-                if payload and run_event_sse_enabled():
-                    await _delivery_deps.event_publisher.emit(
-                        run_event_notification_from_payload(
-                            room_id=room_id,
-                            payload=payload,
-                            correlation_id=client_request_id,
-                        )
-                    )
-
-            async def emit_watchdog_processing_status(
-                *,
-                room_id: str,
-                status: str,
-                message_id: str,
-                client_request_id: str | None = None,
-                details: str | None = None,
-            ) -> None:
-                await emit_processing_status(
-                    room_id=room_id,
-                    status=status,
-                    message_id=message_id,
-                    lifecycle_message_id=message_id,
-                    record_lifecycle=False,
-                    client_request_id=client_request_id,
-                    details={"message": details} if details else None,
-                    run_lifecycle=run_lifecycle,
-                    event_publisher=_delivery_deps.event_publisher,
-                    run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=execution_client_request_id_resolver,
-                )
-
-            stale_task_checker.set_cancellation_reconciliation_deps(
-                StaleCancellationReconciliationDeps(
-                    reconciliation=execution_facade.cancellation_service,
-                )
-            )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
-                    recover_stale_processing=hitl_manager.recover_stale_processing,
-                    cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
                     reconcile_lifecycle=hitl_reconciler.reconcile_lifecycle,
                 )
             )
-            stale_task_checker.set_run_watchdog_event_deps(
-                StaleRunWatchdogEventDeps(
-                    append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
-                    emit_run_event=emit_watchdog_run_event,
-                    emit_processing_status=emit_watchdog_processing_status,
-                )
-            )
-            stale_task_checker.set_terminal_projection_deps(
-                StaleTerminalProjectionDeps(
-                    recover_pending=run_lifecycle.recover_terminal_projections,
-                )
-            )
         compaction_sweep.set_leader_election(_leader)
+        canonical_active_run_rooms = CanonicalActiveRunRoomReader(mongo_dal)
         compaction_sweep.set_sweep_deps(
             CompactionSweepDeps(
                 list_room_ids_with_memory=(
                     context_memory_facade.memory_repository.list_room_ids_with_memory
                 ),
                 get_room_ids_with_non_terminal_runs=(
-                    _execution_repos[
-                        "run_repository"
-                    ].get_room_ids_with_non_terminal_runs
+                    canonical_active_run_rooms.get_room_ids_with_non_terminal_runs
                 ),
                 context_compaction=context_memory_facade,
             )
@@ -2239,15 +1326,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         await stale_task_checker.start()
         await stale_task_checker.check_stale_tasks()
-        if runtime.settings.webhook_signing_key:
-            logger.info(
-                "A2A push-notification support initialized (using room_agent_messages)"
-            )
-        else:
-            logger.warning(
-                "WEBHOOK_SIGNING_KEY not set - A2A push notifications disabled; "
-                "durable orchestration recovery remains enabled"
-            )
 
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
@@ -2273,17 +1351,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         bind_api_gateway_deps(
             app,
             APIGatewayDeps(
-                agent_center=route_agent_center,
+                agent_catalog=agent_catalog,
                 agent_service=_agent_deps.agent_registry,
                 agent_matcher=_agent_deps.agent_matcher,
                 capability_issue_service=agent_capability_issue_service,
-                agent_liveness_checker=agent_liveness_checker,
-                agent_group_store=agent_room_store,
+                agent_group_store=agent_runtime_store,
                 file_storage=file_storage,
                 room_ownership_reader=_room_deps.room_registry,
                 hitl_manager=_execution_deps.hitl_manager,
                 inspection_center=route_inspection_center,
-                room_center=route_room_center,
+                chat_rooms=chat_service,
                 room_store=route_room_reader,
                 agent_selection_service=agent_selection_service,
                 execution_engine=_execution_deps.execution_engine,
@@ -2294,13 +1371,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             ),
         )
 
-        # ── Orchestrator runtime composition (dark launch, 0% traffic) ──
+        # ── Orchestrator runtime composition ──
         #
-        # The composition is constructed eagerly so a misconfigured model
-        # route, prompt asset, or profile parameter is detected during startup
-        # even though nothing routes into it yet. Adapter-level failures
-        # degrade the dark launch; programming errors still fail startup.
-        from common.dto import ProcessingStatusEvent, RunEventNotification
+        # The canonical orchestrator is the only execution path. It is built
+        # eagerly so a misconfigured model route, prompt asset, or profile
+        # parameter fails startup instead of the first request.
+        from common.dto import RunEventNotification
         from execution.orchestrator.projection import public_terminal_status
         from execution.orchestrator.public_projection import (
             PublicProjectionTranslator,
@@ -2313,12 +1389,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             secret_values=canonical_public_secrets
         )
         canonical_projection_translator = PublicProjectionTranslator(
-            lifecycle_family="canonical",
             summary_registry=canonical_summary_registry,
             secret_values=canonical_public_secrets,
-        )
-        legacy_projection_translator = PublicProjectionTranslator(
-            lifecycle_family="legacy"
         )
         # Causal inspection links for canonical events. Durability and ordering
         # do not rely on this process-local cache; deterministic event IDs and
@@ -2332,7 +1404,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 return
             emitted = await _delivery_deps.event_publisher.emit_checked(
                 canonical_processing_status_adapter(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     user_message_id=run.request.user_message_id,
                     client_request_id=run.client_request_id,
                     status=status,
@@ -2341,83 +1413,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if emitted not in {
                 DeliveryEmitStatus.DELIVERED,
                 DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
             }:
                 raise RuntimeError(
-                    "canonical stale-browser processing adapter was not persisted"
-                )
-
-        async def _emit_legacy_orchestrator_terminal(run, status: str) -> None:
-            """Publish the terminal frames the legacy conversation surface owns.
-
-            Legacy Runs settle through ``MongoTerminalRunStatusProjector`` and
-            have no canonical room-event settlement. Without an explicit
-            terminal emission the composer stays in the cancelable processing
-            state forever even though the durable Run is complete.
-            """
-            if _delivery_deps is None:
-                return
-            user_message_id = run.request.user_message_id or run.run_id
-            client_request_id = run.client_request_id
-            run_event_type = {
-                "completed": "run_completed",
-                "canceled": "run_canceled",
-                "failed": "run_failed",
-            }[status]
-            (
-                run_status,
-                run_event_id,
-            ) = await _delivery_deps.event_publisher.emit_checked_identified(
-                RunEventNotification(
-                    room_id=run.room_id,
-                    event_id=f"public:{run.run_id}:terminal:legacy",
-                    delivery_id=f"orchestrator:{run.run_id}:terminal:run_event",
-                    run_id=user_message_id,
-                    seq=run.state_version,
-                    run_event_type=run_event_type,
-                    payload={
-                        "canonical_status": status,
-                        "frontend_message_id": user_message_id,
-                        "lifecycle_message_id": user_message_id,
-                        "client_request_id": client_request_id,
-                        "details": None,
-                        "pending": False,
-                    },
-                    correlation_id=client_request_id,
-                )
-            )
-            if run_event_id is None and run_status not in {
-                DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
-            }:
-                raise RuntimeError(
-                    "legacy terminal run event was not durably persisted"
-                )
-            emitted = await _delivery_deps.event_publisher.emit_checked(
-                ProcessingStatusEvent(
-                    room_id=run.room_id,
-                    message_id=user_message_id,
-                    status=status,
-                    related_message_id=user_message_id,
-                    client_request_id=client_request_id,
-                    delivery_id=(
-                        f"orchestrator:{run.run_id}:terminal:processing_status"
-                    ),
-                )
-            )
-            if emitted not in {
-                DeliveryEmitStatus.DELIVERED,
-                DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
-            }:
-                logger.warning(
-                    "legacy terminal processing_status was not persisted",
-                    extra={
-                        "run_id": run.run_id,
-                        "room_id": run.room_id,
-                        "status": status,
-                        "emitted": emitted.value,
-                    },
+                    "canonical processing_status event was not persisted"
                 )
 
         async def publish_orchestrator_projection_status(run, intent) -> None:
@@ -2431,15 +1429,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             status = public_terminal_status(str(run.status or ""))
             if status is None or _delivery_deps is None:
                 return
-            if run.lifecycle_family == "legacy":
-                await _emit_legacy_orchestrator_terminal(run, status)
-                return
-            if run.lifecycle_family != "canonical":
-                return
             payload = canonical_settlement_payload(run)
             settlement_parent_id = _canonical_parent_ids.get(run.run_id)
             if settlement_parent_id is None:
-                records = await _read_canonical_run_events(run.room_id, run.run_id)
+                records = await _read_canonical_run_events(
+                    run.conversation_id, run.run_id
+                )
                 final_message_id = run.proposed_final_message_id
                 parent = next(
                     (
@@ -2461,7 +1456,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 settlement_event_id,
             ) = await _delivery_deps.event_publisher.emit_checked_identified(
                 RunEventNotification(
-                    room_id=run.room_id,
+                    conversation_id=run.conversation_id,
                     event_id=f"public:{run.run_id}:run_settled",
                     delivery_id=f"orchestrator:{run.run_id}:run_settled",
                     run_id=run.run_id,
@@ -2474,16 +1469,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             if settlement_event_id is None and settlement_status not in {
                 DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
             }:
                 raise RuntimeError("canonical run_settled was not durably persisted")
             await _emit_canonical_processing_adapter(
                 run,
                 "failed" if run.status == "budget_exhausted" else run.status,
             )
-
-        # Canonical lifecycle events are re-serialized per Run before durable
-        # room-event publication. No compatibility work-log stream is emitted.
 
         # Lifecycle events are dispatched concurrently, so a per-run lock
         # re-serializes canonical room-event publication into durable order.
@@ -2499,7 +1490,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # Tool lifecycle remains solely in the canonical Run/event fold;
             # no task-backed RoomAgentMessage status projection is created.
             runtime = getattr(app.state, "orchestrator_runtime", None)
-            call_id = (event.payload or {}).get("call_id")
 
             if _delivery_deps is None:
                 return
@@ -2512,58 +1502,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise RuntimeError(
                     f"canonical lifecycle event has no durable Run for run_id={event.run_id}"
                 )
-            if (
-                event.lifecycle_family != "canonical"
-                or current_run.lifecycle_family != event.lifecycle_family
-            ):
-                raise RuntimeError(
-                    f"canonical lifecycle family mismatch: event={event.lifecycle_family}, "
-                    f"run={current_run.lifecycle_family}"
-                )
-            is_canonical = True
-            mapped = None
-            if mapped is not None:
-                message, turn_phase = mapped
-                await _delivery_deps.event_publisher.emit(
-                    ProcessingStatusEvent(
-                        room_id=event.room_id or "",
-                        message_id=(event.user_message_id or event.causation_id or ""),
-                        status="processing",
-                        client_request_id=event.client_request_id,
-                        details={"message": message, "turn_phase": turn_phase},
-                        delivery_id=(
-                            f"orchestrator:{event.run_id}:"
-                            f"{event.event_type}:{event.sequence}:"
-                            f"{call_id or 'run'}"
-                        ),
-                    )
-                )
-
             # Decision-visibility projection (Room Stream Snapshot plan §6,
             # Phase 1): public run_event payload types for LLM calls, retries,
             # orchestrator decisions, and tool calls. Payloads are produced
             # exclusively by the PublicProjectionTranslator (redaction).
-            if event.room_id and (is_canonical or run_event_sse_enabled()):
-                if is_canonical and current_run.tool_catalog is not None:
+            if event.conversation_id:
+                if current_run.tool_catalog is not None:
                     canonical_summary_registry.register_catalog(
                         current_run.tool_catalog
                     )
-                translator = (
-                    canonical_projection_translator
-                    if is_canonical
-                    else legacy_projection_translator
-                )
-                public_event = translator.translate(
-                    event,
-                    catalog=(
-                        current_run.tool_catalog
-                        if is_canonical and current_run is not None
-                        else None
-                    ),
+                public_event = canonical_projection_translator.translate(
+                    event, catalog=current_run.tool_catalog
                 )
                 if public_event is not None:
                     notification = RunEventNotification(
-                        room_id=event.room_id,
+                        conversation_id=event.conversation_id,
                         event_id=public_event.event_id,
                         run_id=public_event.run_id,
                         seq=public_event.seq,
@@ -2571,50 +1524,42 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         payload=public_event.payload,
                         correlation_id=public_event.client_request_id,
                     )
-                    if is_canonical:
-                        parent_event_id = _canonical_parent_ids.get(public_event.run_id)
-                        if parent_event_id is None:
-                            records = await _read_canonical_run_events(
-                                public_event.room_id, public_event.run_id
-                            )
-                            parent_event_id = _latest_canonical_parent_id(records)
-                            if parent_event_id is not None:
-                                _canonical_parent_ids[public_event.run_id] = (
-                                    parent_event_id
-                                )
-                        (
-                            status,
-                            room_event_id,
-                        ) = await (
-                            _delivery_deps.event_publisher.emit_checked_identified(
-                                notification,
-                                parent_event_id=(
-                                    None
-                                    if public_event.kind == "run_started"
-                                    else parent_event_id
-                                ),
-                            )
+                    parent_event_id = _canonical_parent_ids.get(public_event.run_id)
+                    if parent_event_id is None:
+                        records = await _read_canonical_run_events(
+                            public_event.conversation_id, public_event.run_id
                         )
-                        if room_event_id is None and status not in {
-                            DeliveryEmitStatus.ALREADY_DELIVERED,
-                            DeliveryEmitStatus.DEDUPLICATED,
-                        }:
-                            raise RuntimeError(
-                                f"canonical lifecycle event was not durably persisted: status={status}, "
-                                f"event={public_event.kind}, parent={parent_event_id}"
-                            )
-                        if room_event_id is not None:
-                            _canonical_parent_ids[public_event.run_id] = room_event_id
-                        if (
-                            public_event.kind == "run_started"
-                            and current_run is not None
-                            and status == DeliveryEmitStatus.DELIVERED
-                        ):
-                            await _emit_canonical_processing_adapter(
-                                current_run, "processing"
-                            )
-                    else:
-                        await _delivery_deps.event_publisher.emit(notification)
+                        parent_event_id = _latest_canonical_parent_id(records)
+                        if parent_event_id is not None:
+                            _canonical_parent_ids[public_event.run_id] = parent_event_id
+                    (
+                        status,
+                        room_event_id,
+                    ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                        notification,
+                        parent_event_id=(
+                            None
+                            if public_event.kind == "run_started"
+                            else parent_event_id
+                        ),
+                    )
+                    if room_event_id is None and status not in {
+                        DeliveryEmitStatus.ALREADY_DELIVERED,
+                    }:
+                        raise RuntimeError(
+                            f"canonical lifecycle event was not durably persisted: status={status}, "
+                            f"event={public_event.kind}, parent={parent_event_id}"
+                        )
+                    if room_event_id is not None:
+                        _canonical_parent_ids[public_event.run_id] = room_event_id
+                    if (
+                        public_event.kind == "run_started"
+                        and current_run is not None
+                        and status == DeliveryEmitStatus.DELIVERED
+                    ):
+                        await _emit_canonical_processing_adapter(
+                            current_run, "processing"
+                        )
 
             if event.event_type == "run_final_answer_ready" and runtime is not None:
                 # Deliver the final answer immediately instead of waiting for
@@ -2647,27 +1592,27 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 final: Any,
                 content: str,
             ) -> bool:
-                final_parent_id = None
-                if run.lifecycle_family == "canonical":
-                    # The final checkpoint is causally owned by its exact
-                    # message_end, never by a process-local latest-event cache
-                    # that may already point at turn_end. Readback also keeps
-                    # this parent stable after restart.
-                    records = await _read_canonical_run_events(run.room_id, run.run_id)
-                    final_parent_id = _canonical_final_message_end_parent_id(
-                        records, final.message_id
+                # The final checkpoint is causally owned by its exact
+                # message_end, never by a process-local latest-event cache
+                # that may already point at turn_end. Readback also keeps
+                # this parent stable after restart.
+                records = await _read_canonical_run_events(
+                    run.conversation_id, run.run_id
+                )
+                final_parent_id = _canonical_final_message_end_parent_id(
+                    records, final.message_id
+                )
+                if final_parent_id is None:
+                    raise RuntimeError(
+                        f"canonical final message_end parent is not durable for message_id={final.message_id}, "
+                        f"records_count={len(records)}"
                     )
-                    if final_parent_id is None:
-                        raise RuntimeError(
-                            f"canonical final message_end parent is not durable for message_id={final.message_id}, "
-                            f"records_count={len(records)}"
-                        )
                 (
                     status,
                     room_event_id,
                 ) = await _delivery_deps.event_publisher.emit_checked_identified(
                     AgentMessageFinal(
-                        room_id=run.room_id,
+                        conversation_id=run.conversation_id,
                         message_id=final.message_id,
                         agent_id="system:hybro",
                         content={
@@ -2681,28 +1626,27 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                     parent_event_id=final_parent_id,
                 )
-                if run.lifecycle_family == "canonical":
-                    if room_event_id is None:
-                        records = await _read_canonical_run_events(
-                            run.room_id, run.run_id
+                if room_event_id is None:
+                    records = await _read_canonical_run_events(
+                        run.conversation_id, run.run_id
+                    )
+                    persisted = next(
+                        (
+                            record
+                            for record in reversed(records)
+                            if record.get("kind") == "agent_response"
+                            and isinstance(record.get("payload_public"), dict)
+                            and record["payload_public"].get("message_id")
+                            == final.message_id
+                        ),
+                        None,
+                    )
+                    if persisted is not None:
+                        room_event_id = (
+                            str(persisted.get("room_event_id") or "") or None
                         )
-                        persisted = next(
-                            (
-                                record
-                                for record in reversed(records)
-                                if record.get("kind") == "agent_response"
-                                and isinstance(record.get("payload_public"), dict)
-                                and record["payload_public"].get("message_id")
-                                == final.message_id
-                            ),
-                            None,
-                        )
-                        if persisted is not None:
-                            room_event_id = (
-                                str(persisted.get("room_event_id") or "") or None
-                            )
-                    if room_event_id is not None:
-                        _canonical_parent_ids[run.run_id] = room_event_id
+                if room_event_id is not None:
+                    _canonical_parent_ids[run.run_id] = room_event_id
                 # Persisted room-event identity is the durable delivery
                 # boundary. A transient fanout miss self-heals through the
                 # heartbeat watermark/snapshot path and must not duplicate the
@@ -2712,11 +1656,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 return status in {
                     DeliveryEmitStatus.DELIVERED,
                     DeliveryEmitStatus.ALREADY_DELIVERED,
-                    DeliveryEmitStatus.DEDUPLICATED,
                 }
 
             async def _read_canonical_run_events(
-                room_id: str, run_id: str
+                conversation_id: str, run_id: str
             ) -> list[dict[str, object]]:
                 if _room_event_store is None:
                     return []
@@ -2724,7 +1667,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 after = -1
                 while True:
                     page = await _room_event_store.read_range(
-                        room_id,
+                        conversation_id,
                         after=after,
                         limit=500,
                         include_skipped=False,
@@ -2752,6 +1695,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_ownership_reader=_room_deps.room_registry,
                 epoch_store=require_room_epoch_store(),
                 room_files=file_storage,
+                message_writer=message_store,
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
                 user_message_text_reader=_orchestrator_user_message_text,
@@ -2772,6 +1716,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise OrchestratorCompositionError(
                     "Orchestrator runtime composition incomplete: " + ", ".join(missing)
                 )
+            # Served by api_gateway.routes.a2a_push_routes.
+            app.state.a2a_push_receiver = app.state.orchestrator_runtime.push_ingress
             from conversation.agent_call_detail import CanonicalAgentCallDetailService
 
             app.state.canonical_agent_call_detail_reader = (
@@ -2779,6 +1725,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     app.state.orchestrator_runtime.run_store,
                     artifact_metadata_reader=file_storage,
                 )
+            )
+            # Quotes of canonical Agent Cards validate against the call record.
+            _room_facade.bind_agent_call_reader(
+                app.state.canonical_agent_call_detail_reader
             )
             logger.info("Canonical orchestrator runtime composition ready")
         except OrchestratorCompositionError as exc:
@@ -2795,19 +1745,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 RoomMessageEnvelopeResolver,
             )
 
-            async def _list_room_agent_ids(room_id: str) -> list[str]:
-                room = await agent_room_store.get_room_by_room_id(room_id)
+            async def _list_room_agent_ids(conversation_id: str) -> list[str]:
+                room = await room_store.get_room_by_room_id(conversation_id)
                 return list((room.room_agent_set or {}).keys()) if room else []
 
             async def _list_group_agent_ids(group_id: str) -> list[str]:
-                group = await agent_room_store.get_agent_group_by_id(group_id)
+                group = await agent_runtime_store.get_agent_group_by_id(group_id)
                 return list(getattr(group, "agents", []) or [])
 
             async def _list_all_active_agent_ids(
                 user_id: str | None = None,
             ) -> list[str]:
                 # Same visibility-filtered listing the all_agents scope uses.
-                agents = await agent_room_store.get_all_active_agents(user_id)
+                agents = await agent_runtime_store.get_all_active_agents(user_id)
                 return [agent.agent_id for agent in agents or []]
 
             # PDF projection reuses the attachment projection service;
@@ -2855,7 +1805,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 runtime=_orchestrator_runtime,
                 envelope_source=envelope_source,
                 run_factory=DefaultRunFactory(),
-                webhook_token_verifier=task_store.verify_webhook_token_for_task,
                 room_memory_reader=(
                     context_memory_facade.memory_repository.get_room_memory
                 ),
@@ -2863,12 +1812,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_facade.bind_orchestrator_router(orchestrator_router)
 
             class _CanonicalActiveRunReader:
-                _TERMINAL = [
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
-                ]
+                _TERMINAL = list(TERMINAL_RUN_STATUSES)
 
                 @staticmethod
                 def _to_run_info(document: dict[str, Any]):
@@ -2883,7 +1827,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     request = document.get("request") or {}
                     return RunInfo(
                         run_id=str(document.get("run_id") or ""),
-                        room_id=str(document.get("room_id") or ""),
+                        conversation_id=str(document.get("room_id") or ""),
                         state=state,
                         trigger_message_id=request.get("user_message_id"),
                         seq=int(document.get("state_version") or 0),
@@ -2919,17 +1863,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     )
                     return await cursor.to_list(length=None)
 
-                async def get_runs_for_room(self, room_id: str):
-                    documents = await self._read([room_id])
+                async def get_runs_for_room(self, conversation_id: str):
+                    documents = await self._read([conversation_id])
                     return [self._to_run_info(document) for document in documents]
 
                 async def get_latest_runs_for_rooms(self, room_ids: list[str]):
                     documents = await self._read(room_ids)
                     latest = {}
                     for document in documents:
-                        room_id = str(document.get("room_id") or "")
-                        if room_id and room_id not in latest:
-                            latest[room_id] = self._to_run_info(document)
+                        conversation_id = str(document.get("room_id") or "")
+                        if conversation_id and conversation_id not in latest:
+                            latest[conversation_id] = self._to_run_info(document)
                     return latest
 
             execution_facade.bind_active_run_reader(_CanonicalActiveRunReader())
@@ -3015,8 +1959,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
         if _delivery_facade is not None:
             startup_steps.append(("delivery", _delivery_facade.stop))
-        if _cancellation_runtime is not None:
-            startup_steps.append(("cancellation", _cancellation_runtime.stop))
         if _mongo_dal is not None:
             startup_steps.append(("mongo", _mongo_dal.close))
         await _run_cleanup_steps(
@@ -3026,7 +1968,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.eventing_bus = None
         app.state.eventing_connected = False
         app.state.delivery_facade = None
-        app.state.cancellation_runtime = None
         app.state.mongo_dal = None
         app.state.agent_llm_proxy = None
         raise
@@ -3090,8 +2031,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             shutdown_steps.append(("eventing", _eventing_bus.stop))
         if _delivery_facade is not None:
             shutdown_steps.append(("delivery", _delivery_facade.stop))
-        if _cancellation_runtime is not None:
-            shutdown_steps.append(("cancellation", _cancellation_runtime.stop))
         shutdown_steps.append(
             ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
         )
@@ -3102,28 +2041,18 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.eventing_bus = None
         app.state.eventing_connected = False
         app.state.delivery_facade = None
-        app.state.cancellation_runtime = None
         app.state.mongo_dal = None
         app.state.agent_llm_proxy = None
         if cleanup_error is not None and body_error is None:
             raise cleanup_error
 
 
-def create_execution_repositories(*, mongo: MongoDAL):
-    from execution.repository.mongo import RunEventMongoRepository, RunMongoRepository
-
-    return {
-        "run_repository": RunMongoRepository(mongo),
-        "run_event_repository": RunEventMongoRepository(mongo),
-    }
-
-
 @dataclass(frozen=True)
 class AgentDeps:
     agent_registry: AgentRegistry
     agent_matcher: AgentMatcher
-    agent_management: AgentManagement
-    agent_registry_writer: AgentRegistryWriter
+    agent_management: AgentFacade
+    agent_registry_writer: AgentFacade
     agent_call_counter: AgentCallCounter
     agent_repository: AgentRepository
 
@@ -3162,7 +2091,7 @@ class ExecutionDeps:
 @dataclass(frozen=True)
 class RedisRuntimeDeps:
     command_client: RedisKV | None
-    streams_client: RedisStreams | None
+    streams_client: RedisStreamsImpl | None
     leader: LeaderElector | None
     room_lock: RoomDistributedLock | None
 
@@ -3221,900 +2150,30 @@ def create_mongo_dal() -> MongoDAL:
 
 
 async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
-    agent_search_index_ready = await _ensure_agent_indexes(mongo)
-    await _ensure_agent_group_indexes(mongo)
-    memory_search_index_ready = await _ensure_context_memory_indexes(mongo)
-    await _ensure_capability_issue_indexes(mongo)
-    await _ensure_run_lifecycle_indexes(mongo)
-    await _ensure_orchestration_run_indexes(mongo)
-    await _ensure_orchestrator_indexes(mongo)
-    await _ensure_room_quote_indexes(mongo)
-    await _ensure_room_history_indexes(mongo)
-    await _ensure_user_message_indexes(mongo)
-    await _ensure_room_timeline_indexes(mongo)
-    await _ensure_task_tracking_indexes(mongo)
-    await _ensure_cancellation_indexes(mongo)
-    await _ensure_room_file_indexes(mongo)
+    """Ask each collection owner to create its indexes, in dependency order."""
+    from agent.repository import AgentRuntimeStore
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes,
+    )
+    from room_files import ensure_room_file_indexes
+
+    agent_repository = AgentMongoRepository(mongo)
+    agent_search_index_ready = await agent_repository.ensure_indexes()
+    await AgentRuntimeStore(
+        agent_groups=mongo.collection("agent_groups"),
+        agent_repository=agent_repository,
+    ).ensure_indexes()
+    await ContentStorageMongoRepository(mongo=mongo).ensure_indexes()
+    await MemoryMongoRepository(mongo=mongo).ensure_indexes()
+    await create_agent_capability_issue_repository(mongo).ensure_indexes()
+    await ensure_orchestrator_indexes(mongo)
+    await RoomQuoteMongoRepository(mongo).ensure_indexes()
+    await RoomMongoRepository(mongo).ensure_indexes()
+    await MessageMongoRepository(mongo).ensure_indexes()
+    await ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
-        "memory_search_index_ready": memory_search_index_ready,
     }
-
-
-async def _ensure_agent_indexes(mongo: MongoDAL) -> bool:
-    agents = mongo.collection("agents")
-    existing = await agents.index_information()
-    index = existing.get("unique_normalized_url")
-    needs_recreate = index is None or index.get("partialFilterExpression") != {
-        "normalized_url": {"$type": "string"}
-    }
-    if needs_recreate:
-        try:
-            await agents.drop_index("unique_normalized_url")
-        except Exception:
-            pass
-        await agents.create_index(
-            [("normalized_url", 1)],
-            unique=True,
-            name="unique_normalized_url",
-            partialFilterExpression={"normalized_url": {"$type": "string"}},
-        )
-    return await _ensure_text_index(
-        agents,
-        name="agent_lexical_text",
-        weights={
-            "agent_card.name": 10,
-            "agent_card.skills.name": 8,
-            "agent_card.skills.tags": 6,
-            "agent_card.description": 3,
-            "agent_card.skills.description": 3,
-        },
-    )
-
-
-async def _create_index(
-    mongo: MongoDAL,
-    collection_name: str,
-    keys,
-    *,
-    name: str,
-    unique: bool = False,
-    critical: bool = False,
-    **kwargs,
-) -> bool:
-    collection = mongo.collection(collection_name)
-    try:
-        await collection.create_index(keys, unique=unique, name=name, **kwargs)
-        return True
-    except Exception as exc:
-        if critical:
-            logger.error(
-                "Critical index creation failed for %s.%s",
-                collection_name,
-                name,
-                exc_info=True,
-            )
-            raise RuntimeError(
-                f"Critical index creation failed for {collection_name}.{name}"
-            ) from exc
-        logger.warning(
-            "Index creation failed for %s.%s",
-            collection_name,
-            name,
-            exc_info=True,
-        )
-        return False
-
-
-async def _ensure_agent_group_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "agent_groups",
-        [("group_id", 1)],
-        name="agent_group_id_unique",
-        unique=True,
-        critical=True,
-    )
-
-
-async def _ensure_context_memory_indexes(mongo: MongoDAL) -> bool:
-    await _create_index(
-        mongo,
-        "conversation_content",
-        [("room_id", 1), ("turn_id", 1)],
-        name="room_turn_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "conversation_content",
-        [("document_id", 1)],
-        name="document_id_unique",
-        unique=True,
-        partialFilterExpression={"document_id": {"$exists": True}},
-    )
-    await _create_index(
-        mongo,
-        "conversation_content",
-        [("room_id", 1), ("stored_at", -1)],
-        name="room_stored_at",
-    )
-    memory_search_ready = await _ensure_text_index(
-        mongo.collection("conversation_content"),
-        name="turn_notes_text",
-        weights={
-            "content": 1,
-            "turn_notes.keywords": 1,
-            "turn_notes.entities": 1,
-            "turn_notes.tags": 1,
-            "turn_notes.one_liner": 1,
-        },
-    )
-    await _create_index(
-        mongo,
-        "conversation_content",
-        [("expires_at", 1)],
-        name="content_ttl",
-        expireAfterSeconds=0,
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_memories",
-        [("room_id", 1)],
-        name="room_id_unique",
-        unique=True,
-        critical=True,
-    )
-    return memory_search_ready
-
-
-async def _ensure_text_index(
-    collection: MongoCollection,
-    *,
-    name: str,
-    weights: dict[str, int],
-) -> bool:
-    log = get_logger(__name__)
-    try:
-        existing = await collection.index_information()
-        desired_weights = dict(sorted(weights.items()))
-        matching = existing.get(name)
-        matching_keys = tuple(
-            (key, direction) for key, direction in ((matching or {}).get("key") or [])
-        )
-        valid_text_keys = {
-            (("_fts", "text"), ("_ftsx", 1)),
-            tuple((field, "text") for field in weights),
-        }
-        if (
-            matching
-            and dict(sorted((matching.get("weights") or {}).items())) == desired_weights
-            and matching_keys in valid_text_keys
-        ):
-            return True
-        for index_name, spec in existing.items():
-            keys = spec.get("key") or []
-            if spec.get("weights") or any(key == "_fts" for key, _ in keys):
-                await collection.drop_index(index_name)
-        await collection.create_index(
-            [(field, "text") for field in weights],
-            name=name,
-            unique=False,
-            weights=weights,
-        )
-        return True
-    except Exception:
-        log.warning("Search index creation failed for %s", name, exc_info=True)
-        return False
-
-
-async def _ensure_capability_issue_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "agent_capability_issues",
-        [("agent_id", 1), ("status", 1)],
-        name="agent_id_status",
-    )
-    await _create_index(
-        mongo,
-        "agent_capability_issues",
-        [("status", 1), ("agent_id", 1)],
-        name="status_agent_id",
-    )
-    await _create_index(
-        mongo,
-        "agent_capability_issues",
-        [("created_at", 1)],
-        name="created_at",
-    )
-    await _create_index(
-        mongo,
-        "agent_capability_issues",
-        [("issue_id", 1)],
-        name="issue_id_unique",
-        unique=True,
-    )
-
-
-async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "runs",
-        [("run_id", 1)],
-        name="run_id_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "runs",
-        [("room_id", 1), ("state", 1), ("updated_at", -1)],
-        name="room_state_updated_at",
-    )
-    await _create_index(
-        mongo,
-        "runs",
-        [("room_id", 1), ("client_request_id", 1), ("agent_id", 1)],
-        name="room_client_agent_idempotency",
-        unique=True,
-        partialFilterExpression={
-            "client_request_id": {"$type": "string"},
-            "agent_id": {"$type": "string"},
-        },
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("event_id", 1)],
-        name="event_id_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("run_id", 1), ("seq", 1)],
-        name="run_seq_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("run_id", 1), ("type", 1), ("causation_id", 1)],
-        name="run_type_causation_unique",
-        unique=True,
-        partialFilterExpression={"causation_id": {"$type": "string"}},
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("room_id", 1), ("ts", -1)],
-        name="room_ts",
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [
-            ("terminal_projection.pending", 1),
-            ("terminal_projection.next_attempt_at", 1),
-            ("ts", 1),
-        ],
-        name="pending_terminal_projection",
-        partialFilterExpression={"terminal_projection.pending": True},
-    )
-
-
-async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("run_id", 1)],
-        name="orchestration_run_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("user_message_id", 1), ("created_at", -1)],
-        name="orchestration_user_message_created_at",
-    )
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("status", 1), ("updated_at", 1)],
-        name="orchestration_status_updated_at",
-    )
-    await _create_index(
-        mongo,
-        "orchestration_run_events",
-        [("event_id", 1)],
-        name="orchestration_event_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "orchestration_run_events",
-        [("run_id", 1), ("created_at", 1)],
-        name="orchestration_run_created_at",
-    )
-
-
-async def _ensure_orchestrator_indexes(mongo: MongoDAL) -> None:
-    from execution.orchestrator.a2a_runtime.persistence import (
-        A2A_RUNTIME_COLLECTIONS,
-    )
-    from execution.orchestrator.persistence import (
-        OBSOLETE_ORCHESTRATOR_RUN_INDEXES,
-        ORCHESTRATOR_COLLECTIONS,
-        ORCHESTRATOR_RUNS_COLLECTION,
-    )
-
-    runs = mongo.collection(ORCHESTRATOR_RUNS_COLLECTION)
-    existing_run_indexes = await runs.index_information()
-    for obsolete_name in OBSOLETE_ORCHESTRATOR_RUN_INDEXES:
-        if obsolete_name not in existing_run_indexes:
-            continue
-        try:
-            await runs.drop_index(obsolete_name)
-        except Exception as exc:
-            logger.error(
-                "Critical obsolete index removal failed for %s.%s",
-                ORCHESTRATOR_RUNS_COLLECTION,
-                obsolete_name,
-                exc_info=True,
-            )
-            raise RuntimeError(
-                "Critical obsolete orchestrator Run index removal failed"
-            ) from exc
-
-    for collection_definition in (*ORCHESTRATOR_COLLECTIONS, *A2A_RUNTIME_COLLECTIONS):
-        for index in collection_definition.indexes:
-            kwargs: dict[str, Any] = {}
-            if index.partial_filter is not None:
-                kwargs["partialFilterExpression"] = dict(index.partial_filter)
-            await _create_index(
-                mongo,
-                collection_definition.name,
-                list(index.keys),
-                name=index.name,
-                unique=index.unique,
-                critical=index.unique,
-                **kwargs,
-            )
-
-
-async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "room_quotes",
-        [("quote_id", 1)],
-        name="quote_id_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "room_quotes",
-        [("room_id", 1)],
-        name="room_id_lookup",
-    )
-
-
-async def _ensure_room_history_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "rooms",
-        [
-            ("room_owner_id", 1),
-            ("lifecycle_state", 1),
-            ("is_pinned", -1),
-            ("pin_order", 1),
-            ("last_activity_at", -1),
-        ],
-        name="owner_history_order",
-    )
-
-
-async def _ensure_room_timeline_indexes(mongo: MongoDAL) -> None:
-    """Require validated identities and a completed historical timeline audit."""
-
-    specifications = (
-        ("room_user_messages", "room_user_timeline_desc"),
-        ("room_agent_messages", "room_agent_timeline_desc"),
-    )
-    string_room_id = {"$eq": [{"$type": "$room_id"}, "string"]}
-    string_message_id = {"$eq": [{"$type": "$message_id"}, "string"]}
-    invalid_identity = {
-        "$or": [
-            {"$not": [string_room_id]},
-            {
-                "$eq": [
-                    {"$trim": {"input": {"$cond": [string_room_id, "$room_id", ""]}}},
-                    "",
-                ]
-            },
-            {"$not": [string_message_id]},
-            {
-                "$eq": [
-                    {
-                        "$trim": {
-                            "input": {"$cond": [string_message_id, "$message_id", ""]}
-                        }
-                    },
-                    "",
-                ]
-            },
-        ]
-    }
-    invalid_timeline_key = {
-        "$not": [{"$in": [{"$type": "$timeline_sort_us"}, ["int", "long"]]}]
-    }
-    identity_failures: list[str] = []
-    timeline_failures: list[str] = []
-    any_messages = False
-    for collection_name, _index_name in specifications:
-        collection = mongo.collection(collection_name)
-        identity_samples = await collection.aggregate(
-            [
-                {"$match": {"$expr": invalid_identity}},
-                {"$project": {"_id": 0, "message_id": 1}},
-                {"$limit": 5},
-            ]
-        )
-        if identity_samples:
-            sample_ids = [str(sample.get("message_id")) for sample in identity_samples]
-            identity_failures.append(
-                f"{collection_name} invalid message_ids={sample_ids}"
-            )
-        timeline_samples = await collection.aggregate(
-            [
-                {"$match": {"$expr": invalid_timeline_key}},
-                {"$project": {"_id": 0, "message_id": 1}},
-                {"$limit": 5},
-            ]
-        )
-        if timeline_samples:
-            sample_ids = [str(sample.get("message_id")) for sample in timeline_samples]
-            timeline_failures.append(
-                f"{collection_name} invalid message_ids={sample_ids}"
-            )
-        any_messages = (
-            bool(await collection.find_one({}, projection={"_id": 1})) or any_messages
-        )
-
-    if identity_failures:
-        details = "; ".join(identity_failures)
-        logger.error("Room timeline identity readiness failed: %s", details)
-        raise RuntimeError(
-            "Room timeline indexes require non-empty string room_id and message_id. "
-            "The timeline migration cannot repair identity fields; manually repair "
-            f"the key-only samples before restart: {details}"
-        )
-    migration_command = (
-        "cd backend && uv run python -m scripts.migrate_room_timeline_sort_keys --apply"
-    )
-    if timeline_failures:
-        details = "; ".join(timeline_failures)
-        logger.error("Room timeline key readiness failed: %s", details)
-        raise RuntimeError(
-            "Room timeline indexes require integer timeline_sort_us on every "
-            f"message. Run `{migration_command}`. Key-only samples: {details}"
-        )
-
-    bootstrap_empty_marker = not any_messages
-    if any_messages:
-        marker = await mongo.collection(TIMELINE_MIGRATION_MARKER_COLLECTION).find_one(
-            {"_id": TIMELINE_MIGRATION_MARKER_ID}
-        )
-        evidence = marker.get("collections") if isinstance(marker, dict) else None
-        valid_evidence = isinstance(evidence, dict) and all(
-            isinstance(item := evidence.get(collection_name), dict)
-            and isinstance(item.get("scanned"), int)
-            and not isinstance(item.get("scanned"), bool)
-            and isinstance(item.get("correct"), int)
-            and not isinstance(item.get("correct"), bool)
-            and item["scanned"] == item["correct"]
-            for collection_name, _index_name in specifications
-        )
-        if not (
-            isinstance(marker, dict)
-            and marker.get("_id") == TIMELINE_MIGRATION_MARKER_ID
-            and isinstance(marker.get("version"), int)
-            and not isinstance(marker.get("version"), bool)
-            and marker.get("version") == TIMELINE_MIGRATION_VERSION
-            and marker.get("status") == "complete"
-            and valid_evidence
-        ):
-            raise RuntimeError(
-                "Room timeline historical consistency has not passed the final "
-                f"migration audit. Run `{migration_command}` while writes are "
-                "quiesced; startup will not infer consistency from integer type alone."
-            )
-
-    for collection_name, index_name in specifications:
-        await _create_index(
-            mongo,
-            collection_name,
-            [
-                ("room_id", 1),
-                ("timeline_sort_us", -1),
-                ("message_id", -1),
-            ],
-            name=index_name,
-            critical=True,
-        )
-
-    if bootstrap_empty_marker:
-        await mongo.collection(TIMELINE_MIGRATION_MARKER_COLLECTION).update_one(
-            {"_id": TIMELINE_MIGRATION_MARKER_ID},
-            {
-                "$set": {
-                    "marker_id": TIMELINE_MIGRATION_MARKER_ID,
-                    "version": TIMELINE_MIGRATION_VERSION,
-                    "status": "complete",
-                    "completed_at": utcnow(),
-                    "collections": {
-                        collection_name: {"scanned": 0, "correct": 0}
-                        for collection_name, _index_name in specifications
-                    },
-                }
-            },
-            upsert=True,
-        )
-
-
-async def _ensure_user_message_indexes(mongo: MongoDAL) -> None:
-    collection = mongo.collection("room_user_messages")
-    issues = await _user_message_index_readiness_issues(collection)
-    if issues:
-        details = "; ".join(issues)
-        logger.error(
-            "room_user_messages unique-index readiness failed: %s",
-            details,
-        )
-        raise RuntimeError(
-            "room_user_messages cannot enable correctness-critical unique indexes: "
-            f"{details}. Repair the historical rows explicitly; startup did not "
-            "delete or merge any messages."
-        )
-
-    await _create_index(
-        mongo,
-        "room_user_messages",
-        [("message_id", 1)],
-        name="room_user_message_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "room_user_messages",
-        [("room_id", 1), ("client_request_id", 1)],
-        name="room_user_client_request_id_unique",
-        unique=True,
-        critical=True,
-        partialFilterExpression={
-            "room_id": {"$type": "string"},
-            "client_request_id": {"$type": "string"},
-        },
-    )
-
-
-async def _user_message_index_readiness_issues(
-    collection: MongoCollection,
-    *,
-    sample_limit: int = 5,
-) -> list[str]:
-    """Audit historical rows server-side before enabling unique constraints."""
-
-    string_message_id = {"$eq": [{"$type": "$message_id"}, "string"]}
-    trimmed_message_id = {
-        "$trim": {"input": {"$cond": [string_message_id, "$message_id", ""]}}
-    }
-    string_room_id = {"$eq": [{"$type": "$room_id"}, "string"]}
-    trimmed_room_id = {"$trim": {"input": {"$cond": [string_room_id, "$room_id", ""]}}}
-    string_client_request_id = {"$eq": [{"$type": "$client_request_id"}, "string"]}
-    normalized_client_request_input = {
-        "$cond": [
-            string_client_request_id,
-            "$client_request_id",
-            "",
-        ]
-    }
-    trimmed_client_request_id = {"$trim": {"input": normalized_client_request_input}}
-    client_request_id_length = {"$strLenCP": normalized_client_request_input}
-
-    checks: list[tuple[str, list[dict[str, Any]]]] = [
-        (
-            "duplicate non-empty message_id",
-            [
-                {
-                    "$match": {
-                        "$expr": {
-                            "$and": [
-                                string_message_id,
-                                {"$ne": [trimmed_message_id, ""]},
-                            ]
-                        }
-                    }
-                },
-                {"$group": {"_id": "$message_id", "occurrences": {"$sum": 1}}},
-                {"$match": {"occurrences": {"$gt": 1}}},
-                {
-                    "$project": {
-                        "_id": 0,
-                        "message_id": "$_id",
-                        "occurrences": 1,
-                    }
-                },
-                {"$limit": sample_limit},
-            ],
-        ),
-        (
-            "missing, null, non-string, or empty message_id",
-            [
-                {
-                    "$match": {
-                        "$expr": {
-                            "$or": [
-                                {"$ne": [{"$type": "$message_id"}, "string"]},
-                                {"$eq": [trimmed_message_id, ""]},
-                            ]
-                        }
-                    }
-                },
-                {"$project": {"_id": 1, "message_id": 1}},
-                {"$limit": sample_limit},
-            ],
-        ),
-        (
-            "duplicate (room_id, normalized client_request_id)",
-            [
-                {
-                    "$match": {
-                        "$expr": {
-                            "$and": [
-                                string_room_id,
-                                string_client_request_id,
-                                {"$ne": [trimmed_room_id, ""]},
-                                {"$ne": [trimmed_client_request_id, ""]},
-                            ]
-                        }
-                    }
-                },
-                {
-                    "$project": {
-                        "room_id": 1,
-                        "client_request_id": trimmed_client_request_id,
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": {
-                            "room_id": "$room_id",
-                            "client_request_id": "$client_request_id",
-                        },
-                        "occurrences": {"$sum": 1},
-                    }
-                },
-                {"$match": {"occurrences": {"$gt": 1}}},
-                {
-                    "$project": {
-                        "_id": 0,
-                        "room_id": "$_id.room_id",
-                        "client_request_id": "$_id.client_request_id",
-                        "occurrences": 1,
-                    }
-                },
-                {"$limit": sample_limit},
-            ],
-        ),
-        (
-            "invalid or non-normalized client_request_id",
-            [
-                {
-                    "$match": {
-                        "$expr": {
-                            "$or": [
-                                {
-                                    "$and": [
-                                        string_client_request_id,
-                                        {
-                                            "$or": [
-                                                {
-                                                    "$eq": [
-                                                        trimmed_client_request_id,
-                                                        "",
-                                                    ]
-                                                },
-                                                {
-                                                    "$ne": [
-                                                        trimmed_client_request_id,
-                                                        "$client_request_id",
-                                                    ]
-                                                },
-                                                {
-                                                    "$gt": [
-                                                        client_request_id_length,
-                                                        MAX_CLIENT_REQUEST_ID_LENGTH,
-                                                    ]
-                                                },
-                                            ]
-                                        },
-                                    ]
-                                },
-                                {
-                                    "$not": [
-                                        {
-                                            "$in": [
-                                                {"$type": "$client_request_id"},
-                                                ["missing", "null", "string"],
-                                            ]
-                                        }
-                                    ]
-                                },
-                            ]
-                        }
-                    }
-                },
-                {
-                    "$project": {
-                        "_id": 1,
-                        "room_id": 1,
-                        "client_request_id": 1,
-                    }
-                },
-                {"$limit": sample_limit},
-            ],
-        ),
-        (
-            "missing, null, non-string, or empty room_id",
-            [
-                {
-                    "$match": {
-                        "$expr": {
-                            "$or": [
-                                {"$ne": [{"$type": "$room_id"}, "string"]},
-                                {"$eq": [trimmed_room_id, ""]},
-                            ]
-                        }
-                    }
-                },
-                {"$project": {"_id": 1, "room_id": 1, "message_id": 1}},
-                {"$limit": sample_limit},
-            ],
-        ),
-    ]
-
-    issues: list[str] = []
-    for label, pipeline in checks:
-        samples = await collection.aggregate(pipeline)
-        if samples:
-            issues.append(
-                f"{label}: found at least {len(samples)}; samples={samples!r}"
-            )
-    return issues
-
-
-async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [("message_id", 1)],
-        name="room_agent_message_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [("has_task_tracking", 1)],
-        name="has_task_tracking_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("task_updated_at", 1),
-            ("message_content.message_task.status.state", 1),
-        ],
-        name="task_updated_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("task_created_at", 1),
-            ("message_content.message_task.status.state", 1),
-        ],
-        name="task_created_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("user_id", 1),
-            ("message_content.message_task.status.state", 1),
-            ("has_task_tracking", 1),
-        ],
-        name="user_task_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
-        name="room_task_created_sparse",
-        sparse=True,
-    )
-
-
-async def _ensure_cancellation_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "cancelled_messages",
-        [("reconciliation_status", 1), ("message_id", 1)],
-        name="cancellation_reconciliation_message",
-    )
-
-
-async def _ensure_room_file_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "room_files",
-        [("file_id", 1)],
-        name="room_file_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [("room_id", 1), ("created_at", -1)],
-        name="room_file_room_created",
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [("source_message_id", 1)],
-        name="room_file_source_message",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [("origin_key", 1)],
-        name="room_file_origin_unique",
-        unique=True,
-        partialFilterExpression={"origin_key": {"$type": "string"}},
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [("status", 1), ("updated_at", 1)],
-        name="room_file_status_updated",
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [
-            ("source", 1),
-            ("status", 1),
-            ("last_referenced_at", 1),
-            ("created_at", 1),
-        ],
-        name="room_file_retention",
-    )
-    await _create_index(
-        mongo,
-        "room_files",
-        [("reference_claims.message_id", 1)],
-        name="room_file_reference_message",
-    )
 
 
 def create_agent_capability_issue_repository(mongo: MongoDAL) -> Any:
@@ -4134,11 +2193,9 @@ def create_agent_capability_issue_service(*, repository: Any) -> Any:
 def create_file_storage(
     *,
     room_files_collection: MongoCollection,
-    rooms_collection: MongoCollection,
+    room_lifecycle: RoomLifecycleStore,
     room_messages_collection: MongoCollection,
     room_agent_messages_collection: MongoCollection,
-    room_owned_collections: list[MongoCollection],
-    excluded_from_room_state_delete: Iterable[str] = (),
     file_dir: str = "",
     max_upload_bytes: int = 5 * 1024 * 1024,
     content_url_prefix: str = "/api/v1/files",
@@ -4149,11 +2206,9 @@ def create_file_storage(
     return RoomFiles(
         metadata=room_files_collection,
         content=LocalFileContentStore(root),
-        rooms=rooms_collection,
+        room_lifecycle=room_lifecycle,
         messages=room_messages_collection,
         agent_messages=room_agent_messages_collection,
-        room_owned_collections=room_owned_collections,
-        excluded_from_room_state_delete=excluded_from_room_state_delete,
         lease_writes=True,
         max_upload_bytes=max_upload_bytes,
         content_url_prefix=content_url_prefix,
@@ -4180,72 +2235,6 @@ def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
             status.strip() for status in terminal_statuses.split(",") if status.strip()
         ]
     return DeliveryConfig(**values)
-
-
-def create_cancellation_startup_policy(
-    *,
-    redis_url: str,
-    multi_worker: bool,
-) -> CancellationStartupPolicy:
-    redis_expected = bool(redis_url)
-    return CancellationStartupPolicy(
-        redis_expected=redis_expected,
-        multi_worker=multi_worker,
-        allow_degraded_change_stream=not redis_expected and not multi_worker,
-    )
-
-
-def create_cancellation_config(app_settings: Any = settings) -> CancellationConfig:
-    return CancellationConfig(
-        ttl_seconds=app_settings.cancellation_ttl_seconds,
-        cache_maxsize=app_settings.cancellation_cache_maxsize,
-        redis_channel=app_settings.redis_cancel_channel,
-        redis_key_prefix=app_settings.redis_cancel_key_prefix,
-        redis_reconnect_delay=app_settings.redis_reconnect_delay,
-        redis_reconnect_max_delay=app_settings.redis_reconnect_max_delay,
-        redis_subscription_ready_timeout_seconds=(
-            app_settings.redis_room_subscription_ready_timeout_seconds
-        ),
-        change_stream_backoff_base=app_settings.cs_backoff_base,
-        change_stream_backoff_max=app_settings.cs_backoff_max,
-        change_stream_backoff_factor=app_settings.cs_backoff_factor,
-        change_stream_jitter_fraction=app_settings.cs_jitter_fraction,
-    )
-
-
-def create_cancellation_runtime(
-    *,
-    mongo: MongoDAL,
-    redis_url: str,
-    instance_id: str,
-    startup_policy: CancellationStartupPolicy,
-    app_settings: Any = settings,
-    task_runner: TaskRunner = traced_create_task,
-) -> CancellationRuntime:
-    redis_kv = None
-    transport = None
-    config = create_cancellation_config(app_settings)
-    if redis_url:
-        from dal.redis.kv import RedisKVImpl
-        from dal.redis.pubsub import RedisPubSubImpl
-
-        redis_kv = RedisKVImpl(url=redis_url)
-        transport = RedisCancellationTransport(
-            redis_pubsub=RedisPubSubImpl(
-                url=redis_url,
-                max_connections=app_settings.redis_max_connections,
-            ),
-            config=config,
-            instance_id=instance_id,
-        )
-    return CancellationRuntime(
-        collection=create_cancellation_collection(mongo=mongo),
-        redis_kv=redis_kv,
-        transport=transport,
-        config=config,
-        task_runner=task_runner,
-        allow_degraded_change_stream=startup_policy.allow_degraded_change_stream,
-    )
 
 
 def create_delivery_redis_clients(
@@ -4320,10 +2309,6 @@ def create_eventing_deps(event_bus: InternalEventBus) -> EventingDeps:
         event_bus=event_bus,
         internal_event_publisher=event_bus,
     )
-
-
-def create_cancellation_collection(*, mongo: MongoDAL) -> MongoCollection:
-    return mongo.collection("cancelled_messages")
 
 
 def create_delivery_facade(
@@ -4474,30 +2459,14 @@ def create_room_deps(
 def create_context_memory_facade(
     *,
     mongo: MongoDAL,
-    llm_provider: LLMGateway,
     room_history_reader: RoomHistoryReader,
     memory_repository: MemoryRepository | None = None,
     content_repository: ContentStorageRepository | None = None,
-    index_registry: Any | None = None,
-    token_budget: TokenBudgetConfig | None = None,
     compaction_config: CompactionConfig | None = None,
-    search_config: MemorySearchConfig | None = None,
-    llm_config: ContextMemoryLLMConfig | None = None,
-    background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
 ) -> ContextMemoryFacade:
     memory_repository = memory_repository or MemoryMongoRepository(mongo=mongo)
     content_repository = content_repository or ContentStorageMongoRepository(
-        mongo=mongo,
-        index_registry=index_registry,
-    )
-    token_budget = token_budget or TokenBudgetConfig(
-        model_context_window=settings.context_model_window,
-        system_prompt=settings.context_system_prompt_tokens,
-        tool_schemas=settings.context_tool_schema_tokens,
-        response_reserve=settings.context_response_reserve_tokens,
-        room_context_pct=settings.context_room_pct,
-        conversation_history_pct=settings.context_history_pct,
-        current_task_pct=settings.context_task_pct,
+        mongo=mongo
     )
     compaction_config = compaction_config or CompactionConfig(
         enabled=settings.compaction_enabled,
@@ -4507,26 +2476,13 @@ def create_context_memory_facade(
         content_ttl_days=settings.compaction_content_ttl_days,
         concurrency=settings.compaction_concurrency,
     )
-    search_config = search_config or MemorySearchConfig(
-        enabled=settings.memory_search_enabled,
-        temporal_decay_enabled=settings.memory_search_temporal_decay_enabled,
-        half_life_days=settings.memory_search_half_life_days,
-        max_results=settings.memory_search_max_results,
-        max_candidates=settings.memory_search_max_candidates,
-        max_snippet_chars=settings.memory_search_max_snippet_chars,
-    )
     return ContextMemoryFacade(
         memory_repository=memory_repository,
         content_repository=content_repository,
         room_history_reader=room_history_reader,
-        llm_provider=llm_provider,
         id_factory=lambda: str(uuid4()),
         now=utcnow,
-        token_budget=token_budget,
         compaction_config=compaction_config,
-        search_config=search_config,
-        llm_config=llm_config,
-        background_task_runner=background_task_runner,
     )
 
 
@@ -4543,19 +2499,3 @@ def register_context_memory_event_handlers(
         handler.handle_message_committed,
     )
     return handler
-
-
-def create_runtime_repository_store(
-    *,
-    mongo: MongoDAL,
-    room_deps: RoomDeps,
-    agent_deps: AgentDeps,
-) -> RuntimeRepositoryStore:
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    return RuntimeRepositoryStore(
-        mongo=mongo,
-        room_repository=room_deps.room_repository,
-        message_repository=room_deps.message_repository,
-        agent_repository=agent_deps.agent_repository,
-    )

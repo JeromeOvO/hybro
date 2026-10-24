@@ -1,11 +1,14 @@
-"""Parse A2A stream frames into internal tasks.
+"""Parse A2A stream frames and push notifications into internal tasks.
 
-Used by webhook ingestion and the direct stream wrapper. A2A 1.0 removed the
-``kind`` discriminator and the ``final`` flag: a frame is now exactly one of
-``task`` / ``statusUpdate`` / ``artifactUpdate`` / ``message``, so the member
-that is present identifies the event. Pre-1.0 frames that still carry ``kind``
-are accepted as well, because agents already registered keep calling back until
-they are migrated.
+Used by the direct stream wrapper, the shared facade-result conversion, and the
+orchestrator's authenticated push ingress (a push body is one ``StreamResponse``
+as the SDK push sender serializes it). An
+A2A 1.0 ``StreamResponse`` is exactly one of ``task`` / ``statusUpdate`` /
+``artifactUpdate`` / ``message``. Frames produced by ``client_facade`` are
+already unwrapped from that member and tagged with ``kind``, Hybro's internal
+envelope tag (``task``, ``status-update``, ``artifact-update``, ``message``);
+it is not the pre-1.0 wire discriminator. A raw 1.0 frame that still wraps the
+event under its member is accepted too.
 
 Conversion to internal models happens through the shared boundary converters,
 so this module never constructs SDK types and never guesses at protobuf shape
@@ -65,6 +68,37 @@ def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> T
     )
 
 
+_PUSH_FRAMES = {
+    "task": "task",
+    "statusUpdate": "status_update",
+    "artifactUpdate": "artifact_update",
+}
+
+
+def parse_push_notification_payload(payload: dict[str, Any]) -> tuple[str, Task]:
+    """Parse one push notification into its frame kind and an internal task.
+
+    A push always concerns an existing task, so a message-only frame or a frame
+    without a task id is rejected; no fallback identity is synthesized.
+    """
+    frame = _unwrap_result(payload)
+    member, event = _resolve_event(frame)
+    if member == "task":
+        task = task_from_task_frame(event)
+    elif member == "statusUpdate":
+        task = task_from_status_update(event, "")
+    elif member == "artifactUpdate":
+        task = task_from_artifact_update(event)
+    else:
+        raise ValueError(
+            "Invalid push notification: expected 'task', 'statusUpdate', or "
+            "'artifactUpdate'"
+        )
+    if not task.id:
+        raise ValueError("Invalid push notification: missing task id")
+    return _PUSH_FRAMES[member], task
+
+
 # ---------------------------------------------------------------------------
 # Frame shape
 # ---------------------------------------------------------------------------
@@ -84,10 +118,11 @@ def _unwrap_result(payload: dict[str, Any]) -> dict[str, Any]:
 def _resolve_event(frame: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     """Identify the event and return the object that carries it.
 
-    A 1.0 frame wraps the event under the member that is present
-    (``{"statusUpdate": {...}}``). Pre-1.0 frames put the event inline and tag
-    it with ``kind`` instead; both are supported because agents registered
-    before the upgrade keep calling back until they are migrated.
+    Facade frames carry the event inline, tagged with Hybro's internal
+    envelope ``kind``. A raw 1.0 ``StreamResponse`` dict instead wraps the
+    event under the member that is present (``{"statusUpdate": {...}}``); that
+    shape and its snake_case spelling stay accepted because callers and tests
+    still pass raw frames.
     """
     for member in _STREAM_MEMBERS:
         value = frame.get(member)
@@ -278,6 +313,7 @@ def _string(value: Any) -> str | None:
 
 
 __all__ = [
+    "parse_push_notification_payload",
     "parse_stream_response_payload",
     "task_from_artifact_update",
     "task_from_message_frame",

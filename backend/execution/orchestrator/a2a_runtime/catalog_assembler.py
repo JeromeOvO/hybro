@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+from typing import Protocol
 
 from ..models import (
     CandidateScopeSnapshot,
@@ -15,9 +16,21 @@ from ..models import (
     ToolBindingRef,
     ToolDefinition,
 )
-from .models import AgentToolBindingRecord
-from .ports import AgentToolBindingStore, AgentToolCandidateSource, RoomEpochStore
+from .models import AgentToolBindingRecord, AgentToolCandidate
+from .ports import AgentToolBindingStore, RoomEpochStore
 from .resources import resource_is_compatible
+
+
+class AgentToolCandidateSource(Protocol):
+    async def list_candidates(
+        self,
+        *,
+        run_id: str,
+        conversation_id: str,
+        room_epoch: int,
+        requesting_subject_id: str,
+        candidate_agent_ids: list[str],
+    ) -> list[AgentToolCandidate]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +55,7 @@ class AgentToolCatalogAssembler:
         self,
         *,
         run_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         requesting_subject_id: str,
         candidate_scope: CandidateScopeSnapshot,
@@ -50,11 +63,11 @@ class AgentToolCatalogAssembler:
         authorization_basis_digest: str,
         created_at: datetime,
     ) -> PreparedAgentCatalog:
-        if not await self.room_epoch_store.verify_active(room_id, room_epoch):
+        if not await self.room_epoch_store.verify_active(conversation_id, room_epoch):
             raise PermissionError("Room epoch is not active")
         candidates = await self.candidate_source.list_candidates(
             run_id=run_id,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_epoch=room_epoch,
             requesting_subject_id=requesting_subject_id,
             candidate_agent_ids=candidate_scope.agent_ids,
@@ -65,11 +78,7 @@ class AgentToolCatalogAssembler:
             if candidate.active and candidate.authorized and not candidate.excluded
         ]
         subject_digest = _digest(requesting_subject_id)
-        authorization_kind = (
-            candidate_scope.authorization_basis.kind
-            if candidate_scope.authorization_basis is not None
-            else None
-        )
+        authorization_kind = candidate_scope.authorization_basis.kind
         bindings: list[AgentToolBindingRecord] = []
         entries: list[FrozenToolCatalogEntry] = []
         used_names: set[str] = set()
@@ -141,7 +150,7 @@ class AgentToolCatalogAssembler:
                 binding_id=binding_id,
                 binding_digest=binding_digest,
                 run_id=run_id,
-                room_id=room_id,
+                conversation_id=conversation_id,
                 room_epoch=room_epoch,
                 tool_name=name,
                 definition=definition,

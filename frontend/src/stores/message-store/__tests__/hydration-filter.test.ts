@@ -6,7 +6,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'agent',
     content: '',
     senderName: 'Agent',

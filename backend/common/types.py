@@ -78,8 +78,8 @@ class RoomArtifactPart(BaseModel):
         return self
 
 
-# Compatibility name for transport-facing code. Persisted projections use the
-# metadata-only shape accepted by RoomArtifactPart.
+# Transport-facing alias. Persisted projections use the metadata-only shape
+# accepted by RoomArtifactPart.
 FilePart = RoomArtifactPart
 
 

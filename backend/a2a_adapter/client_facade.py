@@ -122,7 +122,7 @@ async def send_message(
     timeout: float = 600.0,
     allow_docker_host_fallback: bool = True,
 ) -> dict[str, Any]:
-    """Send once, optionally retaining the legacy Docker-host retry behavior."""
+    """Send once, optionally retrying through the Docker-host URL fallback."""
     started_at = time.perf_counter()
     card: AgentCard | None = None
     try:
@@ -202,6 +202,7 @@ async def stream_message(
     message_data: Any,
     *,
     accepted_output_modes: list[str] | None = None,
+    push_notification_config: dict[str, Any] | None = None,
     timeout: float = 600.0,
 ) -> AsyncGenerator[dict[str, Any], None]:
     started_at = time.perf_counter()
@@ -214,6 +215,7 @@ async def stream_message(
         request = build_send_message_request(
             to_sdk_message(message_data),
             accepted_output_modes=accepted_output_modes,
+            push_notification_config=push_notification_config,
             blocking=False,
         )
         async with event_bounded_client(timeout=timeout) as client:
@@ -221,6 +223,7 @@ async def stream_message(
                 client=client,
                 streaming=True,
                 accepted_output_modes=accepted_output_modes,
+                push_notification_config=push_notification_config,
             )
             async with aclosing(
                 stream_with_docker_host_fallback(
@@ -337,132 +340,6 @@ async def cancel_remote_task(
             error=exc,
         )
         return False
-
-
-async def send_hitl_reply(
-    agent_card_data: Any,
-    message_data: Any,
-    *,
-    agent_url: str | None = None,
-    agent_id: str | None = None,
-    push_notification_config: dict[str, Any] | None = None,
-    blocking: bool = True,
-    timeout: float = 600.0,
-) -> dict[str, Any]:
-    """Continue an accepted task with a human answer.
-
-    The reply must land on the binding that accepted the task, so the caller
-    passes the agent card (whose interfaces identify the endpoint) instead of a
-    bare URL. When only a URL is known, the card is resolved from that URL and
-    the interface version picked from it, rather than assuming a protocol.
-    """
-    started_at = time.perf_counter()
-    try:
-        request = build_send_message_request(
-            to_sdk_message(message_data),
-            push_notification_config=push_notification_config,
-            blocking=blocking,
-        )
-        async with bounded_client(timeout=timeout) as client:
-            config = _client_config(
-                client=client,
-                streaming=False,
-                push_notification_config=push_notification_config,
-            )
-            if _has_card(agent_card_data):
-                card = _build_card(agent_card_data)
-                response = await with_docker_host_fallback(
-                    card,
-                    lambda candidate: _send_once(
-                        _create_client(candidate, config), request
-                    ),
-                )
-            elif agent_url:
-                response = await _send_hitl_from_url(str(agent_url), config, request)
-            else:
-                raise A2AClientFacadeError(
-                    "A2A reply requires an agent card or agent URL"
-                )
-        normalized = _normalize_response(response)
-    except A2AError as exc:
-        if not is_protocol_error(exc):
-            _log_a2a_completed(
-                card=None,
-                agent=agent_id,
-                operation="hitl_reply",
-                started_at=started_at,
-                outcome="error",
-                error=exc,
-            )
-            raise
-        normalized = _protocol_error_response(exc)
-    except asyncio.CancelledError as exc:
-        _log_a2a_completed(
-            card=None,
-            agent=agent_id,
-            operation="hitl_reply",
-            started_at=started_at,
-            outcome="cancelled",
-            error=exc,
-        )
-        raise
-    except Exception as exc:
-        _log_a2a_completed(
-            card=None,
-            agent=agent_id,
-            operation="hitl_reply",
-            started_at=started_at,
-            outcome="error",
-            error=exc,
-        )
-        raise
-    outcome, error_type, error_code = _normalized_response_outcome(normalized)
-    _log_a2a_completed(
-        card=None,
-        agent=agent_id,
-        operation="hitl_reply",
-        started_at=started_at,
-        outcome=outcome,
-        error_type=error_type,
-        error_code=error_code,
-    )
-    return normalized
-
-
-def _has_card(agent_card_data: Any) -> bool:
-    """True when the caller supplied card data rather than a bare URL."""
-    if agent_card_data is None or isinstance(agent_card_data, str):
-        return False
-    if isinstance(agent_card_data, dict):
-        return bool(agent_card_data)
-    return True
-
-
-async def _create_client_from_url(agent_url: str, config: ClientConfig) -> Client:
-    """Build a client from a URL alone, letting the SDK resolve the card.
-
-    Used only when the caller has no card. Card resolution also determines the
-    interface protocol version, so legacy agents take the SDK's 0.3
-    compatibility transport instead of an assumed 1.0 one.
-    """
-    return await ClientFactory(config).create_from_url(agent_url)
-
-
-async def _send_hitl_from_url(
-    agent_url: str, config: ClientConfig, request: SendMessageRequest
-) -> Any:
-    """Resolve the agent card for a URL-addressed reply, then send to it.
-
-    Resolution already retries through the Docker host gateway. The resolved
-    card may still advertise a loopback URL, so the send is wrapped in the
-    card-based fallback as well; otherwise a containerised backend would fail
-    even though the card was reachable.
-    """
-    card_data = await fetch_agent_card_with_fallback(agent_url)
-    card = _build_card(card_data)
-    return await with_docker_host_fallback(
-        card, lambda candidate: _send_once(_create_client(candidate, config), request)
-    )
 
 
 async def _send_once(client: Client, request: SendMessageRequest) -> Any:
@@ -615,7 +492,6 @@ __all__ = [
     "fetch_agent_card_with_fallback",
     "is_protocol_error",
     "is_timeout_error",
-    "send_hitl_reply",
     "send_message",
     "stream_message",
 ]

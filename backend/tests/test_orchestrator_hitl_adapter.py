@@ -212,9 +212,9 @@ async def test_publish_marks_interaction_user_visible():
     )
 
     # Parked (eligible but unpublished) is NOT user-visible.
-    assert await port.get_published_interactions(call.room_id) == []
+    assert await port.get_published_interactions(call.conversation_id) == []
     # The unanswered interaction is still answerable/eligible.
-    assert len(await port.get_eligible_interactions(call.room_id)) == 1
+    assert len(await port.get_eligible_interactions(call.conversation_id)) == 1
 
     # Publish requires exact call ownership.
     assert (
@@ -225,7 +225,7 @@ async def test_publish_marks_interaction_user_visible():
         == "accepted"
     )
 
-    published = await port.get_published_interactions(call.room_id)
+    published = await port.get_published_interactions(call.conversation_id)
     assert [spec.interaction_id for spec, _route, _fp in published] == ["interaction-1"]
 
     # A durable answer removes user actionability immediately while retaining
@@ -240,8 +240,8 @@ async def test_publish_marks_interaction_user_visible():
         verified_auth_reference_digests=[],
         verified_auth_references=[],
     )
-    assert await port.get_published_interactions(call.room_id) == []
-    assert len(await port.get_eligible_interactions(call.room_id)) == 1
+    assert await port.get_published_interactions(call.conversation_id) == []
+    assert len(await port.get_eligible_interactions(call.conversation_id)) == 1
 
     # Publishing again is idempotent.
     assert (

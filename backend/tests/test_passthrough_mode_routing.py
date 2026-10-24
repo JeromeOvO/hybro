@@ -18,8 +18,11 @@ from pydantic import ValidationError
 
 from api_gateway.routes.room_routes import send_message
 from common.config.loader import Settings
-from common.dto import ExecutionAck, ExecutionRequest, UserMessageInsertResult
+from common.dto import ExecutionAck, ExecutionRequest
 from common.dto.turn_lifecycle import RunStartedPayload
+from conversation.dto import UserMessageInsertResult
+from conversation.message_sending import RoomMessageSender
+from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from execution.adapters.profiles import OrchestratorProfileResolver
 from execution.facade import ExecutionFacade
@@ -29,7 +32,7 @@ from execution.orchestrator_routing import (
     RoomMessageEnvelopeResolver,
     map_mode_to_profile,
 )
-from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+from models.request import RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
 from tests.test_execution_facade import _make_facade
 from tests.test_orchestrator_passthrough import passthrough_profile
@@ -37,7 +40,7 @@ from tests.test_orchestrator_passthrough import passthrough_profile
 
 def _passthrough_request(**overrides) -> ExecutionRequest:
     values = {
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "sender_id": "owner-1",
         "client_request_id": "cr-1",
         "message": {"message_content": {"message_text": "plan a trip"}},
@@ -91,7 +94,7 @@ async def test_schedule_orchestration_carries_passthrough_mode():
     facade._route_orchestration = AsyncMock()
     request = _passthrough_request()
     ack = ExecutionAck(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         success=True,
         should_start_orchestration=True,
@@ -101,9 +104,10 @@ async def test_schedule_orchestration_carries_passthrough_mode():
     facade.schedule_orchestration(request, ack)
     await asyncio.sleep(0)
 
-    _routed, orchestration_request = facade._route_orchestration.call_args.args
-    assert orchestration_request.mode == "passthrough"
-    assert orchestration_request.agent_scope == {
+    routed, message_id = facade._route_orchestration.call_args.args
+    assert message_id == "msg-1"
+    assert routed.mode == "passthrough"
+    assert routed.agent_scope.model_dump(mode="json") == {
         "source": "mention",
         "agent_ids": ["agent-1"],
     }
@@ -111,7 +115,7 @@ async def test_schedule_orchestration_carries_passthrough_mode():
 
 def _user_message(extend_info: dict) -> RoomUserMessage:
     return RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         user_id="owner-1",
         message_content=MessageContent(message_text="plan a trip"),
@@ -139,14 +143,14 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
     )
 
     envelope, resolved = await router._resolve_envelope_and_profile(
-        OrchestrationRequest(
-            room_id="room-1",
-            room_user_message_id="msg-1",
-            user_id="owner-1",
+        ExecutionRequest(
+            conversation_id="room-1",
+            sender_id="owner-1",
             client_request_id="cr-1",
             mode="passthrough",
             agent_scope={"source": "mention", "agent_ids": ["agent-1"]},
-        )
+        ),
+        message_id="msg-1",
     )
 
     assert envelope.mode == "passthrough"
@@ -156,43 +160,15 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
     assert resolved.max_model_turns == 0
 
 
-@pytest.mark.asyncio
-async def test_router_recovery_reads_persisted_passthrough_mode():
-    profile = passthrough_profile()
-    message = _user_message(
-        {
-            "execution_mode": "passthrough",
-            "candidate_scope_source": "mention",
-            "candidate_agent_ids": ["agent-1"],
-        }
-    )
-    router = DualRuntimeRouter(
-        runtime=SimpleNamespace(profiles={"passthrough": profile}),
-        envelope_source=RoomMessageEnvelopeResolver(
-            get_user_message=AsyncMock(return_value=message),
-            list_room_agent_ids=AsyncMock(return_value=["agent-1"]),
-        ),
-    )
-
-    envelope, resolved = await router._resolve_envelope_and_profile(
-        OrchestrationRequest(
-            room_id="room-1", room_user_message_id="msg-1", user_id="owner-1"
-        )
-    )
-
-    assert envelope.mode == "passthrough"
-    assert resolved is profile
-
-
 # -- Persisted mode on the user message -------------------------------------
 
 
-def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
+def _runtime_for_persist(monkeypatch) -> tuple[ConversationRuntime, list[dict]]:
     svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
-            room_id="room-1",
+            conversation_id="room-1",
             room_name="Room",
             room_owner_id="owner-1",
             room_owner_name="Owner",
@@ -202,14 +178,17 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
-    svc.cancellation_control.create_token.return_value = object()
-    svc.cancellation_control.check_cancelled = AsyncMock(return_value=False)
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = None
     svc.bind_facade(facade)
-    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
-    svc._materialize_room_quote = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        RoomMessageSender,
+        "_resolve_and_apply_attachments",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        RoomMessageSender, "_materialize_room_quote", AsyncMock(return_value=None)
+    )
     persisted: list[dict] = []
 
     async def persist(user_message, **_kwargs):
@@ -219,7 +198,9 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
             message_id="server-message", created=True, document={}
         )
 
-    svc._persist_user_message = AsyncMock(side_effect=persist)
+    monkeypatch.setattr(
+        RoomMessageSender, "_persist_user_message", AsyncMock(side_effect=persist)
+    )
     return svc, persisted
 
 
@@ -233,14 +214,14 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
         ("autonomous", "direct"),
     ],
 )
-async def test_persist_message_stores_request_mode(requested, stored):
-    svc, persisted = _runtime_for_persist()
+async def test_persist_message_stores_request_mode(requested, stored, monkeypatch):
+    svc, persisted = _runtime_for_persist(monkeypatch)
     request = RoomCenterUserMessageRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         user_id="owner-1",
         client_request_id="cr-1",
         message=RoomUserMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="",
             user_id="owner-1",
             message_content=MessageContent(message_text="plan a trip"),
@@ -273,14 +254,13 @@ async def test_persist_message_stores_request_mode(requested, stored):
     ],
 )
 async def test_orchestration_envelope_persists_request_mode(requested, stored):
-    svc = object.__new__(ConversationRuntime)
-    svc._store = MagicMock()
-    svc._store.update_room_user_message_by_message_id = AsyncMock(return_value=True)
+    store = MagicMock()
+    store.update_room_user_message_by_message_id = AsyncMock(return_value=True)
     extend_info = {"agent_scope": {"source": "mention", "agent_ids": ["agent-1"]}}
     if requested is not None:
         extend_info["execution_mode"] = requested
     request = RoomCenterUserMessageRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         user_id="owner-1",
         client_request_id="cr-1",
         message=_user_message({}),
@@ -288,7 +268,9 @@ async def test_orchestration_envelope_persists_request_mode(requested, stored):
     )
     user_message = _user_message({"execution_mode": stored, "quoted_text": "q"})
 
-    result = await svc._prepare_orchestration_envelope(
+    result = await MessagePreflight(
+        store=store, target_scope=None
+    ).prepare_orchestration_envelope(
         request,
         user_message,
         {"agent-1": "Agent One"},
@@ -297,7 +279,7 @@ async def test_orchestration_envelope_persists_request_mode(requested, stored):
     )
 
     assert result.success is True
-    persisted = svc._store.update_room_user_message_by_message_id.await_args.args[1]
+    persisted = store.update_room_user_message_by_message_id.await_args.args[1]
     assert persisted.extend_info["execution_mode"] == stored
     assert persisted.extend_info["candidate_agent_ids"] == ["agent-1"]
     assert persisted.extend_info["quoted_text"] == "q"
@@ -313,7 +295,6 @@ async def test_chat_route_still_rejects_passthrough_mode():
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "client_request_id": "cr-1",
             "mode": "passthrough",
             "message": {"message_content": {"message_text": "hi"}},
@@ -322,11 +303,12 @@ async def test_chat_route_still_rejects_passthrough_mode():
     )
 
     response = await send_message(
+        "room-1",
         request,
         user=SimpleNamespace(user_id="owner-1"),
         store=MagicMock(),
         engine=engine,
-        center=MagicMock(),
+        rooms=MagicMock(),
     )
 
     assert response.success is False

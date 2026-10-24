@@ -19,9 +19,9 @@ from api_gateway.routes.hitl_routes import (
     get_pending_hitl_requests,
     respond_to_hitl_interaction,
 )
+from approval.exceptions import HITLConflictError, HITLRoomMismatchError
 from common.dto import HITLCancelCommand
 from common.dto import HITLRequest as CommonHITLRequest
-from execution.hitl.exceptions import HITLConflictError, HITLRoomMismatchError
 from models.hitl import HITLBatchResponseRequest
 
 
@@ -49,7 +49,7 @@ async def test_batch_inventory_conflict_returns_safe_409(mock_user, sample_room)
 
     with pytest.raises(HTTPException) as conflict:
         await respond_to_hitl_interaction(
-            sample_room.room_id,
+            sample_room.conversation_id,
             body,
             mock_user,
             manager=manager,
@@ -85,7 +85,7 @@ class TestGetPendingHitlRequests:
         mock_hitl_service.get_pending_hitl.return_value = [
             CommonHITLRequest(
                 request_id=sample_hitl_request.request_id,
-                room_id=sample_hitl_request.room_id,
+                conversation_id=sample_hitl_request.conversation_id,
                 user_message_id=sample_hitl_request.user_message_id,
                 source=sample_hitl_request.public_source.value,
                 prompt=sample_hitl_request.prompt,
@@ -95,7 +95,7 @@ class TestGetPendingHitlRequests:
         ]
 
         result = await get_pending_hitl_requests(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             manager=mock_hitl_service,
             room_ownership=_room_ownership(mock_user.user_id),
@@ -119,7 +119,7 @@ class TestGetPendingHitlRequests:
         mock_hitl_service.get_pending_hitl.return_value = [
             CommonHITLRequest(
                 request_id=sample_hitl_request.request_id,
-                room_id=sample_hitl_request.room_id,
+                conversation_id=sample_hitl_request.conversation_id,
                 user_message_id=sample_hitl_request.user_message_id,
                 source=sample_hitl_request.public_source.value,
                 prompt=sample_hitl_request.prompt,
@@ -128,7 +128,7 @@ class TestGetPendingHitlRequests:
         ]
 
         result = await get_pending_hitl_requests(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             manager=mock_hitl_service,
             room_ownership=_room_ownership(mock_user.user_id),
@@ -149,7 +149,7 @@ class TestGetPendingHitlRequests:
         mock_hitl_service.get_pending_hitl.return_value = [
             CommonHITLRequest(
                 request_id="hitl-public-1",
-                room_id=sample_room.room_id,
+                conversation_id=sample_room.conversation_id,
                 user_message_id="user-msg-private",
                 source="agent",
                 prompt="Approve this action?",
@@ -168,7 +168,7 @@ class TestGetPendingHitlRequests:
                 interaction_id="interaction-public-1",
                 question_count=3,
                 question_index=2,
-                status="processing",
+                status="answer_recorded",
                 expires_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
                 created_at=datetime(2026, 1, 2, 2, 4, 5, tzinfo=UTC),
                 user_input="private answer",
@@ -178,7 +178,7 @@ class TestGetPendingHitlRequests:
         ]
 
         result = await get_pending_hitl_requests(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             manager=mock_hitl_service,
             room_ownership=_room_ownership(mock_user.user_id),
@@ -231,7 +231,7 @@ class TestGetPendingHitlRequests:
         mock_hitl_service.get_pending_hitl.return_value = []
 
         result = await get_pending_hitl_requests(
-            sample_room.room_id,
+            sample_room.conversation_id,
             mock_user,
             manager=mock_hitl_service,
             room_ownership=_room_ownership(mock_user.user_id),
@@ -263,7 +263,7 @@ class TestCancelHitlInteraction:
         mock_hitl_service.cancel_hitl_interaction = AsyncMock(return_value=5)
 
         result = await cancel_hitl_interaction(
-            sample_room.room_id,
+            sample_room.conversation_id,
             interaction_id,
             body,
             mock_user,
@@ -277,7 +277,7 @@ class TestCancelHitlInteraction:
             "interaction_version": 5,
         }
         mock_hitl_service.cancel_hitl_interaction.assert_called_once_with(
-            sample_room.room_id,
+            sample_room.conversation_id,
             interaction_id,
             4,
         )
@@ -301,7 +301,7 @@ class TestCancelHitlInteraction:
 
         with pytest.raises(HTTPException) as exc_info:
             await cancel_hitl_interaction(
-                sample_room.room_id,
+                sample_room.conversation_id,
                 interaction_id,
                 body,
                 mock_user_2,
@@ -325,7 +325,7 @@ class TestCancelHitlInteraction:
 
         with pytest.raises(HTTPException) as exc_info:
             await cancel_hitl_interaction(
-                sample_room.room_id,
+                sample_room.conversation_id,
                 "interaction-to-cancel",
                 body,
                 mock_user,

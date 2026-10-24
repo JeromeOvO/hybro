@@ -9,12 +9,12 @@ from common.a2a_task_projection import (
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )
-from common.dto import RoomTimelinePage
-from common.protocols import AttachmentMetadataReader
 from common.public_prompt import concrete_agent_input_prompt
 from common.types import Artifact, Part, Task, TaskState, TextPart
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.logger import get_logger
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import RoomTimelinePage
 from models.room import (
     CoordinatorAgentId,
     MessageContent,
@@ -30,7 +30,6 @@ _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
     "quoted_sender_name",
     "quote_id",
 )
-_PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
 _PUBLIC_ORCHESTRATION_STATUS_MAP = {
     "completed": "completed",
     "failed": "failed",
@@ -62,9 +61,6 @@ def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | No
         for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
         if isinstance((value := extend_info.get(key)), str)
     }
-    turn_completion_kind = extend_info.get("turn_completion_kind")
-    if turn_completion_kind in _PUBLIC_TURN_COMPLETION_KINDS:
-        public_extend_info["turn_completion_kind"] = turn_completion_kind
     orchestration_status = _PUBLIC_ORCHESTRATION_STATUS_MAP.get(
         extend_info.get("orchestration_status")
     )
@@ -112,7 +108,7 @@ class RoomTimelineProjector:
             return None, None
         if (
             request.get("request_id") != request_id
-            or request.get("room_id") != agent_message.room_id
+            or request.get("room_id") != agent_message.conversation_id
             or request.get("public_source") not in {"agent", "supervisor", "system"}
             or request.get("status") in {"canceled", "expired"}
         ):
@@ -182,7 +178,7 @@ class RoomTimelineProjector:
         if message_content is not None and message_content.attachments:
             for attachment in message_content.attachments:
                 metadata = await self._attachment_metadata_reader.get_for_room_file(
-                    user_msg.room_id,
+                    user_msg.conversation_id,
                     attachment.file_id,
                 )
                 attachment.file_url = (
@@ -193,7 +189,7 @@ class RoomTimelineProjector:
                     else None
                 )
         return RoomMessage(
-            room_id=user_msg.room_id,
+            conversation_id=user_msg.conversation_id,
             message_id=user_msg.message_id,
             client_request_id=user_msg.client_request_id,
             message_type="user",
@@ -286,7 +282,6 @@ class RoomTimelineProjector:
                 "source_user_message_id",
                 "summary_origin",
                 "summary_type",
-                "turn_completion_kind",
             ):
                 value = agent_msg.extend_info.get(key)
                 if value is not None:
@@ -295,7 +290,7 @@ class RoomTimelineProjector:
             public_extend_info["hitl_request_id"] = trusted_hitl_request_id
 
         return RoomMessage(
-            room_id=agent_msg.room_id,
+            conversation_id=agent_msg.conversation_id,
             message_id=agent_msg.message_id,
             client_request_id=agent_msg.client_request_id,
             message_type="agent",

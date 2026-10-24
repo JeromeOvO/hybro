@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from common.dto import TimelinePosition
+from conversation.dto import TimelinePosition
 from conversation.timeline import (
     MAX_BSON_INT64,
     MAX_CURSOR_LENGTH,
@@ -44,12 +44,12 @@ def test_cursor_round_trip():
     )
     cursor = encode_timeline_cursor("room-1", position)
 
-    assert decode_timeline_cursor(cursor, room_id="room-1") == position
+    assert decode_timeline_cursor(cursor, conversation_id="room-1") == position
     assert "room-1" not in cursor
 
 
 @pytest.mark.parametrize(
-    "cursor,room_id",
+    "cursor,conversation_id",
     [
         ("not+base64", "room-1"),
         (base64.urlsafe_b64encode(b"not-json").decode().rstrip("="), "room-1"),
@@ -75,9 +75,9 @@ def test_cursor_round_trip():
         ("a" * (MAX_CURSOR_LENGTH + 1), "room-1"),
     ],
 )
-def test_cursor_strict_validation(cursor, room_id):
+def test_cursor_strict_validation(cursor, conversation_id):
     with pytest.raises(TimelineCursorError, match="Invalid timeline cursor"):
-        decode_timeline_cursor(cursor, room_id=room_id)
+        decode_timeline_cursor(cursor, conversation_id=conversation_id)
 
 
 @pytest.mark.parametrize(

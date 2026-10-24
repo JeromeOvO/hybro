@@ -24,8 +24,6 @@ FORBIDDEN_API_IMPORT_PREFIXES = (
     "context_memory.repository",
 )
 
-ALLOWLIST_PATH = Path("tests/fixtures/phase9_import_allowlist.json")
-
 
 def _imported_module(node: ast.AST) -> str | None:
     if isinstance(node, ast.Import):
@@ -118,20 +116,11 @@ def test_route_protocol_broad_shape_rules_cover_nested_any_and_bare_containers()
     assert not annotation_is_broad(dict[str, JsonValue])
 
 
-def _load_allowlist() -> set[tuple[str, str]]:
-    raw = json.loads(ALLOWLIST_PATH.read_text())
-    allowed: set[tuple[str, str]] = set()
-    for entry in raw:
-        allowed.add((entry["path"], entry["import"]))
-    return allowed
-
-
 def _gateway_python_files() -> list[Path]:
     return sorted(Path("api_gateway/routes").glob("*.py"))
 
 
 def _api_import_violations() -> list[str]:
-    allowed = _load_allowlist()
     violations: list[str] = []
     for path in _gateway_python_files():
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -139,7 +128,7 @@ def _api_import_violations() -> list[str]:
             if not isinstance(node, ast.Import | ast.ImportFrom):
                 continue
             for imported_name, module in _import_names(node):
-                if _is_forbidden(module) and (str(path), imported_name) not in allowed:
+                if _is_forbidden(module):
                     violations.append(f"{path}:{node.lineno}: {imported_name}")
     return violations
 
@@ -544,32 +533,25 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
-            "supporting": {
-                "common.protocols.ExecutionEngine",
-                "common.protocols.RoomRouteReader",
-            },
+            "owner": "common.protocols.ExecutionEngine",
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "inquiry_room_setting": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.ChatRooms",
             "supporting": {
                 "common.protocols.ExecutionEngine",
                 "common.protocols.RoomRouteReader",
             },
         },
         "inquiry_room_messages": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
-            "supporting": {"common.protocols.RoomRouteReader"},
-        },
-        "update_room_agent_set": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.ChatRooms",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
             "supporting": {
                 "common.protocols.RoomRouteReader",
-                "chat.protocols.RoomCenterCompatibility",
+                "chat.protocols.ChatRooms",
             },
         },
         "suggest_agents": {
@@ -603,8 +585,8 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "chat.protocols.RoomCenterCompatibility",
-            ["inquiry_active_runs"],
+            "common.protocols.ExecutionEngine",
+            ["_active_run_refs_for_room(conversation_id, engine)"],
         ),
         "send_message": (
             "common.protocols.ExecutionEngine",
@@ -659,17 +641,15 @@ def test_room_active_runs_inventory_records_execution_support():
     room_runtime_source = Path("conversation/runtime.py").read_text()
 
     assert "_require_execution_engine" not in route_source
-    assert "runs = await engine.get_runs_for_room(room_id)" in route_source
-    assert (
-        "active_runs = await _active_run_refs_for_room(room_id, engine)" in route_source
+    assert "runs = await engine.get_runs_for_room(conversation_id)" in route_source
+    assert "active_runs=await _active_run_refs_for_room(conversation_id, engine)" in (
+        route_source
     )
     assert "_read_active_runs_for_room" not in room_runtime_source
     assert "common.protocols.ExecutionEngine" in set(
         room_setting_route.get("supporting_protocols") or []
     )
-    assert "common.protocols.ExecutionEngine" in set(
-        active_runs_route.get("supporting_protocols") or []
-    )
+    assert active_runs_route["owning_protocol"] == "common.protocols.ExecutionEngine"
 
 
 def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup():
@@ -688,10 +668,9 @@ def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup(
 def test_route_owner_protocols_match_handler_calls():
     from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterCompatibility,
-        AgentGroupStoreCompatibility,
+        AgentCatalog,
+        AgentGroupStore,
         AgentInspection,
-        AgentLivenessChecker,
         AgentNetworkAccess,
     )
     from common.protocols import (
@@ -699,7 +678,6 @@ def test_route_owner_protocols_match_handler_calls():
         HealthCheck,
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     )
     from execution.ports import DirectAgentMessenger
     from session.protocols import SessionAccess
@@ -711,17 +689,13 @@ def test_route_owner_protocols_match_handler_calls():
             "resolve_all_for_agent",
             "resolve_issue",
         },
-        AgentCenterCompatibility: {
-            "delete_agent_from_route",
-            "finalize_agent_response_for_route",
-            "get_agent_card_from_url_for_route",
-            "get_agents_by_provider_for_route",
-            "get_visible_agent_for_route",
-            "list_visible_agents_for_route",
-            "register_agent_from_route",
-        },
-        AgentLivenessChecker: {
-            "__call__",
+        AgentCatalog: {
+            "delete",
+            "get_visible",
+            "list_for_provider",
+            "list_visible",
+            "register",
+            "resolve_card",
         },
         AgentRegistry: {
             "get_agent",
@@ -730,7 +704,7 @@ def test_route_owner_protocols_match_handler_calls():
             "inspect_a2a_connection",
             "inspect_agent_card",
         },
-        AgentGroupStoreCompatibility: {
+        AgentGroupStore: {
             "add_agent_group",
             "delete_agent_group",
             "get_agent_group_by_id",
@@ -751,7 +725,6 @@ def test_route_owner_protocols_match_handler_calls():
             "get_room_by_room_id",
             "get_room_user_message_by_message_id",
         },
-        WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         HealthCheck: {"check"},
     }
 
@@ -774,46 +747,17 @@ def test_route_owner_protocols_match_handler_calls():
     assert not missing, "Route owner protocol methods missing:\n" + "\n".join(missing)
 
 
-def test_agent_center_route_protocol_excludes_legacy_internal_methods():
-    from agent.protocols import AgentCenterCompatibility
+def test_route_bound_adapters_satisfy_protocols():
+    from agent.catalog import AgentCatalogService
+    from agent.protocols import AgentCatalog
+    from chat.protocols import ChatRooms
+    from chat.service import ChatService
 
-    forbidden = {
-        "_mask_sensitive_information",
-        "get_agent_card_from_url",
-        "get_agents_by_provider_id",
-        "get_agents_with_conditions",
-        "get_all_active_agents",
-        "get_all_agents",
-        "query_agent_by_agent_id",
-        "register_agent",
-        "remove_agent",
-        "update_agent",
-    }
-
-    assert forbidden.isdisjoint(AgentCenterCompatibility.__dict__)
-
-
-def test_route_bound_compatibility_adapters_satisfy_protocols():
-    from agent.protocols import AgentCenterCompatibility
-    from agent.route_adapter import AgentRouteAdapter
-    from chat.protocols import RoomCenterCompatibility
-    from chat.route_adapter import ChatRouteAdapter
-
-    assert isinstance(AgentRouteAdapter(service=object()), AgentCenterCompatibility)
     assert isinstance(
-        ChatRouteAdapter(chat_service=object(), conversation_runtime=object()),
-        RoomCenterCompatibility,
+        AgentCatalogService(facade=object(), liveness_checker=object()),
+        AgentCatalog,
     )
-
-
-def test_agent_route_adapter_accepts_service():
-    from agent.route_adapter import AgentRouteAdapter
-
-    service = object()
-
-    center = AgentRouteAdapter(service=service)
-
-    assert center.agent_service is service
+    assert isinstance(ChatService(), ChatRooms)
 
 
 def test_agent_routes_expose_typed_dependency_providers():
@@ -822,27 +766,23 @@ def test_agent_routes_expose_typed_dependency_providers():
 
     from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterCompatibility,
-        AgentLivenessChecker,
+        AgentCatalog,
     )
     from api_gateway.routes import agent_routes as agent
     from common.protocols import AgentRegistry
 
     provider_expectations = {
-        agent.get_agent_center: AgentCenterCompatibility,
+        agent.get_agent_catalog: AgentCatalog,
         agent.get_agent_service: AgentRegistry,
         agent.get_capability_issue_service: AgentCapabilityIssueStore,
-        agent.get_agent_liveness_checker: AgentLivenessChecker,
     }
     for provider, expected_type in provider_expectations.items():
         assert get_type_hints(provider)["return"] is expected_type
 
     route_expectations = {
-        agent.register_agent: {"center": AgentCenterCompatibility},
-        agent.get_agent_by_provider: {"center": AgentCenterCompatibility},
-        agent.delete_agent: {
-            "center": AgentCenterCompatibility,
-        },
+        agent.register_agent: {"catalog": AgentCatalog},
+        agent.get_agent_by_provider: {"catalog": AgentCatalog},
+        agent.delete_agent: {"catalog": AgentCatalog},
         agent.get_capability_issues: {
             "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
@@ -855,12 +795,9 @@ def test_agent_routes_expose_typed_dependency_providers():
             "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
         },
-        agent.get_agent_card_from_url: {"center": AgentCenterCompatibility},
-        agent.get_agent: {
-            "center": AgentCenterCompatibility,
-            "liveness_checker": AgentLivenessChecker,
-        },
-        agent.get_agent_list: {"center": AgentCenterCompatibility},
+        agent.get_agent_card_from_url: {"catalog": AgentCatalog},
+        agent.get_agent: {"catalog": AgentCatalog},
+        agent.get_agent_list: {"catalog": AgentCatalog},
     }
     missing: list[str] = []
     for handler, expected_params in route_expectations.items():
@@ -888,17 +825,14 @@ def test_agent_route_inventory_records_live_protocol_owners():
     }
     expectations = {
         "delete_agent": (
-            "agent.protocols.AgentCenterCompatibility",
+            "agent.protocols.AgentCatalog",
             set(),
         ),
-        "get_agent_by_provider": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent": (
-            "agent.protocols.AgentCenterCompatibility",
-            {"agent.protocols.AgentLivenessChecker"},
-        ),
-        "get_agent_card_from_url": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent_list": ("agent.protocols.AgentCenterCompatibility", set()),
-        "register_agent": ("agent.protocols.AgentCenterCompatibility", set()),
+        "get_agent_by_provider": ("agent.protocols.AgentCatalog", set()),
+        "get_agent": ("agent.protocols.AgentCatalog", set()),
+        "get_agent_card_from_url": ("agent.protocols.AgentCatalog", set()),
+        "get_agent_list": ("agent.protocols.AgentCatalog", set()),
+        "register_agent": ("agent.protocols.AgentCatalog", set()),
         "get_capability_issues": (
             "agent.protocols.AgentCapabilityIssueStore",
             {"common.protocols.AgentRegistry"},
@@ -1129,24 +1063,21 @@ async def test_health_check_service_fails_closed_when_index_state_is_missing():
     assert response.status_code == 503
     kwargs = compute_health_status.call_args.kwargs
     assert kwargs["agent_search_index_ready"] is False
-    assert kwargs["memory_search_index_ready"] is False
-    assert kwargs["search_indexes_ready"] is False
+    assert "memory_search_index_ready" not in kwargs
 
 
 def test_route_protocol_surfaces_are_specific():
-    from agent.protocols import AgentGroupStoreCompatibility, AgentInspection
+    from agent.protocols import AgentGroupStore, AgentInspection
     from common.protocols import (
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     )
 
     for protocol in (
         AgentInspection,
-        AgentGroupStoreCompatibility,
+        AgentGroupStore,
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     ):
         for name, value in protocol.__dict__.items():
             if not callable(value) or name.startswith("_"):
@@ -1165,13 +1096,13 @@ def test_route_protocol_surfaces_are_specific():
 def test_route_owner_protocols_do_not_expose_any_annotations():
     from typing import Any
 
-    from agent.protocols import AgentGroupStoreCompatibility
+    from agent.protocols import AgentGroupStore
     from common.protocols import RoomRouteReader, SSEStateReader
 
     protocols = (
         RoomRouteReader,
         SSEStateReader,
-        AgentGroupStoreCompatibility,
+        AgentGroupStore,
     )
     violations: list[str] = []
 
@@ -1194,7 +1125,7 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 def test_route_protocols_do_not_expose_broad_annotations():
     import agent.protocols as agent_protocols
     import chat.protocols as room_protocols
-    from agent.protocols import AgentGroupStoreCompatibility
+    from agent.protocols import AgentGroupStore
     from common.protocols import (
         HealthCheck,
         RoomRouteReader,
@@ -1208,7 +1139,7 @@ def test_route_protocols_do_not_expose_broad_annotations():
         if isinstance(getattr(module, name, None), type)
     ]
     protocols.extend([RoomRouteReader, SSEStateReader])
-    protocols.append(AgentGroupStoreCompatibility)
+    protocols.append(AgentGroupStore)
     protocols.append(HealthCheck)
     violations: list[str] = []
 

@@ -1,5 +1,7 @@
 """Typed defaults and JSON startup snapshot. No dotenv or import-time file I/O."""
 
+import ipaddress
+import logging
 import math
 import os
 from functools import lru_cache
@@ -13,8 +15,9 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
-    model_validator,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseModel):
@@ -30,10 +33,6 @@ class Settings(BaseModel):
 
     mongodb_url: str = "localhost:27017"
     mongodb_db_name: str = "hybro"
-    mongodb_host: str = "127.0.0.1"
-    mongodb_port: int = 27017
-    mongodb_username: str = ""
-    mongodb_password: str = ""
 
     openai_api_key: str = ""
     openai_base_url: str = Field(
@@ -121,6 +120,11 @@ class Settings(BaseModel):
     # Waits. A suspended Run's deadline clock is stopped; an acknowledged remote
     # Agent call is polled until this ceiling, measured from its acceptance.
     orchestrator_call_wait_ceiling_hours: float = Field(default=168.0, gt=0)
+    # Public base URL at which remote Agents reach this backend, for example
+    # "https://hybro.example.com". When set, canonical dispatch registers an A2A
+    # push-notification config with Agents whose card advertises
+    # pushNotifications; polling remains the fallback. Empty disables push.
+    a2a_push_callback_base_url: str = ""
     # Supervisor ask_user approval deadline; None means no deadline.
     approval_deadline_hours: float | None = Field(default=None, gt=0)
 
@@ -142,14 +146,6 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     log_format: str = "auto"
 
-    # Feature Flags (runtime-toggleable behavior gates)
-    feature_run_event_sse: bool = True
-    orchestration_outcome_guardrails: bool = True
-
-    # Execution Tuning
-    supervisor_max_steps: int = 8
-    run_watchdog_stale_minutes: int = 90
-
     # Agent Health
     agent_health_check_interval: int = 3600
 
@@ -169,8 +165,6 @@ class Settings(BaseModel):
     # Compaction
     compaction_concurrency: int = 5
 
-    parse_confidence_threshold: float = 0.3
-
     # Clerk Authentication
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
     auth_mode: Literal["mock", "clerk"] = "mock"  # "mock" or "clerk"
@@ -185,25 +179,9 @@ class Settings(BaseModel):
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check
     cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
-    cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
 
     # Agent Capability Issue Tracking
     capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
-
-    # A2A Long-Running Tasks Settings
-    webhook_base_url: str = (
-        ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
-    )
-    webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-    max_tasks_per_user: int = 100  # Max concurrent non-terminal tasks per user
-    max_tasks_per_room: int = 50  # Max concurrent non-terminal tasks per room
-    stale_check_minutes: int = 10  # Poll tasks not updated in this time
-    task_expiry_hours: int = 4  # Auto-fail tasks older than this
-    pending_task_warning_hours: int = 1  # Warn (log) after this time
-    orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
-    processing_status_expiry_minutes: int = (
-        30  # Clear stuck processing status older than this
-    )
 
     # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
@@ -248,42 +226,21 @@ class Settings(BaseModel):
         }
     )
 
-    # Execution cancellation runtime (environment names remain compatible)
-    cancellation_ttl_seconds: int = 3600
-    cancellation_cache_maxsize: int = 10_000
-
-    # Cancellation change stream reconnection backoff
-    cs_backoff_base: float = 1.0  # initial delay in seconds
-    cs_backoff_max: float = 30.0  # ceiling delay in seconds
-    cs_backoff_factor: float = 2.0  # multiplier per retry
-    cs_jitter_fraction: float = 0.25  # +/-25% random jitter
-
-    # Redis transports (Delivery SSE and Execution cancellation use separate clients)
+    # Redis transport for Delivery SSE
     redis_url: str = (
         ""  # e.g. "redis://localhost:6379/0" - empty string disables broker
     )
-    redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
-    redis_cancel_channel: str = (
-        "cancel:global"  # single channel for all cancellation events
+    redis_sse_channel_prefix: str = (
+        "sse:room:"  # per-room channel: sse:room:{conversation_id}
     )
     redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
     redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
-    redis_cancel_key_prefix: str = "cancelled:"
     redis_terminal_key_prefix: str = "terminal:"
 
     # ===========================================
     # Context & Memory System Settings
     # See docs/System-Architecture.md for the current architecture
     # ===========================================
-
-    # Token Budget Settings
-    context_model_window: int = 128000  # Model's max context window
-    context_system_prompt_tokens: int = 2000  # Reserved for system prompt
-    context_tool_schema_tokens: int = 3000  # Reserved for tool schemas
-    context_response_reserve_tokens: int = 4000  # Reserved for response
-    context_room_pct: float = 0.15  # % of remaining for room context
-    context_history_pct: float = 0.60  # % of remaining for conversation history
-    context_task_pct: float = 0.25  # % of remaining for current task
 
     # Compaction Settings (LOSSLESS - pointer-based, not summarization)
     compaction_enabled: bool = True  # Enable/disable auto-compaction
@@ -294,21 +251,11 @@ class Settings(BaseModel):
     compaction_preserve_recent: int = 10  # Always keep this many recent turns FULL
     compaction_content_ttl_days: int = 0  # TTL for stored content (0 = forever)
 
-    # Memory Search Settings
-    memory_search_enabled: bool = True  # Enable/disable memory search
-    memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
-    memory_search_half_life_days: int = 30  # Half-life for temporal decay
-    memory_search_max_results: int = 10  # Max results to return
-    memory_search_max_candidates: int = 1000  # Max keyword candidates to rank
-    memory_search_max_snippet_chars: int = 300  # Max chars per snippet
-
     # Local room file storage
     hybro_file_dir: str = Field(
         default="",
         validation_alias=AliasChoices("HYBRO_FILE_DIR", "hybro_file_dir"),
     )
-    a2a_inline_file_max_raw_bytes: int = 5 * 1024 * 1024
-    a2a_inline_message_max_encoded_bytes: int = 0
 
     # Graceful Shutdown Settings
     shutdown_drain_seconds: float = (
@@ -338,6 +285,34 @@ class Settings(BaseModel):
         if value is None or str(value).strip() == "":
             return None
         return str(value).strip()
+
+    @field_validator("a2a_push_callback_base_url")
+    @classmethod
+    def validate_a2a_push_callback_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or any(char.isspace() or ord(char) < 32 for char in value)
+        ):
+            raise ValueError(
+                "a2a_push_callback_base_url must be an HTTP(S) URL with a hostname "
+                "and no credentials, query, or fragment"
+            )
+        if parsed.scheme == "http" and not _is_private_push_host(parsed.hostname):
+            raise ValueError(
+                "a2a_push_callback_base_url must use https unless the host is "
+                "loopback, host.docker.internal, or a private RFC 1918 address"
+            )
+        return value.rstrip("/")
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -391,32 +366,6 @@ class Settings(BaseModel):
         except (TypeError, ValueError):
             return 5
 
-    @field_validator("webhook_signing_key", mode="before")
-    @classmethod
-    def validate_webhook_signing_key(cls, value):
-        key = str(value or "").strip()
-        if key and len(key.encode()) < 32:
-            raise ValueError("WEBHOOK_SIGNING_KEY must be at least 32 bytes")
-        return key
-
-    @field_validator("feature_run_event_sse", mode="before")
-    @classmethod
-    def normalize_feature_run_event_sse(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-    @field_validator("orchestration_outcome_guardrails", mode="before")
-    @classmethod
-    def normalize_orchestration_outcome_guardrails(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
     @field_validator(
         "orchestrator_canary_enabled",
         mode="before",
@@ -429,34 +378,29 @@ class Settings(BaseModel):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
-    @classmethod
-    def normalize_a2a_inline_file_max_raw_bytes(cls, value):
-        try:
-            return max(1, int(value))
-        except (TypeError, ValueError):
-            return 5 * 1024 * 1024
-
-    @field_validator("a2a_inline_message_max_encoded_bytes", mode="before")
-    @classmethod
-    def normalize_a2a_inline_message_max_encoded_bytes(cls, value):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-
-    @model_validator(mode="after")
-    def apply_a2a_inline_encoded_default(self):
-        if self.a2a_inline_message_max_encoded_bytes <= 0:
-            self.a2a_inline_message_max_encoded_bytes = 4 * math.ceil(
-                self.a2a_inline_file_max_raw_bytes / 3
-            )
-        return self
-
     @property
     def is_gunicorn(self) -> bool:
         """Detect gunicorn from server-injected runtime metadata."""
         return os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn")
+
+
+_PRIVATE_PUSH_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+
+
+def _is_private_push_host(host: str) -> bool:
+    """Hosts where a push token may travel over plain HTTP."""
+    if host.lower() in {"localhost", "host.docker.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if address.version == 6:
+        return address.is_loopback
+    return any(address in network for network in _PRIVATE_PUSH_NETWORKS)
 
 
 # Credentials and legacy route hints are never user-editable backend JSON fields.
@@ -467,10 +411,57 @@ PRIVATE_FIELDS = frozenset(
         "google_api_key",
         "gemini_api_key",
         "clerk_secret_key",
-        "mongodb_password",
         "default_agent_registrar_token",
         "default_agent_llm_token",
+    }
+)
+# Retired backend settings. Existing config.json files may still carry them
+# (`config migrate --from-env` copied any matching env key), so they are
+# accepted, dropped, and named in one startup warning instead of failing
+# validation. Remove this set in the next major release.
+REMOVED_FIELDS = frozenset(
+    {
+        "mongodb_host",
+        "mongodb_port",
+        "mongodb_username",
+        "orchestration_outcome_guardrails",
+        "supervisor_max_steps",
+        "parse_confidence_threshold",
+        "cloud_health_cache_ttl",
+        "max_tasks_per_user",
+        "max_tasks_per_room",
+        "run_watchdog_stale_minutes",
+        "processing_status_expiry_minutes",
+        "a2a_inline_file_max_raw_bytes",
+        "a2a_inline_message_max_encoded_bytes",
+        "cancellation_ttl_seconds",
+        "cancellation_cache_maxsize",
+        "redis_cancel_channel",
+        "redis_cancel_key_prefix",
+        "cs_backoff_base",
+        "cs_backoff_max",
+        "cs_backoff_factor",
+        "cs_jitter_fraction",
+        "orphan_threshold_minutes",
+        "stale_check_minutes",
+        "task_expiry_hours",
+        "pending_task_warning_hours",
+        "webhook_base_url",
         "webhook_signing_key",
+        "feature_run_event_sse",
+        "context_model_window",
+        "context_system_prompt_tokens",
+        "context_tool_schema_tokens",
+        "context_response_reserve_tokens",
+        "context_room_pct",
+        "context_history_pct",
+        "context_task_pct",
+        "memory_search_enabled",
+        "memory_search_temporal_decay_enabled",
+        "memory_search_half_life_days",
+        "memory_search_max_results",
+        "memory_search_max_candidates",
+        "memory_search_max_snippet_chars",
     }
 )
 ROUTE_FIELDS = frozenset(
@@ -486,6 +477,16 @@ ROUTE_FIELDS = frozenset(
         "llm_gateway_default_supervisor_model",
     }
 )
+
+
+def strip_removed_fields(
+    values: dict[str, object],
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Return the values without retired keys, and the sorted retired keys found."""
+    removed = tuple(sorted(REMOVED_FIELDS.intersection(values)))
+    if not removed:
+        return values, ()
+    return {k: v for k, v in values.items() if k not in REMOVED_FIELDS}, removed
 
 
 def validate_openai_base_url(value: str | None) -> str | None:
@@ -577,6 +578,12 @@ def get_settings() -> Settings:
 
     store = RuntimeConfigStore(runtime_home(os.environ))
     document = store.load({}).config
+    if document.removed_backend_fields:
+        logger.warning(
+            "Ignoring removed config.json backend settings: %s. "
+            "Delete them; they will be rejected in the next major release.",
+            ", ".join(document.removed_backend_fields),
+        )
     values = dict(document.backend)
     services = store.read_service_credentials()
     if any(key in values and key in services for key in ("mongodb_url", "redis_url")):

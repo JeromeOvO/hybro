@@ -6,12 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from common.dto import (
-    AgentInfo,
-    MembershipSeed,
-    SavedAgentGroupSnapshot,
-    UserMessageInput,
-)
+from common.dto import AgentInfo, MembershipSeed, UserMessageInput
+from conversation.dto import SavedAgentGroupSnapshot
 from conversation.membership import normalize_room_agent_set, resolve_membership_seed
 from conversation.membership_source import RepositoryRoomMembershipSeedSource
 from conversation.message_graph import (
@@ -38,11 +34,10 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
             "room_owner_name": "Owner",
             "room_created_at": created,
             "room_agent_set": {"a1": "Agent One"},
-            "processing_message_id": "m1",
         }
     )
 
-    assert info.room_id == "r1"
+    assert info.conversation_id == "r1"
     assert info.owner_id == "u1"
     assert info.owner_name == "Owner"
     assert info.created_at == created
@@ -50,14 +45,13 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
     assert dict(info.agent_set) == {"a1": "Agent One"}
     assert info.membership_origin == "manual"
     assert info.membership_origin_status == "manual"
-    assert info.processing_message_id == "m1"
 
 
 def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
     now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = create_room_doc(
-        room_id="r1",
+        conversation_id="r1",
         owner_id="u1",
         owner_name="Owner",
         room_name="Room",
@@ -83,7 +77,6 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
         "membership_origin_status": "seeded_never_edited",
         "source_group_id": "g1",
         "source_group_name": "Group",
-        "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
         "owner_product": "chat",
@@ -140,10 +133,10 @@ def test_user_message_doc_from_input_preserves_metadata():
     now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = user_message_doc_from_input(
-        room_id="r1",
+        conversation_id="r1",
         message_id="m1",
         message=UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             message_text="hello",
             sender_id="u1",
             sender_name="User",
@@ -163,7 +156,7 @@ def test_user_message_doc_from_input_preserves_metadata():
 
 
 @pytest.mark.asyncio
-async def test_membership_source_logs_agent_service_fallback():
+async def test_membership_source_logs_agent_registry_fallback():
     agent = SimpleNamespace(
         agent_id="a1",
         agent_card=SimpleNamespace(name="Agent One", description=None, url=None),
@@ -178,8 +171,8 @@ async def test_membership_source_logs_agent_service_fallback():
         membership_store=SimpleNamespace(
             get_all_active_agents=AsyncMock(return_value=[agent])
         ),
-        agent_service_adapter=SimpleNamespace(
-            get_agents_with_conditions=AsyncMock(side_effect=RuntimeError("boom"))
+        agent_registry=SimpleNamespace(
+            list_visible_agents=AsyncMock(side_effect=RuntimeError("boom"))
         ),
     )
 
@@ -191,7 +184,7 @@ async def test_membership_source_logs_agent_service_fallback():
 
 
 def test_membership_source_warns_for_missing_critical_agent_fields():
-    agent = SimpleNamespace(agent_id="a1", agent_card=None)
+    agent = SimpleNamespace(agent_id="a1", agent_card=None, is_public=True)
 
     with patch("conversation.membership_source.logger", create=True) as logger:
         info = RepositoryRoomMembershipSeedSource.agent_info_from_record(agent)
@@ -248,7 +241,7 @@ def test_message_graph_sort_thread_and_status_payload_helpers():
 
 
 def test_saved_group_snapshot_dto_fields_and_runtime_protocol_export():
-    from common.protocols import RoomMembershipSeedSource
+    from conversation.membership import RoomMembershipSeedSource
 
     snapshot = SavedAgentGroupSnapshot(
         group_id="g1",
@@ -427,3 +420,15 @@ class _FakeMembershipSource:
     async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]:
         self.list_current_agents_calls.append(user_id)
         return list(self.current_agents)
+
+
+@pytest.mark.asyncio
+async def test_membership_source_lists_active_visible_agents_from_registry():
+    info = AgentInfo(agent_id="a1", name="Agent One")
+    registry = SimpleNamespace(list_visible_agents=AsyncMock(return_value=[info]))
+    source = RepositoryRoomMembershipSeedSource(agent_registry=registry)
+
+    assert await source.list_current_agents("owner") == [info]
+    registry.list_visible_agents.assert_awaited_once_with(
+        user_id="owner", active_only=True
+    )

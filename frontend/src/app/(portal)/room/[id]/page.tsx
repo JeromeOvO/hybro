@@ -22,7 +22,7 @@ import { chatModeToExecutionMode, roomDefaultToChatMode } from '@/lib/types/chat
 
 export default function RoomChatPage() {
   const params = useParams()
-  const roomId = params.id as string
+  const conversationId = params.id as string
   const { user, isLoaded } = useUser()
   const { getToken } = useAuth()
   // Ref to track if initial message has been sent
@@ -54,7 +54,7 @@ export default function RoomChatPage() {
     // Supervisor mode (from room extend_info)
     supervisorMode: roomSupervisorMode,
   } = useRoomWebhook({
-    roomId,
+    conversationId,
     userId: user?.id,
     userName: user?.firstName || user?.username || 'User',
     getToken
@@ -62,14 +62,14 @@ export default function RoomChatPage() {
 
   // Room agent count
 
-  // Sync local chat mode from room data (re-syncs when roomId changes)
+  // Sync local chat mode from room data (re-syncs when conversationId changes)
   const lastSyncedRoomRef = useRef<string | null>(null)
   useEffect(() => {
-    if (room && lastSyncedRoomRef.current !== roomId) {
-      lastSyncedRoomRef.current = roomId
+    if (room && lastSyncedRoomRef.current !== conversationId) {
+      lastSyncedRoomRef.current = conversationId
       setLocalChatMode(roomDefaultToChatMode(roomSupervisorMode))
     }
-  }, [room, roomId, roomSupervisorMode])
+  }, [room, conversationId, roomSupervisorMode])
 
   // Room setting is only the UI default; every send carries its own mode.
   const effectiveChatMode = localChatMode ?? roomDefaultToChatMode(roomSupervisorMode)
@@ -79,9 +79,7 @@ export default function RoomChatPage() {
   // room_team with room_default routing; All Agents is reserved for broadcast.
   const roomAgentEntries = Object.entries(room?.room_agent_set || {})
   const hasRoomAgents = roomAgentEntries.length > 0
-  const roomDefaultTeamId = room?.source_group_id
-    ?? room?.applied_from_group
-    ?? undefined
+  const roomDefaultTeamId = room?.source_group_id ?? undefined
   const manualRoomLabel = !roomDefaultTeamId && hasRoomAgents
     ? (roomAgentEntries.length === 1
       ? roomAgentEntries[0][1]
@@ -99,7 +97,7 @@ export default function RoomChatPage() {
     defaultTargetMode: hasRoomAgents
       ? { message_target_mode: 'room_default' }
       : { message_target_mode: 'all_agents' },
-    roomId,
+    conversationId,
   })
 
   // Set an explicit override from local or pending state (runs once per room).
@@ -109,7 +107,7 @@ export default function RoomChatPage() {
       initialGroupSetRef.current = true
 
       // A local selector override is independent from the immutable pending request.
-      const localStorageKey = `room-${roomId}-override-group`
+      const localStorageKey = `room-${conversationId}-override-group`
       const localStorageOverride = localStorage.getItem(localStorageKey)
       const localStorageOverrideName = localStorage.getItem(`${localStorageKey}-name`)
 
@@ -117,7 +115,7 @@ export default function RoomChatPage() {
         gm.handleGroupChange(localStorageOverride, localStorageOverrideName ?? undefined)
       }
     }
-  }, [room, roomId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [room, conversationId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check for and send initial message from chat page (via Zustand store)
   useEffect(() => {
@@ -125,7 +123,7 @@ export default function RoomChatPage() {
       return
     }
 
-    const pendingData = useRoomUiStore.getState().consumePendingRoomData(roomId)
+    const pendingData = useRoomUiStore.getState().consumePendingRoomData(conversationId)
     if (!pendingData) {
       return
     }
@@ -152,11 +150,11 @@ export default function RoomChatPage() {
       clientRequestId: pendingData.clientRequestId,
     }).then((success) => {
       if (!success) {
-        useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
+        useRoomUiStore.getState().setPendingRoomData(conversationId, pendingData)
         initialMessageSentRef.current = false
       }
     })
-  }, [room, loading, roomId, user?.id, sendUserMessage])
+  }, [room, loading, conversationId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string, dispatchInput: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
@@ -179,14 +177,14 @@ export default function RoomChatPage() {
   const agentList = useMemo(() => {
     return gm.availableAgents.map(agent => ({
       id: agent.agent_id,
-      name: agent.agent_card.name,
-      iconUrl: agent.agent_card.iconUrl,
+      name: agent.name,
+      iconUrl: agent.icon_url ?? undefined,
     }))
   }, [gm.availableAgents])
 
   // Build TimelineAdapter for RoomPageShell
   const timelineAdapter: TimelineAdapter = {
-    roomId,
+    conversationId,
     getToken,
     onSendMessage: handleSendMessage,
     onCancelProcessing: cancelProcessing,

@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from common.dto import RoomTimelineEntry, RoomTimelinePage
-from common.protocols import AttachmentMetadataReader
 from common.types import Task, TaskState, TaskStatus
-from conversation.runtime import ConversationRuntime
+from conversation.attachments import AttachmentMetadataReader
+from conversation.dto import RoomTimelineEntry, RoomTimelinePage
+from conversation.message_reads import RoomMessageReader
 from conversation.timeline_projection import (
     HITLProjectionReader,
     RoomTimelineProjector,
@@ -48,7 +48,7 @@ def _projector(*, hitl=None, attachment=None) -> RoomTimelineProjector:
 
 
 def test_runtime_timeline_method_keeps_only_query_and_response_orchestration():
-    source = inspect.getsource(ConversationRuntime.inquiry_room_messages_by_room_id)
+    source = inspect.getsource(RoomMessageReader.inquiry_room_messages_by_room_id)
 
     assert "decode_timeline_cursor" in source
     assert "get_timeline_page" in source
@@ -87,7 +87,9 @@ def test_container_binds_narrow_timeline_projector_dependencies():
 
 def test_missing_projector_fails_fast():
     with pytest.raises(RuntimeError, match="timeline projector"):
-        ConversationRuntime()._require_timeline_projector()
+        RoomMessageReader(
+            facade=None, timeline_projector=None
+        )._require_timeline_projector()
 
 
 async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable():
@@ -99,7 +101,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
         file_url="PRIVATE_OLD_URL",
     )
     first = RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="user-1",
         message_content=MessageContent(
             message_text="first",
@@ -107,7 +109,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
         ),
     )
     second = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="agent-1",
         message_content=MessageContent(message_text="second"),
@@ -138,7 +140,7 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
 
 async def test_agent_projection_carries_durable_public_agent_name():
     agent = RoomAgentMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-1",
         agent_id="private-agent-id",
         message_content=MessageContent(message_text="done"),
@@ -165,7 +167,7 @@ async def test_missing_room_attachment_drops_existing_untrusted_url_without_fall
         file_url="PRIVATE_UNTRUSTED_URL",
     )
     user = RoomUserMessage(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="user-1",
         message_content=MessageContent(attachments=[attachment]),
     )
@@ -185,7 +187,7 @@ def _hitl_message() -> tuple[RoomAgentMessage, Task]:
     )
     return (
         RoomAgentMessage(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="agent-1",
             agent_id="agent-1",
             message_content=MessageContent(message_task=task),

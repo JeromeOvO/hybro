@@ -4,7 +4,7 @@ import json
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from common.dto import (
     AgentMessageFinal,
@@ -35,20 +35,6 @@ from delivery.sse.manager import SSETransportImpl
 from delivery.translator import to_sse_frame
 
 
-class ProjectionSettlementReader(Protocol):
-    """Reads terminal-fact settlement from the private run fact log.
-
-    Defense-in-depth for the Room Stream Snapshot plan's terminal gating
-    (§4 / §5): the publisher asks this reader whether the fact behind a
-    terminal frame still has durable side-effect steps in ``{pending,
-    running}`` before persisting/emitting it. The primary gate remains the
-    two-phase ``TerminalProjectionFinalizer``; this reader only blocks when
-    the projection has not settled.
-    """
-
-    async def is_terminal_settled(self, event: DeliveryEvent) -> bool: ...
-
-
 def _frame_data_digest(frame_data: dict[str, Any]) -> str:
     canonical = json.dumps(frame_data, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -66,7 +52,6 @@ class EventPublisherImpl:
         instance_id: str,
         metrics: MetricsCollector | None = None,
         room_events: RoomEventStore | None = None,
-        projection_settlement: ProjectionSettlementReader | None = None,
     ) -> None:
         self.sse_transport = sse_transport
         self.event_bus = event_bus
@@ -76,7 +61,6 @@ class EventPublisherImpl:
         self.instance_id = instance_id
         self._metrics = metrics or NoopMetricsCollector()
         self.room_events = room_events
-        self.projection_settlement = projection_settlement
         # Publisher-maintained per-stream monotonic counters used to build
         # deterministic idempotency keys for non-terminal events (plan §5).
         # Keyed by entity/stream identity, never a DTO field or caller kwarg.
@@ -86,7 +70,7 @@ class EventPublisherImpl:
         )
 
     async def emit(self, event: DeliveryEvent) -> bool:
-        """Compatibility API: only a fresh confirmed delivery returns ``True``."""
+        """Return ``True`` only for a fresh, transport-accepted delivery."""
         status, _ = await self.emit_checked_identified(event)
         return status == DeliveryEmitStatus.DELIVERED
 
@@ -117,28 +101,8 @@ class EventPublisherImpl:
                     {"event_type": event.event_type},
                 )
                 return DeliveryEmitStatus.ALREADY_DELIVERED, None
-            if reservation_status is None and not await self._should_deliver_typed(
-                event
-            ):
-                self._increment(
-                    "hybro_delivery_events_deduplicated_total",
-                    {"event_type": event.event_type},
-                )
-                return DeliveryEmitStatus.DEDUPLICATED, None
 
             timestamp = event.timestamp or self._now()
-
-            # ── Terminal settlement gate (defense-in-depth) ──────────────
-            # A terminal run_event/processing_status frame is only emitted once
-            # every durable side-effect step of its fact is completed or
-            # blocked. The two-phase finalizer is the primary gate; a blocked
-            # emit here returns FAILED so the finalizer retries the step.
-            settlement_state = await self._settlement_state(event)
-            if settlement_state == "pending" and self._settlement_gate_blocked(event):
-                if reservation is not None:
-                    await self._release_typed_delivery(event, reservation)
-                    reservation = None
-                return DeliveryEmitStatus.FAILED, None
 
             frame = to_sse_frame(event, timestamp=timestamp)
             trace_id = getattr(event, "trace_id", None) or get_current_trace_id()
@@ -147,7 +111,6 @@ class EventPublisherImpl:
                 frame,
                 trace_id=trace_id,
                 parent_event_id=parent_event_id,
-                settlement_state=settlement_state,
                 timestamp=timestamp,
             )
         except Exception as exc:
@@ -194,7 +157,6 @@ class EventPublisherImpl:
         *,
         trace_id: str | None,
         parent_event_id: str | None,
-        settlement_state: str | None,
         timestamp: datetime,
     ) -> tuple[dict[str, Any], int | None, str | None]:
         """Persist-before-broadcast (§5): write the room_events doc BEFORE the
@@ -208,16 +170,15 @@ class EventPublisherImpl:
         if self.room_events is None:
             return frame, None, None
         frame_data = dict(frame["data"])
-        persist_state = settlement_state or "settled"
         append = await self.room_events.append(
-            room_id=event.room_id,
+            conversation_id=event.conversation_id,
             kind=frame["type"],
             payload_public=frame_data,
             event_id=self._persisted_event_id(event),
             idempotency_key=self._idempotency_key(event, frame_data),
             parent_event_id=parent_event_id,
             run_id=getattr(event, "run_id", None),
-            persist_state=persist_state,
+            persist_state="settled",
             ts=timestamp,
         )
         if not append.persisted:
@@ -231,42 +192,6 @@ class EventPublisherImpl:
         )
         self._inject_typed_trace_id(frame, trace_id)
         return frame, append.room_seq, append.room_event_id
-
-    async def _settlement_state(self, event: DeliveryEvent) -> str | None:
-        """Resolve the persist_state label for terminal-typed events.
-
-        Returns ``"settled"`` / ``"pending"`` when a settlement reader is
-        bound and the event is terminal-typed; ``None`` otherwise (persistence
-        then defaults to ``settled``).
-        """
-
-        if self.projection_settlement is None:
-            return None
-        if not self._is_terminal_typed(event):
-            return None
-        try:
-            settled = await self.projection_settlement.is_terminal_settled(event)
-        except Exception:
-            # Reader failures must never dead-letter the emit: fall back to
-            # the settled label and let the finalizer gate hold.
-            return "settled"
-        return "settled" if settled else "pending"
-
-    def _settlement_gate_blocked(self, event: DeliveryEvent) -> bool:
-        """True when a terminal run_event/processing_status frame must wait.
-
-        Only the two gated kinds are blocked here; terminal task_update frames
-        (descendant_cleanup / system_task_delivery) remain gated by their
-        per-step dependencies, not by this check.
-        """
-
-        if self.projection_settlement is None:
-            return False
-        if isinstance(event, RunEventNotification) and self._is_terminal_typed(event):
-            return True
-        if isinstance(event, ProcessingStatusEvent) and self._is_terminal_typed(event):
-            return True
-        return False
 
     async def _deliver_with_reservation(
         self,
@@ -287,7 +212,7 @@ class EventPublisherImpl:
         )
         try:
             delivered = await self._deliver_frontend(
-                event.room_id,
+                event.conversation_id,
                 frame,
                 event,
                 "sse_fanout",
@@ -316,7 +241,7 @@ class EventPublisherImpl:
 
     async def _deliver_frontend(
         self,
-        room_id: str,
+        conversation_id: str,
         frame: dict[str, Any],
         payload: Any,
         failure_stage: str,
@@ -326,7 +251,7 @@ class EventPublisherImpl:
         local_delivered = False
         try:
             local_count = await self.sse_transport.broadcast_frame_to_room(
-                room_id, frame
+                conversation_id, frame
             )
             local_delivered = isinstance(local_count, int) and local_count > 0
         except Exception:
@@ -336,7 +261,7 @@ class EventPublisherImpl:
         with trace_id_context(trace_id):
             try:
                 remote_delivered = (
-                    await self.event_bus.publish_sse(room_id, frame)
+                    await self.event_bus.publish_sse(conversation_id, frame)
                 ) is True
             except Exception as exc:
                 await self._dead_letter(failure_stage, payload, exc)
@@ -347,35 +272,13 @@ class EventPublisherImpl:
     ) -> tuple[DeliveryReservationStatus | None, DeliveryReservation | None]:
         if not self._is_terminal_typed(event):
             return None, None
-        reserve = getattr(self.deduplicator, "reserve", None)
-        if not callable(reserve):
-            return None, None
-        reservation = await reserve(
-            room_id=event.room_id,
+        reservation = await self.deduplicator.reserve(
+            conversation_id=event.conversation_id,
             message_id=self._dedup_message_id(event),
             status=self._dedup_status(event),
             delivery_id=getattr(event, "delivery_id", None),
         )
         return reservation.status, reservation
-
-    async def _should_deliver_typed(self, event: DeliveryEvent) -> bool:
-        if self._is_terminal_typed(event):
-            try:
-                return await self.deduplicator.should_deliver(
-                    room_id=event.room_id,
-                    message_id=self._dedup_message_id(event),
-                    status=self._dedup_status(event),
-                    delivery_id=getattr(event, "delivery_id", None),
-                )
-            except TypeError as exc:
-                if "delivery_id" not in str(exc):
-                    raise
-                return await self.deduplicator.should_deliver(
-                    room_id=event.room_id,
-                    message_id=self._dedup_message_id(event),
-                    status=self._dedup_status(event),
-                )
-        return True
 
     async def _release_typed_delivery(
         self,
@@ -384,25 +287,13 @@ class EventPublisherImpl:
     ) -> None:
         if not self._is_terminal_typed(event):
             return
-        release = getattr(self.deduplicator, "release", None)
-        if release is None:
-            return
-        try:
-            await release(
-                room_id=event.room_id,
-                message_id=self._dedup_message_id(event),
-                status=self._dedup_status(event),
-                delivery_id=getattr(event, "delivery_id", None),
-                reservation=reservation,
-            )
-        except TypeError as exc:
-            if "delivery_id" not in str(exc) and "reservation" not in str(exc):
-                raise
-            await release(
-                room_id=event.room_id,
-                message_id=self._dedup_message_id(event),
-                status=self._dedup_status(event),
-            )
+        await self.deduplicator.release(
+            conversation_id=event.conversation_id,
+            message_id=self._dedup_message_id(event),
+            status=self._dedup_status(event),
+            delivery_id=getattr(event, "delivery_id", None),
+            reservation=reservation,
+        )
 
     def _is_terminal_typed(self, event: DeliveryEvent) -> bool:
         return (
@@ -467,19 +358,19 @@ class EventPublisherImpl:
         if self._is_terminal_typed(event):
             return (
                 getattr(event, "delivery_id", None)
-                or f"terminal:{event.room_id}:{self._dedup_message_id(event)}:"
+                or f"terminal:{event.conversation_id}:{self._dedup_message_id(event)}:"
                 f"{self._dedup_status(event)}"
             )
         if isinstance(event, HITLRequestEvent):
             interaction = event.interaction_id or event.message_id
             return (
-                f"hitl_request:{event.room_id}:{interaction}:"
+                f"hitl_request:{event.conversation_id}:{interaction}:"
                 f"{event.request_id}:{event.question_index}"
             )
         if isinstance(event, HITLResolvedEvent):
             interaction = event.interaction_id or event.message_id
             return (
-                f"hitl_response:{event.room_id}:{interaction}:"
+                f"hitl_response:{event.conversation_id}:{interaction}:"
                 f"{event.request_id}:{event.status}"
             )
         stable = self._persisted_event_id(event)
@@ -555,4 +446,4 @@ class EventPublisherImpl:
             return
 
 
-__all__ = ["EventPublisherImpl", "ProjectionSettlementReader"]
+__all__ = ["EventPublisherImpl"]

@@ -1,7 +1,7 @@
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import Request
@@ -12,17 +12,16 @@ def _deps(**overrides):
     from api_gateway.dependencies import APIGatewayDeps
 
     values = {
-        "agent_center": MagicMock(),
+        "agent_catalog": MagicMock(),
         "agent_service": MagicMock(),
         "agent_matcher": MagicMock(),
         "capability_issue_service": MagicMock(),
-        "agent_liveness_checker": AsyncMock(),
         "agent_group_store": MagicMock(),
         "file_storage": MagicMock(),
         "room_ownership_reader": MagicMock(),
         "hitl_manager": MagicMock(),
         "inspection_center": MagicMock(),
-        "room_center": MagicMock(),
+        "chat_rooms": MagicMock(),
         "room_store": MagicMock(),
         "agent_selection_service": MagicMock(),
         "execution_engine": MagicMock(),
@@ -46,16 +45,15 @@ def _request_with_state(**state_values):
 
 
 PROVIDER_FIELD_NAMES = [
-    ("get_agent_center", "agent_center"),
+    ("get_agent_catalog", "agent_catalog"),
     ("get_agent_service", "agent_service"),
     ("get_capability_issue_service", "capability_issue_service"),
-    ("get_agent_liveness_checker", "agent_liveness_checker"),
     ("get_agent_group_store", "agent_group_store"),
     ("get_file_storage", "file_storage"),
     ("get_room_ownership_reader", "room_ownership_reader"),
     ("get_hitl_manager", "hitl_manager"),
     ("get_inspection_center", "inspection_center"),
-    ("get_room_center", "room_center"),
+    ("get_chat_rooms", "chat_rooms"),
     ("get_room_store", "room_store"),
     ("get_agent_selection_service", "agent_selection_service"),
     ("get_execution_engine", "execution_engine"),
@@ -113,9 +111,9 @@ def test_bind_api_gateway_deps_rejects_incomplete_bindings():
     from api_gateway.dependencies import bind_api_gateway_deps
 
     app = SimpleNamespace(state=SimpleNamespace())
-    deps = _deps(room_center=None)
+    deps = _deps(chat_rooms=None)
 
-    with pytest.raises(RuntimeError, match="room_center"):
+    with pytest.raises(RuntimeError, match="chat_rooms"):
         bind_api_gateway_deps(app, deps)
     assert not hasattr(app.state, "api_gateway_deps")
 

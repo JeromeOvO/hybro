@@ -1,17 +1,19 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
 from api_gateway.dependencies import (
     get_agent_selection_service,
+    get_chat_rooms,
     get_execution_engine,
-    get_room_center,
     get_room_store,
 )
 from api_gateway.errors import require_chat_room
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from chat.protocols import RoomCenterCompatibility
+from chat.protocols import ChatRooms
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
 from common.idempotency import (
@@ -21,10 +23,6 @@ from common.idempotency import (
 from common.protocols import ExecutionEngine, RoomRouteReader
 from common.utils.logger import get_logger
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
-from models.request import (
-    RoomCenterRoomMessageRequest,
-    RoomCenterRoomSettingRequest,
-)
 from models.response import (
     ActiveRunRef,
     RoomCenterActiveRunsResponse,
@@ -43,7 +41,26 @@ class RoomHistoryUpdate(BaseModel):
 
 
 class PinnedRoomOrderUpdate(BaseModel):
-    room_ids: list[str] = Field(max_length=100)
+    conversation_ids: list[str] = Field(max_length=100)
+
+
+class CreateRoomBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    room_name: str | None = None
+    room_owner_name: str | None = None
+    extend_info: dict | None = None
+    membership_seed_input: (
+        Literal["manual", "saved_group", "all_current_agents"] | None
+    ) = None
+    room_agent_ids: list[str] | None = None
+    seed_group_id: str | None = None
+    seed_all_current_agents: bool | None = None
+
+
+class AgentSuggestionBody(BaseModel):
+    message_text: str = ""
+    top_k: int = 3
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -66,7 +83,7 @@ def _message_text_len(message: dict | None) -> int:
     return len(text) if isinstance(text, str) else 0
 
 
-def _raise_room_center_error(response) -> None:
+def _raise_room_error(response) -> None:
     if response.success:
         return
     raise HTTPException(
@@ -76,14 +93,16 @@ def _raise_room_center_error(response) -> None:
 
 
 async def _active_run_refs_for_room(
-    room_id: str,
+    conversation_id: str,
     engine: ExecutionEngine,
 ) -> list[ActiveRunRef]:
     try:
-        runs = await engine.get_runs_for_room(room_id)
+        runs = await engine.get_runs_for_room(conversation_id)
     except Exception:
         logger.warning(
-            "active-run lookup failed for room_id=%s", room_id, exc_info=True
+            "active-run lookup failed for conversation_id=%s",
+            conversation_id,
+            exc_info=True,
         )
         return []
     return [_run_info_to_active_run_ref(run) for run in runs]
@@ -132,7 +151,7 @@ def _extract_attachments(request_data: dict, message: dict | None):
 
 
 async def verify_room_ownership(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser,
     store: RoomRouteReader,
 ) -> None:
@@ -140,18 +159,18 @@ async def verify_room_ownership(
     Verify that the current user owns the specified room.
     Raises HTTPException if the room doesn't exist or user is not the owner.
     """
-    await _get_verified_room(room_id, user, store)
+    await _get_verified_room(conversation_id, user, store)
 
 
 async def _get_verified_room(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser,
     store: RoomRouteReader,
 ):
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id is required")
 
-    room = await store.get_room_by_room_id(room_id)
+    room = await store.get_room_by_room_id(conversation_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -166,10 +185,10 @@ async def _get_verified_room(
 
 async def _persist_room_mode_if_changed(
     *,
-    room_id: str,
+    conversation_id: str,
     room,
     mode: str,
-    center: RoomCenterCompatibility,
+    rooms: ChatRooms,
 ) -> None:
     room_extend_info = getattr(room, "extend_info", None)
     extend_info = room_extend_info if isinstance(room_extend_info, dict) else {}
@@ -178,8 +197,8 @@ async def _persist_room_mode_if_changed(
     if current_uses_supervisor == requested_uses_supervisor:
         return
 
-    updated = await center.update_room_default_mode(
-        room_id,
+    updated = await rooms.update_room_default_mode(
+        conversation_id,
         use_supervisor=requested_uses_supervisor,
     )
     if not updated:
@@ -189,139 +208,86 @@ async def _persist_room_mode_if_changed(
         )
 
 
-@router.post("/roomCenter/createNewRoom")
+@router.post("/rooms")
 async def create_new_room(
-    request: Request,
+    payload: CreateRoomBody,
     user: ClerkUser = Depends(get_current_user),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    request_data = await request.json()
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_name=request_data.get("room_name"),
-        room_owner_id=user.user_id,
-        room_owner_name=request_data.get("room_owner_name"),
-        extend_info=request_data.get("extend_info"),
-        requesting_user_id=user.user_id,
-        # Legacy fields (accepted during rollout)
-        room_agent_set=request_data.get("room_agent_set"),
-        applied_from_group=request_data.get("applied_from_group"),
-        # Canonical membership write input
-        membership_seed_input=request_data.get("membership_seed_input"),
-        room_agent_ids=request_data.get("room_agent_ids"),
-        seed_group_id=request_data.get("seed_group_id"),
-        seed_all_current_agents=request_data.get("seed_all_current_agents"),
+    return await rooms.create_room(
+        owner_id=user.user_id,
+        owner_name=payload.room_owner_name,
+        room_name=payload.room_name,
+        extend_info=payload.extend_info,
+        membership_seed_input=payload.membership_seed_input,
+        room_agent_ids=payload.room_agent_ids,
+        seed_group_id=payload.seed_group_id,
+        seed_all_current_agents=payload.seed_all_current_agents,
     )
-    room_center_response = await center.create_new_room(room_center_request)
-    return room_center_response
 
 
-@router.post("/roomCenter/inquiryRoomSetting")
+@router.get("/rooms/{conversation_id}")
 async def inquiry_room_setting(
-    request: Request,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
     """Get room settings - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-
     # Verify user owns the room
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
 
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id, requesting_user_id=user.user_id
-    )
-    room_center_response = await center.inquiry_room_setting(room_center_request)
-    if room_center_response.success and room_id:
-        room_center_response.active_runs = await _active_run_refs_for_room(
-            room_id,
-            engine,
-        )
-    return room_center_response
+    response = await rooms.get_room(conversation_id)
+    if response.success and conversation_id:
+        response.active_runs = await _active_run_refs_for_room(conversation_id, engine)
+    return response
 
 
-@router.post("/roomCenter/inquiryActiveRuns")
+@router.get("/rooms/{conversation_id}/active-runs")
 async def inquiry_active_runs(
-    request: Request,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
-    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
-    """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-    trigger_message_id = request_data.get("trigger_message_id")
-
-    await verify_room_ownership(room_id, user, store)
-
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id,
-        requesting_user_id=user.user_id,
-        trigger_message_id=trigger_message_id,
-    )
-    active_runs = await _active_run_refs_for_room(room_id, engine)
-
-    turn_completion_kind = None
-    trigger_is_active = any(
-        run.trigger_message_id == trigger_message_id for run in active_runs
-    )
-    if trigger_message_id and not trigger_is_active:
-        try:
-            room_side_response = await center.inquiry_active_runs(room_center_request)
-        except Exception:
-            logger.warning(
-                "turn-completion lookup failed for room_id=%s trigger_message_id=%s",
-                room_id,
-                trigger_message_id,
-                exc_info=True,
-            )
-        else:
-            if room_side_response.success:
-                turn_completion_kind = room_side_response.turn_completion_kind
+    """List non-terminal orchestration runs for a room — same auth as room settings."""
+    await verify_room_ownership(conversation_id, user, store)
 
     return RoomCenterActiveRunsResponse(
-        room_id=room_id,
-        active_runs=active_runs,
-        turn_completion_kind=turn_completion_kind,
+        conversation_id=conversation_id,
+        active_runs=await _active_run_refs_for_room(conversation_id, engine),
         success=True,
         error=None,
         status_code=200,
     )
 
 
-@router.get("/roomCenter/history", response_model=RoomHistoryResponse)
+@router.get("/rooms", response_model=RoomHistoryResponse)
 async def get_room_history(
     user: ClerkUser = Depends(get_current_user),
     engine: ExecutionEngine = Depends(get_execution_engine),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    response = await center.inquiry_room_history_by_owner_id(
-        RoomCenterRoomSettingRequest(
-            room_owner_id=user.user_id,
-            requesting_user_id=user.user_id,
-        )
-    )
-    _raise_room_center_error(response)
-    rooms = list(response.room_list or [])
+    response = await rooms.list_room_history(user.user_id)
+    _raise_room_error(response)
+    history = list(response.room_list or [])
     latest_runs = await engine.get_latest_runs_for_rooms(
-        [room.room_id for room in rooms if room.room_id]
+        [room.conversation_id for room in history if room.conversation_id]
     )
     allowed_statuses = {"queued", "processing", "awaiting_input"}
     items = []
-    for room in rooms:
-        if not room.room_id:
+    for room in history:
+        if not room.conversation_id:
             continue
-        run = latest_runs.get(room.room_id)
+        run = latest_runs.get(room.conversation_id)
         state = str(
             getattr(getattr(run, "state", None), "value", getattr(run, "state", ""))
         )
         status = state if state in allowed_statuses else "idle"
         items.append(
             RoomHistoryItem(
-                room_id=room.room_id,
+                conversation_id=room.conversation_id,
                 title=room.room_name or "Unnamed Room",
                 last_activity_at=room.last_activity_at or room.room_created_at,
                 is_pinned=room.is_pinned,
@@ -332,15 +298,15 @@ async def get_room_history(
     return RoomHistoryResponse(items=items)
 
 
-@router.patch("/roomCenter/history/{room_id}", response_model=RoomHistoryItem)
+@router.patch("/rooms/{conversation_id}", response_model=RoomHistoryItem)
 async def update_room_history_item(
-    room_id: str,
+    conversation_id: str,
     payload: RoomHistoryUpdate,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
     if payload.title is None and payload.is_pinned is None:
         raise HTTPException(status_code=400, detail="No history fields supplied")
@@ -348,25 +314,14 @@ async def update_room_history_item(
         title = payload.title.strip()
         if not title:
             raise HTTPException(status_code=400, detail="Room title cannot be empty")
-        response = await center.update_room_name(
-            RoomCenterRoomSettingRequest(
-                room_id=room_id,
-                room_name=title,
-                requesting_user_id=user.user_id,
-            )
-        )
-        _raise_room_center_error(response)
+        response = await rooms.rename_room(conversation_id, title)
+        _raise_room_error(response)
         room = response.room or room
     if payload.is_pinned is not None:
         pin_order = None
         if payload.is_pinned:
-            listed = await center.inquiry_rooms_by_room_owner_id(
-                RoomCenterRoomSettingRequest(
-                    room_owner_id=user.user_id,
-                    requesting_user_id=user.user_id,
-                )
-            )
-            _raise_room_center_error(listed)
+            listed = await rooms.list_rooms_for_owner(user.user_id)
+            _raise_room_error(listed)
             pinned_rooms = [r for r in listed.room_list or [] if r.is_pinned]
             if len(pinned_rooms) >= 100:
                 raise HTTPException(
@@ -374,18 +329,15 @@ async def update_room_history_item(
                     detail="At most 100 conversations can be pinned",
                 )
             pin_order = float(1 + max([r.pin_order or 0 for r in pinned_rooms] or [0]))
-        response = await center.update_room_history_fields(
-            RoomCenterRoomSettingRequest(
-                room_id=room_id,
-                is_pinned=payload.is_pinned,
-                pin_order=pin_order,
-                requesting_user_id=user.user_id,
-            )
+        response = await rooms.update_history_fields(
+            conversation_id,
+            is_pinned=payload.is_pinned,
+            pin_order=pin_order,
         )
-        _raise_room_center_error(response)
+        _raise_room_error(response)
         room = response.room or room
     return RoomHistoryItem(
-        room_id=room_id,
+        conversation_id=conversation_id,
         title=room.room_name or "Unnamed Room",
         last_activity_at=room.last_activity_at or room.room_created_at,
         is_pinned=room.is_pinned,
@@ -394,111 +346,68 @@ async def update_room_history_item(
     )
 
 
-@router.put("/roomCenter/history/pinned-order")
+@router.put("/rooms/pinned-order")
 async def reorder_pinned_rooms(
     payload: PinnedRoomOrderUpdate,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    if len(payload.room_ids) != len(set(payload.room_ids)):
+    if len(payload.conversation_ids) != len(set(payload.conversation_ids)):
         raise HTTPException(
             status_code=400, detail="Duplicate room ids are not allowed"
         )
 
-    listed = await center.inquiry_rooms_by_room_owner_id(
-        RoomCenterRoomSettingRequest(
-            room_owner_id=user.user_id,
-            requesting_user_id=user.user_id,
-        )
-    )
-    _raise_room_center_error(listed)
+    listed = await rooms.list_rooms_for_owner(user.user_id)
+    _raise_room_error(listed)
     pinned_room_ids = {
-        room.room_id
+        room.conversation_id
         for room in listed.room_list or []
-        if room.is_pinned and room.room_id
+        if room.is_pinned and room.conversation_id
     }
-    if set(payload.room_ids) != pinned_room_ids:
+    if set(payload.conversation_ids) != pinned_room_ids:
         raise HTTPException(
             status_code=409,
             detail="Pinned order must include every pinned room exactly once",
         )
 
-    for room_id in payload.room_ids:
-        room = await _get_verified_room(room_id, user, store)
+    for conversation_id in payload.conversation_ids:
+        room = await _get_verified_room(conversation_id, user, store)
         require_chat_room(room)
         if not room.is_pinned:
             raise HTTPException(
                 status_code=409, detail="Only pinned rooms can be reordered"
             )
-    for index, room_id in enumerate(payload.room_ids):
-        response = await center.update_room_history_fields(
-            RoomCenterRoomSettingRequest(
-                room_id=room_id,
-                is_pinned=True,
-                pin_order=float(index + 1),
-                requesting_user_id=user.user_id,
-            )
+    for index, conversation_id in enumerate(payload.conversation_ids):
+        response = await rooms.update_history_fields(
+            conversation_id,
+            is_pinned=True,
+            pin_order=float(index + 1),
         )
-        _raise_room_center_error(response)
+        _raise_room_error(response)
     return {"success": True}
 
 
-@router.delete("/roomCenter/history/{room_id}")
+@router.delete("/rooms/{conversation_id}")
 async def delete_room_history_item(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
-    response = await center.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(
-            room_id=room_id,
-            requesting_user_id=user.user_id,
-        )
-    )
-    _raise_room_center_error(response)
+    response = await rooms.delete_room(conversation_id, requesting_user_id=user.user_id)
+    _raise_room_error(response)
     return {"success": True}
-
-
-@router.post("/roomCenter/updateRoomAgentSet")
-async def update_room_agent_set(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-    store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
-):
-    """Update room agent set - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-
-    room = await _get_verified_room(room_id, user, store)
-    require_chat_room(room)
-
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id,
-        requesting_user_id=user.user_id,
-        # Legacy fields (accepted during rollout)
-        room_agent_set=request_data.get("room_agent_set"),
-        applied_from_group=request_data.get("applied_from_group"),
-        # Canonical membership write input
-        membership_seed_input=request_data.get("membership_seed_input"),
-        room_agent_ids=request_data.get("room_agent_ids"),
-        seed_group_id=request_data.get("seed_group_id"),
-        seed_all_current_agents=request_data.get("seed_all_current_agents"),
-    )
-    room_center_response = await center.update_room_agent_set(room_center_request)
-    return room_center_response
 
 
 @router.get(
-    "/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail",
     response_model=None,
 )
 async def get_canonical_agent_call_detail(
-    room_id: str,
+    conversation_id: str,
     run_id: str,
     public_call_id: str,
     request: Request,
@@ -507,14 +416,14 @@ async def get_canonical_agent_call_detail(
 ):
     """Return authenticated private Tool output by opaque canonical identity."""
 
-    await verify_room_ownership(room_id, user, store)
+    await verify_room_ownership(conversation_id, user, store)
     if not public_call_id.startswith("inv_"):
         raise HTTPException(status_code=404, detail="Agent call output not found")
     reader = getattr(request.app.state, "canonical_agent_call_detail_reader", None)
     if reader is None:
         raise HTTPException(status_code=503, detail="Agent call detail is unavailable")
     detail = await reader.get(
-        room_id=room_id,
+        conversation_id=conversation_id,
         run_id=run_id,
         public_call_id=public_call_id,
     )
@@ -523,39 +432,33 @@ async def get_canonical_agent_call_detail(
     return detail
 
 
-@router.post("/roomCenter/inquiryRoomMessagesByRoomId")
+@router.get("/rooms/{conversation_id}/messages")
 async def inquiry_room_messages(
-    request: Request,
+    conversation_id: str,
+    limit: int | None = None,
+    cursor: str | None = None,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ):
     """Read room messages - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
 
-    # Authorization intentionally precedes pagination validation so an invalid
-    # cursor cannot reveal whether another user's room has timeline data.
-    await verify_room_ownership(room_id, user, store)
+    # Authorization precedes cursor and limit-range validation so an invalid
+    # cursor cannot reveal whether another user's room has timeline data. A
+    # non-integer limit is rejected by FastAPI first; that reveals nothing.
+    await verify_room_ownership(conversation_id, user, store)
 
-    room_center_request = RoomCenterRoomMessageRequest(
-        room_id=room_id,
-        limit=request_data.get("limit"),
-        cursor=request_data.get("cursor"),
-    )
-    room_center_response = await center.inquiry_room_messages_by_room_id(
-        room_center_request
-    )
-    return room_center_response
+    return await rooms.read_messages(conversation_id, limit=limit, cursor=cursor)
 
 
-@router.post("/roomCenter/sendMessage")
+@router.post("/rooms/{conversation_id}/messages")
 async def send_message(
+    conversation_id: str,
     request: Request,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
-    center: RoomCenterCompatibility = Depends(get_room_center),
+    rooms: ChatRooms = Depends(get_chat_rooms),
 ) -> RoomCenterUserMessageResponse:
     """Send message to room - PROTECTED (requires room ownership)
 
@@ -569,7 +472,6 @@ async def send_message(
     Processing happens atomically to prevent orphaned messages on page refresh.
     """
     request_data = await request.json()
-    room_id = request_data.get("room_id")
     message = request_data.get("message")
     client_request_id = request_data.get("client_request_id")
     mode = request_data.get("mode")
@@ -599,29 +501,6 @@ async def send_message(
             error=(
                 "client_request_id exceeds maximum length of "
                 f"{MAX_CLIENT_REQUEST_ID_LENGTH} characters"
-            ),
-            status_code=400,
-        )
-
-    legacy_fields = {
-        "selected_agent_ids",
-        "candidate_scope_mode",
-        "candidate_scope_group_id",
-        "message_target_mode",
-        "target_group_id",
-        "target_group",
-        "target_agent_ids",
-        "mentioned_agent_ids",
-    }
-    supplied_legacy_fields = sorted(legacy_fields.intersection(request_data))
-    if supplied_legacy_fields:
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error=(
-                "legacy targeting fields are no longer supported; use agent_scope: "
-                + ", ".join(supplied_legacy_fields)
             ),
             status_code=400,
         )
@@ -714,7 +593,7 @@ async def send_message(
             status_code=400,
         )
 
-    room = await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(conversation_id, user, store)
     require_chat_room(room)
     mentioned_agent_ids = normalized_scope.get("agent_ids")
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
@@ -724,7 +603,7 @@ async def send_message(
     logger.info(
         "gateway_send_message_received",
         extra={
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "client_request_id": client_request_id,
             "mode": mode,
             "scope_source": source,
@@ -740,7 +619,7 @@ async def send_message(
         related_message_id = message.get("related_message_id") or ""
 
     execution_request = ExecutionRequest(
-        room_id=room_id,
+        conversation_id=conversation_id,
         sender_id=user.user_id,
         sender_name=getattr(user, "username", None) or getattr(user, "email", None),
         message=jsonable_encoder(message),
@@ -752,16 +631,16 @@ async def send_message(
         agent_scope=normalized_scope,
     )
     await _persist_room_mode_if_changed(
-        room_id=room_id,
+        conversation_id=conversation_id,
         room=room,
         mode=mode,
-        center=center,
+        rooms=rooms,
     )
     ack = await engine.execute(execution_request)
     logger.info(
         "gateway_send_message_completed",
         extra={
-            "room_id": room_id,
+            "conversation_id": conversation_id,
             "message_id": ack.message_id,
             "user_message_id": ack.message_id,
             "client_request_id": client_request_id,
@@ -777,7 +656,7 @@ async def send_message(
         logger.info(
             "gateway_send_message_background_scheduled",
             extra={
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "message_id": ack.message_id,
                 "user_message_id": ack.message_id,
                 "client_request_id": client_request_id,
@@ -788,9 +667,9 @@ async def send_message(
     return RoomCenterUserMessageResponse(**ack.model_dump())
 
 
-@router.post("/roomCenter/suggestAgents")
+@router.post("/agent-suggestions")
 async def suggest_agents(
-    request: Request,
+    payload: AgentSuggestionBody,
     user: ClerkUser = Depends(get_current_user),
     selection_service: AgentSuggestionService = Depends(get_agent_selection_service),
 ):
@@ -798,9 +677,8 @@ async def suggest_agents(
     Suggest agents for a message based on content analysis.
     Used for Auto mode to preview which agents will be selected.
     """
-    request_data = await request.json()
-    message_text = request_data.get("message_text", "")
-    top_k = request_data.get("top_k", 3)
+    message_text = payload.message_text
+    top_k = payload.top_k
 
     if not message_text:
         return {

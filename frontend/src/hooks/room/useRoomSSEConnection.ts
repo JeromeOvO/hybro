@@ -11,8 +11,8 @@ import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-
 import { ensureTurnTerminalStampedFromBackendTruth } from '@/lib/room-timeline/turn-terminal-stamp'
 import { findProcessingStatusUserEntity } from './processing-status-log'
 
-function resolveLiveTurnUserMessageId(roomId: string, lifecycle: ProcessingLifecycle): string | undefined {
-  const userEntity = findProcessingStatusUserEntity(roomId, {
+function resolveLiveTurnUserMessageId(conversationId: string, lifecycle: ProcessingLifecycle): string | undefined {
+  const userEntity = findProcessingStatusUserEntity(conversationId, {
     messageId: lifecycle.getMessageId(),
     clientRequestId: lifecycle.getPendingRunEventAck(),
     latestWithLogs: true,
@@ -21,15 +21,15 @@ function resolveLiveTurnUserMessageId(roomId: string, lifecycle: ProcessingLifec
 }
 
 async function tryRecoverTurnTerminalFromBackendTruth(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   getToken: (() => Promise<string | null>) | undefined,
 ): Promise<boolean> {
-  const userMessageId = resolveLiveTurnUserMessageId(roomId, lifecycle)
+  const userMessageId = resolveLiveTurnUserMessageId(conversationId, lifecycle)
   if (!userMessageId) return false
 
   return ensureTurnTerminalStampedFromBackendTruth(
-    roomId,
+    conversationId,
     lifecycle,
     {
       relatedMessageId: userMessageId,
@@ -39,8 +39,8 @@ async function tryRecoverTurnTerminalFromBackendTruth(
   )
 }
 
-function hasTerminalEvidenceForCurrentTurn(roomId: string, lifecycle: ProcessingLifecycle): boolean {
-  const userEntity = findProcessingStatusUserEntity(roomId, {
+function hasTerminalEvidenceForCurrentTurn(conversationId: string, lifecycle: ProcessingLifecycle): boolean {
+  const userEntity = findProcessingStatusUserEntity(conversationId, {
     messageId: lifecycle.getMessageId(),
     clientRequestId: lifecycle.getPendingRunEventAck(),
     latestWithLogs: true,
@@ -49,18 +49,18 @@ function hasTerminalEvidenceForCurrentTurn(roomId: string, lifecycle: Processing
   if (!userMessageId) return false
 
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return false
+  if (store.conversationId !== conversationId) return false
 
   const latestUser = store.entities[userMessageId] ?? userEntity
-  if (latestUser?.roomId === roomId && latestUser.messageType === 'user' && latestUser.turnTerminalStatus) {
+  if (latestUser?.conversationId === conversationId && latestUser.messageType === 'user' && latestUser.turnTerminalStatus) {
     return true
   }
 
-  return allAgentsTerminalForUserMessage(store.entities, roomId, userMessageId)
+  return allAgentsTerminalForUserMessage(store.entities, conversationId, userMessageId)
 }
 
 export function useRoomSSEConnection(
-  roomId: string,
+  conversationId: string,
   getToken: (() => Promise<string | null>) | undefined,
   sseEnabled: boolean,
   processing: boolean,
@@ -69,7 +69,7 @@ export function useRoomSSEConnection(
   getAgentName: (agentId: string) => Promise<string>,
   getAgentSource: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
-  reconcileWithDb: (roomId: string) => Promise<void>,
+  reconcileWithDb: (conversationId: string) => Promise<void>,
   setSseConnected: (v: boolean) => void,
   setSseError: (v: string | null) => void,
   requestSnapshotRef?: MutableRefObject<(() => void) | null>,
@@ -81,8 +81,8 @@ export function useRoomSSEConnection(
     error: sseError,
     reconnectWithSnapshot,
   } = useRoomSSE({
-    roomId,
-    enabled: sseEnabled && !!roomId,
+    conversationId,
+    enabled: sseEnabled && !!conversationId,
     getToken,
     onMessage: handleSSEMessage,
   })
@@ -114,9 +114,9 @@ export function useRoomSSEConnection(
   const hasBeenConnectedRef = useRef(false)
   useEffect(() => {
     const backendHasActiveLifecycle = async (): Promise<boolean | null> => {
-      if (!roomId) return null
+      if (!conversationId) return null
       try {
-        const result = await inquiryActiveRuns(roomId, getToken)
+        const result = await inquiryActiveRuns(conversationId, getToken)
         if (!result.success) return null
         return (result.active_runs?.length ?? 0) > 0
       } catch {
@@ -128,7 +128,7 @@ export function useRoomSSEConnection(
       lifecycle.markSseDisconnection()
     }
 
-    const justReconnected = sseConnected && !prevSseConnectedRef.current && roomId
+    const justReconnected = sseConnected && !prevSseConnectedRef.current && conversationId
     const isReconnection = justReconnected && hasBeenConnectedRef.current
 
     if (sseConnected) {
@@ -138,7 +138,7 @@ export function useRoomSSEConnection(
     // HITL reconnect catch-up: restore pending HITL requests after SSE reconnects
     if (justReconnected) {
       hydrateRoomFromDb({
-        roomId,
+        conversationId,
         phase: 'hitl_overlay',
         getToken,
         getAgentName,
@@ -155,17 +155,17 @@ export function useRoomSSEConnection(
     // stuck spinner even when processing=false (e.g. page refresh during a turn,
     // or terminal SSE events were sent before this reconnect was established).
     if (isReconnection) {
-      reconcileWithDb(roomId)
+      reconcileWithDb(conversationId)
       // Capture the current message ID before the async check so we can detect
       // if the user starts a new turn before the response comes back (race guard).
       const messageIdAtReconnect = lifecycle.getMessageId()
       backendHasActiveLifecycle().then(async hasActive => {
-        const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+        const { sending } = useRoomUiStore.getState().rooms[conversationId] ?? {}
         if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect && !sending) {
-          await reconcileWithDb(roomId)
+          await reconcileWithDb(conversationId)
           if (lifecycle.getMessageId() !== messageIdAtReconnect) return
-          await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
-          if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
+          await tryRecoverTurnTerminalFromBackendTruth(conversationId, lifecycle, getToken)
+          if (!hasTerminalEvidenceForCurrentTurn(conversationId, lifecycle)) {
             return
           }
           lifecycle.stopProcessing()
@@ -179,7 +179,7 @@ export function useRoomSSEConnection(
     // (snapshot re-request) — the only recovery path.
 
     prevSseConnectedRef.current = sseConnected
-  }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, hitlRequestIndex, lifecycle, reconcileWithDb])
+  }, [sseConnected, processing, conversationId, getToken, getAgentName, getAgentSource, hitlRequestIndex, lifecycle, reconcileWithDb])
 
   return { sseConnected, sseConnecting, sseError }
 }

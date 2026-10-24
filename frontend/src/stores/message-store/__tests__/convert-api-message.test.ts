@@ -8,7 +8,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 
 function makeApiMessage(overrides: Partial<RoomMessage> = {}): RoomMessage {
   return {
-    room_id: 'room-1',
+    conversation_id: 'room-1',
     message_id: 'msg-1',
     message_created_at: '2026-02-17T10:00:00Z',
     message_type: 'user',
@@ -38,7 +38,7 @@ describe('convertApiMessageToIncoming', () => {
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.id).toBe('msg-1')
-      expect(result.roomId).toBe('room-1')
+      expect(result.conversationId).toBe('room-1')
       expect(result.messageType).toBe('user')
       expect(result.content).toBe('Hello!')
       expect(result.senderName).toBe('Alice')
@@ -709,7 +709,7 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result).toEqual(expect.objectContaining({
         id: 'msg-1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'Here are the results',
         agentId: 'agent-1',

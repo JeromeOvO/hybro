@@ -30,7 +30,6 @@ import { useMessageStore } from '@/stores/message-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useStreamingStore } from '@/stores/streaming-store'
-import { useTraceStore } from '@/stores/trace-store'
 import type { ArtifactData, MessageEntity } from '@/stores/message-store/types'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 import { specificPublicAgentName } from '@/lib/agent-display-name'
@@ -46,7 +45,7 @@ const PRE_SNAPSHOT_BUFFER_LIMIT = 400
 const HEARTBEAT_GAP_SETTLE_MS = 300
 
 export interface RoomReducerDeps {
-  roomId: string
+  conversationId: string
   /** Fold one delta frame through the live handler path (the fold path). */
   onDelta: (frame: AnySSEFrame) => Promise<void>
   /** Force a fresh snapshot: close the stream, reconnect with ?snapshot=1. */
@@ -151,7 +150,7 @@ export class RoomReducer {
   private async onSnapshot(frame: RoomSSEFrameMap['snapshot']): Promise<void> {
     if (!this.capabilityEnabled) {
       applySnapshotToStores(
-        this.deps.roomId,
+        this.deps.conversationId,
         frame.data,
         this.deps.hitlRequestIndex,
       )
@@ -168,7 +167,7 @@ export class RoomReducer {
       return
     }
     if (!applySnapshotToStores(
-      this.deps.roomId,
+      this.deps.conversationId,
       frame.data,
       this.deps.hitlRequestIndex,
     )) {
@@ -177,7 +176,7 @@ export class RoomReducer {
     }
     if (hasCanonicalSnapshotCapability(frame.data) && this.deps.processingLifecycle) {
       reconcileCanonicalSnapshotProcessingGuard(
-        this.deps.roomId,
+        this.deps.conversationId,
         this.deps.processingLifecycle,
       )
     }
@@ -346,14 +345,14 @@ export class RoomReducer {
 // ── Snapshot application (fold snapshot sections into stores) ───────────────
 
 function reconcileCanonicalSnapshotProcessingGuard(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
 ): void {
   // HITL pauses clear the send guard but retain the exact owning root.
   const userMessageId = lifecycle.getMessageId()
   const clientRequestId = lifecycle.getClientRequestId()
   if (!userMessageId || !clientRequestId) return
-  const room = useTurnStore.getState().rooms[roomId]
+  const room = useTurnStore.getState().rooms[conversationId]
   const guardedTurn = room && Object.values(room.turns).find((turn) => (
     turn.userMessageId === userMessageId
     && turn.clientRequestId === clientRequestId
@@ -362,8 +361,8 @@ function reconcileCanonicalSnapshotProcessingGuard(
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing()
     lifecycle.disarmCancelTimeout()
-    useRoomUiStore.getState().setCancelling(roomId, false)
-    useMessageStore.getState().removeMessage(lifecycle.placeholderId(roomId))
+    useRoomUiStore.getState().setCancelling(conversationId, false)
+    useMessageStore.getState().removeMessage(lifecycle.placeholderId(conversationId))
     lifecycle.dismissPlaceholder()
   }
 }
@@ -380,12 +379,12 @@ function mapSnapshotStatusToTerminal(
 }
 
 function applySnapshotMessages(
-  roomId: string,
+  conversationId: string,
   snapshot: SnapshotData,
   canonicalUserMessageIds: ReadonlySet<string>,
 ): void {
   const store = useMessageStore.getState()
-  if (store.roomId && store.roomId !== roomId) return
+  if (store.conversationId && store.conversationId !== conversationId) return
 
   for (const message of snapshot.messages) {
     if (message.content !== null || message.agent_id || message.task_status !== null) {
@@ -393,7 +392,7 @@ function applySnapshotMessages(
       store.upsertMessage(
         {
           id: message.message_id,
-          roomId,
+          conversationId,
           messageType: 'agent',
           content: message.content ?? '',
           senderName: specificPublicAgentName(message.agent_name) ?? 'Unknown agent',
@@ -427,7 +426,7 @@ function applySnapshotMessages(
         store.upsertMessage(
           {
             id: message.message_id,
-            roomId,
+            conversationId,
             messageType: 'user',
             content: '',
             senderName: 'You',
@@ -446,7 +445,7 @@ function applySnapshotMessages(
         store.upsertMessage(
           {
             id: message.message_id,
-            roomId,
+            conversationId,
             messageType: 'user',
             content: userEntity.content,
             senderName: userEntity.senderName,
@@ -459,7 +458,7 @@ function applySnapshotMessages(
       }
       for (const log of message.status_logs) {
         appendSnapshotStatusLog(
-          roomId,
+          conversationId,
           userEntity,
           log.message,
           log.timestamp,
@@ -471,7 +470,7 @@ function applySnapshotMessages(
 }
 
 function appendSnapshotStatusLog(
-  roomId: string,
+  conversationId: string,
   userEntity: MessageEntity,
   message: string,
   timestamp: string,
@@ -486,7 +485,7 @@ function appendSnapshotStatusLog(
   store.upsertMessage(
     {
       id: latest.id,
-      roomId,
+      conversationId,
       messageType: 'user',
       content: latest.content,
       senderName: latest.senderName,
@@ -505,13 +504,13 @@ function appendSnapshotStatusLog(
   )
 }
 
-function applySnapshotStreaming(roomId: string, snapshot: SnapshotData): void {
+function applySnapshotStreaming(conversationId: string, snapshot: SnapshotData): void {
   const streaming = useStreamingStore.getState()
   for (const [messageId, record] of Object.entries(snapshot.streaming)) {
     if (record.text) {
       streaming.append(
         messageId,
-        roomId,
+        conversationId,
         textPartialToArtifact(messageId, record.text),
         false,
         {
@@ -522,7 +521,7 @@ function applySnapshotStreaming(roomId: string, snapshot: SnapshotData): void {
     for (let index = 0; index < record.artifacts.length; index++) {
       streaming.append(
         messageId,
-        roomId,
+        conversationId,
         record.artifacts[index] as unknown as ArtifactData,
         index > 0,
         {
@@ -541,7 +540,7 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
 }
 
 function validateCanonicalSnapshotHitl(
-  roomId: string,
+  conversationId: string,
   snapshot: SnapshotData,
   turns: RoomSnapshotTurn[],
 ): boolean {
@@ -601,7 +600,7 @@ function validateCanonicalSnapshotHitl(
     const existingEntitiesMatch = [store.entities[messageId], store.entities[projectionId]]
       .filter((entity): entity is MessageEntity => entity !== undefined)
       .every((entity) => (
-        entity.roomId === roomId
+        entity.conversationId === conversationId
         && entity.clientRequestId === requestClientId
         && entity.relatedMessageId === requestUserMessageId
       ))
@@ -697,7 +696,7 @@ function canonicalRequestData(
 }
 
 function applySnapshotHitl(
-  roomId: string,
+  conversationId: string,
   snapshot: SnapshotData,
   hitlRequestIndex: Map<string, string>,
 ): void {
@@ -732,7 +731,7 @@ function applySnapshotHitl(
       : typeof request.related_message_id === 'string'
         ? request.related_message_id
         : undefined
-    const roomTurns = useTurnStore.getState().rooms[roomId]?.turns
+    const roomTurns = useTurnStore.getState().rooms[conversationId]?.turns
     const owner = canonical
       ? roomTurns?.[canonical.run_id]
       : requestClientId && requestUserMessageId
@@ -778,7 +777,7 @@ function applySnapshotHitl(
         : undefined
       store.upsertMessage({
         id: messageId,
-        roomId,
+        conversationId,
         messageType: 'agent',
         content: '',
         senderName: canonical?.agent_label ?? compatibleAgentLabel ?? 'Agent',
@@ -793,7 +792,7 @@ function applySnapshotHitl(
     const terminal = ['responded', 'resolved', 'expired', 'canceled', 'error']
       .includes(String(request.status ?? ''))
     const incoming = buildPendingHitlIncomingMessage({
-      roomId,
+      conversationId,
       messageId,
       requestId,
       source: typeof request.source === 'string' ? request.source : undefined,
@@ -834,13 +833,9 @@ function applySnapshotHitl(
   }
 }
 
-function applyLegacySnapshotTrace(roomId: string, snapshot: SnapshotData): void {
-  useTraceStore.getState().hydrateFromSnapshot(roomId, snapshot)
-}
-
 /** Snapshot replace: fold every snapshot section into the stores. */
 export function applySnapshotToStores(
-  roomId: string,
+  conversationId: string,
   snapshot: SnapshotData,
   hitlRequestIndex?: Map<string, string>,
 ): boolean {
@@ -848,26 +843,25 @@ export function applySnapshotToStores(
     || Object.prototype.hasOwnProperty.call(snapshot, 'turns')
   if (advertisesCanonical && !hasCanonicalSnapshotCapability(snapshot)) return false
   if (!hasCanonicalSnapshotCapability(snapshot)) {
-    applySnapshotMessages(roomId, snapshot, new Set())
-    applySnapshotStreaming(roomId, snapshot)
-    applyLegacySnapshotTrace(roomId, snapshot)
-    if (hitlRequestIndex) applySnapshotHitl(roomId, snapshot, hitlRequestIndex)
+    applySnapshotMessages(conversationId, snapshot, new Set())
+    applySnapshotStreaming(conversationId, snapshot)
+    if (hitlRequestIndex) applySnapshotHitl(conversationId, snapshot, hitlRequestIndex)
     return true
   }
   const turns = validateCanonicalSnapshotTurns(snapshot)
-  if (!turns || !validateCanonicalSnapshotHitl(roomId, snapshot, turns)) return false
-  const replacement = useTurnStore.getState().replaceSnapshot(roomId, turns)
+  if (!turns || !validateCanonicalSnapshotHitl(conversationId, snapshot, turns)) return false
+  const replacement = useTurnStore.getState().replaceSnapshot(conversationId, turns)
   if (!replacement.ok) return false
 
   const canonicalUserMessageIds = new Set(
     (snapshot.turns ?? []).map((turn) => turn.user_message_id),
   )
-  applySnapshotMessages(roomId, snapshot, canonicalUserMessageIds)
-  applySnapshotStreaming(roomId, snapshot)
+  applySnapshotMessages(conversationId, snapshot, canonicalUserMessageIds)
+  applySnapshotStreaming(conversationId, snapshot)
   if (hitlRequestIndex) {
     // Canonical awaiting_input restores from durable correlated requests; no
     // recency inference is used by the composer selector.
-    applySnapshotHitl(roomId, snapshot, hitlRequestIndex)
+    applySnapshotHitl(conversationId, snapshot, hitlRequestIndex)
   }
   return true
 }

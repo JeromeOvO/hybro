@@ -29,15 +29,15 @@ class FakeEventBus:
         self.unsubscribe_waiter: asyncio.Event | None = None
         self.unsubscribe_tasks: list[asyncio.Task | None] = []
 
-    async def subscribe_room(self, room_id: str) -> None:
-        self.subscribed.append(room_id)
+    async def subscribe_room(self, conversation_id: str) -> None:
+        self.subscribed.append(conversation_id)
         if self.subscribe_waiter is not None:
             await self.subscribe_waiter.wait()
         if self.subscribe_error is not None:
             raise self.subscribe_error
 
-    async def unsubscribe_room(self, room_id: str) -> None:
-        self.unsubscribed.append(room_id)
+    async def unsubscribe_room(self, conversation_id: str) -> None:
+        self.unsubscribed.append(conversation_id)
         self.unsubscribe_tasks.append(asyncio.current_task())
         self.unsubscribe_entered.set()
         if self.unsubscribe_waiter is not None:
@@ -454,9 +454,9 @@ async def test_admission_locks_are_reclaimed_after_many_room_disconnects():
     transport = make_transport(id_factory=lambda: f"conn-{next(ids)}")
 
     for index in range(100):
-        room_id = f"room-{index}"
-        connection = await transport.open_connection(room_id)
-        await transport.remove_connection(room_id, connection.connection_id)
+        conversation_id = f"room-{index}"
+        connection = await transport.open_connection(conversation_id)
+        await transport.remove_connection(conversation_id, connection.connection_id)
     await transport._drain_room_cleanup_tasks()
 
     assert transport._admission_locks == {}
@@ -500,9 +500,9 @@ async def test_terminal_frame_forces_boundary_snapshot():
     # immediate snapshot fanout so consumers converge on the final state.
     snapshots: dict[str, dict] = {}
 
-    async def snapshot_provider(room_id: str):
-        snapshots[room_id] = {"room_seq": 9, "messages": []}
-        return snapshots[room_id]
+    async def snapshot_provider(conversation_id: str):
+        snapshots[conversation_id] = {"room_seq": 9, "messages": []}
+        return snapshots[conversation_id]
 
     config = DeliveryConfig()
     transport = make_transport(
@@ -537,8 +537,8 @@ async def test_terminal_frame_forces_boundary_snapshot():
 async def test_non_terminal_frame_does_not_force_snapshot():
     calls: list[str] = []
 
-    async def snapshot_provider(room_id: str):
-        calls.append(room_id)
+    async def snapshot_provider(conversation_id: str):
+        calls.append(conversation_id)
         return {"room_seq": 0, "messages": []}
 
     transport = make_transport(

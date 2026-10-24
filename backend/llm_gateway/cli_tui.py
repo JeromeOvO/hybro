@@ -53,9 +53,16 @@ _ACTION_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "mcp_logs": ("mcp", "logs"),
 }
 
+# This process keeps running the version it started with after an upgrade.
+_UPGRADED = (
+    "If a newer release was installed, exit and run hybro again before Start services."
+)
+
 # Host capability injected by the CLI entry point; the gateway never imports it.
 StatusReader = Callable[[], list[dict[str, object]]]
 ProblemReader = Callable[[], str | None]
+# Newest release when newer than this CLI, else None; never raises.
+ReleaseReader = Callable[[], str | None]
 
 
 def _read_status() -> list[dict[str, object]]:
@@ -157,10 +164,31 @@ def _run_command(arguments: tuple[str, ...]) -> int:
     )
 
 
-def _service_command(
-    console: SetupConsole, run: Callable[[tuple[str, ...]], int], action: str
-) -> str:
+def _start_arguments(
+    action: str, *, pending_apply: bool, build: bool
+) -> tuple[str, ...]:
+    """Start/apply arguments for this session and install.
+
+    Containers read config.json once at startup, and Compose cannot see a change
+    inside that mounted file, so a plain start after a save left the running
+    stack on the old connection. A source checkout also builds, because Compose
+    otherwise keeps images built from an older checkout.
+    """
     arguments = _ACTION_ARGUMENTS.get(action, (action,))
+    if action == "start" and pending_apply:
+        arguments = _ACTION_ARGUMENTS["apply"]
+    if build and action in {"start", "apply"}:
+        arguments = (*arguments, "--build")
+    return arguments
+
+
+def _service_command(
+    console: SetupConsole,
+    run: Callable[[tuple[str, ...]], int],
+    action: str,
+    arguments: tuple[str, ...] | None = None,
+) -> str:
+    arguments = arguments or _ACTION_ARGUMENTS.get(action, (action,))
     prompt = _CONFIRMATIONS.get(action)
     if prompt is not None and (
         console.select(
@@ -170,6 +198,8 @@ def _service_command(
         == "cancel"
     ):
         return "Canceled; nothing changed."
+    # Compose may pull or build for minutes before its first line of output.
+    console.write(f"Running hybro {' '.join(arguments)} ...")
     result = run(arguments)
     notice = (
         "Command canceled."
@@ -184,6 +214,44 @@ def _service_command(
     except SelectionCancelled:
         pass
     return notice
+
+
+def _unavailable(action: str, *, configured: bool, build: bool) -> str | None:
+    """Why an action cannot run here, said instead of running it to fail."""
+    if action in {"start", "apply"} and not configured:
+        return (
+            "No connection is saved yet. Set one up on Models [Tab], then Verify "
+            "and save."
+        )
+    if action == "upgrade" and build:
+        # Only a source checkout builds; it is updated from Git, not a release.
+        return (
+            "This copy runs from a source checkout. Update it with git pull, then "
+            "choose Start services; it rebuilds the images."
+        )
+    return None
+
+
+def _lifecycle_action(
+    console: SetupConsole,
+    run: Callable[[tuple[str, ...]], int],
+    action: str,
+    *,
+    pending_apply: bool,
+    build: bool,
+) -> tuple[str, bool]:
+    """Run one Services command; return its notice and the pending-save flag."""
+    notice = _service_command(
+        console,
+        run,
+        action,
+        _start_arguments(action, pending_apply=pending_apply, build=build),
+    )
+    if notice != "Command finished.":
+        return notice, pending_apply
+    if action == "upgrade":
+        notice = _UPGRADED
+    return notice, pending_apply and action not in {"start", "apply"}
 
 
 def _mcp_page(
@@ -237,7 +305,17 @@ def _services_page(
     problem: ProblemReader | None = None,
     version: str | None = None,
     mcp_status: Callable[[], str] | None = None,
-) -> str:
+    *,
+    pending_apply: bool = False,
+    build: bool = False,
+    configured: bool = True,
+    newer: str | None = None,
+) -> tuple[str, bool, str | None]:
+    """Run service actions.
+
+    Return the focus, whether a save is unapplied, and the release still worth
+    offering (cleared once Upgrade succeeds).
+    """
     from dataclasses import replace
 
     # The CLI runs the images published for its own version, so one line states
@@ -245,6 +323,8 @@ def _services_page(
     version_line = f"CLI and stack {version}" if version else ""
     notice = ""
     while True:
+        # A cold Docker daemon can take seconds to answer; say why it is quiet.
+        console.write("Checking service status...")
         status, rows = _status_snapshot(read, problem)
         try:
             action = console.select(
@@ -258,6 +338,13 @@ def _services_page(
                             None,
                             (
                                 version_line,
+                                f"hybro {newer} is available; choose Upgrade hybro."
+                                if newer
+                                else "",
+                                "Saved configuration not applied yet; Start "
+                                "services recreates the containers."
+                                if pending_apply
+                                else "",
                                 notice,
                                 "More commands: hybro --help. Status refreshes on return.",
                             ),
@@ -270,17 +357,23 @@ def _services_page(
                 ),
             )
         except SelectionCancelled:
-            return focus
+            return focus, pending_apply, newer
         if action == "models":
-            return focus
+            return focus, pending_apply, newer
         focus = action
         try:
             if action == "logs":
                 _logs_page(console, run, read, problem)
             elif action == "mcp":
                 _mcp_page(console, run, mcp_status)
+            elif blocked := _unavailable(action, configured=configured, build=build):
+                notice = blocked
             else:
-                notice = _service_command(console, run, action)
+                notice, pending_apply = _lifecycle_action(
+                    console, run, action, pending_apply=pending_apply, build=build
+                )
+                if notice == _UPGRADED:
+                    newer = None
         except SelectionCancelled:
             continue
         except (SetupError, OSError, termios.error):
@@ -296,9 +389,15 @@ def _menu(
     problem: ProblemReader | None = None,
     version: str | None = None,
     mcp_status: Callable[[], str] | None = None,
+    build: bool = False,
+    releases: ReleaseReader | None = None,
 ) -> int:
     panel = SetupPanel(service, console, environment)
     service_focus = "start"
+    pending_apply = False
+    # One release check per session, on the first Services visit only.
+    newer: str | None = None
+    checked = releases is None
     while True:
         try:
             action = console.select(panel.title(), panel.options())
@@ -307,12 +406,26 @@ def _menu(
                 return 0
             continue
         if action == "services":
-            service_focus = _services_page(
-                console, run, service_focus, read, problem, version, mcp_status
+            if not checked:
+                console.write("Checking for a newer hybro...")
+                newer, checked = releases(), True
+            service_focus, pending_apply, newer = _services_page(
+                console,
+                run,
+                service_focus,
+                read,
+                problem,
+                version,
+                mcp_status,
+                pending_apply=pending_apply,
+                build=build,
+                configured=panel.saved is not None,
+                newer=newer,
             )
             continue
         try:
             panel.edit(action)
+            pending_apply = pending_apply or action == "save"
         except SelectionCancelled:
             # Close a picker/confirmation, leaving its parent and draft intact.
             continue
@@ -335,6 +448,8 @@ def main(
     problem: ProblemReader | None = None,
     version: str | None = None,
     mcp_status: Callable[[], str] | None = None,
+    build: bool = False,
+    releases: ReleaseReader | None = None,
 ) -> int:
     output = output if output is not None else sys.stdout
     try:
@@ -350,7 +465,16 @@ def main(
             )
         if console is not None:
             return _menu(
-                console, run, service, environment, status, problem, version, mcp_status
+                console,
+                run,
+                service,
+                environment,
+                status,
+                problem,
+                version,
+                mcp_status,
+                build,
+                releases,
             )
         with _terminal_console(output, screen=True) as terminal:
             return _menu(
@@ -362,6 +486,8 @@ def main(
                 problem,
                 version,
                 mcp_status,
+                build,
+                releases,
             )
     except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         print("Hybro closed; unsaved changes discarded.", file=output)

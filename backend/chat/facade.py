@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
+from common.dto import CreateRoomRequest, RoomInfo
 from common.protocols import RoomRepository
 from conversation import ConversationFacade, room_info_from_doc
 
@@ -17,34 +17,24 @@ class ChatFacade:
         self._conversation = conversation
         self._repository = repository
 
-    async def get_room(self, room_id: str) -> RoomInfo | None:
-        return await self._conversation.get_room(room_id)
+    async def get_room(self, conversation_id: str) -> RoomInfo | None:
+        return await self._conversation.get_room(conversation_id)
 
     async def create_room(self, request: CreateRoomRequest) -> RoomInfo:
         return await self._conversation.create_room(request)
 
-    async def update_room(self, room_id: str, updates: dict) -> RoomInfo | None:
-        return await self._conversation.update_room(room_id, updates)
-
-    async def replace_membership(
-        self,
-        room_id: str,
-        seed: MembershipSeed,
-        requesting_user_id: str | None = None,
-    ) -> RoomInfo:
-        return await self._conversation.replace_membership(
-            room_id, seed, requesting_user_id=requesting_user_id
-        )
+    async def update_room(self, conversation_id: str, updates: dict) -> RoomInfo | None:
+        return await self._conversation.update_room(conversation_id, updates)
 
     async def update_room_default_mode(
         self,
-        room_id: str,
+        conversation_id: str,
         *,
         use_supervisor: bool,
     ) -> bool:
         """Atomically update only the persisted room-mode flag."""
         updated = await self._repository.update_fields(
-            room_id,
+            conversation_id,
             {"extend_info.use_supervisor": use_supervisor},
         )
         return updated is not None

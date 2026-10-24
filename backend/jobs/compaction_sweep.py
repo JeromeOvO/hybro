@@ -16,11 +16,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from common.config import settings
+from common.dto import CompactionResult
 from common.observability import traced_create_task
-from common.protocols import CompactionPort
 from common.utils.logger import get_logger
 from jobs.constants import COMPACTION_SWEEP
 
@@ -28,6 +28,13 @@ logger = get_logger(__name__)
 
 DEFAULT_INTERVAL_MINUTES = 30
 MAX_CONCURRENT_COMPACTIONS = 5
+
+
+@runtime_checkable
+class CompactionPort(Protocol):
+    async def compact_if_needed(
+        self, conversation_id: str
+    ) -> CompactionResult | None: ...
 
 
 class LeaderGate(Protocol):
@@ -116,8 +123,9 @@ class CompactionSweep:
     async def sweep(self) -> dict:
         """Scan all rooms with memory and compact where needed.
 
-        Skips rooms with any non-terminal run (queued / processing / awaiting_input)
-        to avoid read-modify-write races with the supervisor loop (§6.9).
+        Skips rooms with a non-terminal canonical orchestrator Run, including
+        suspended ones (``awaiting_user``, ``waiting_external``), to avoid
+        read-modify-write races with the running turn.
 
         Uses a fixed-size worker pool to bound memory usage instead of
         creating one task per room.
@@ -133,16 +141,16 @@ class CompactionSweep:
         active_room_ids = {rid for rid in ids if rid}
 
         eligible_room_ids: list[str] = []
-        for room_id in await deps.list_room_ids_with_memory():
-            if not room_id:
+        for conversation_id in await deps.list_room_ids_with_memory():
+            if not conversation_id:
                 continue
             stats["scanned"] += 1
 
-            if room_id in active_room_ids:
+            if conversation_id in active_room_ids:
                 stats["skipped"] += 1
                 continue
 
-            eligible_room_ids.append(room_id)
+            eligible_room_ids.append(conversation_id)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -180,8 +188,8 @@ class CompactionSweep:
                     traced_create_task(_worker(), name=f"compaction-worker-{index}")
                 )
 
-            for room_id in eligible_room_ids:
-                await queue.put(room_id)
+            for conversation_id in eligible_room_ids:
+                await queue.put(conversation_id)
 
             # Signal workers to stop after all eligible rooms are processed.
             for _ in workers:

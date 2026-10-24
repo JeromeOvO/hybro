@@ -5,7 +5,7 @@ import { getCollectingProgressLabel } from '@/lib/room-timeline/turn-live-shell'
 function makeTurn(overrides: Partial<TurnViewModel>): TurnViewModel {
   return {
     id: 't1',
-    roomId: 'r1',
+    conversationId: 'r1',
     userMessageId: 'u1',
     userContent: 'hi',
     userAttachments: [],

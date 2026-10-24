@@ -25,7 +25,7 @@ from .models import (
     ToolObservation,
     UserMessage,
 )
-from .persistence import SUSPENDED_RUN_STATUSES
+from .persistence import SUSPENDED_RUN_STATUSES, TERMINAL_RUN_STATUSES
 from .ports import OrchestratorRunStore, ToolCatalog
 
 # Live execution lease. The in-process driver owns the Run's recovery claim while
@@ -35,9 +35,6 @@ from .ports import OrchestratorRunStore, ToolCatalog
 SESSION_EXECUTION_OWNER_PREFIX = "session:"
 _EXECUTION_LEASE_SECONDS = 60.0
 _EXECUTION_LEASE_RENEW_SECONDS = 20.0
-_TERMINAL_RUN_STATUSES = frozenset(
-    {"completed", "failed", "canceled", "budget_exhausted"}
-)
 
 # A suspended Run has no watchdog while it waits. Its recovery schedule is a
 # finite far-future value rather than None, because None means "due now".
@@ -83,7 +80,7 @@ class SessionConflict(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class RoomAgentSessionConfig:
     session_id: str
-    room_id: str
+    conversation_id: str
     profile: OrchestratorProfile
     candidate_scope: CandidateScopeSnapshot
     room_epoch: int
@@ -127,16 +124,14 @@ class DefaultRunFactory:
             raise ValueError("canonical Runs require a nonempty client_request_id")
         fingerprint = sha256(
             (
-                f"{config.room_id}:{config.room_epoch}:"
+                f"{config.conversation_id}:{config.room_epoch}:"
                 f"{config.requesting_subject_id}:{message.model_dump_json()}"
             ).encode()
         ).hexdigest()
         return OrchestratorRunState(
-            schema_version=6,
-            lifecycle_family="canonical",
             run_id=run_id,
             session_id=config.session_id,
-            room_id=config.room_id,
+            conversation_id=config.conversation_id,
             client_request_id=client_request_id,
             request=RunRequestSnapshot(
                 request_fingerprint=fingerprint,
@@ -223,7 +218,7 @@ class RoomAgentSession:
         if self._run_id is None or self._lease_owner is not None:
             return
         run = await self.run_store.load(self._run_id)
-        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
             return
         now = self.clock.now()
         owner = execution_owner_id(self.config.session_id)
@@ -248,7 +243,7 @@ class RoomAgentSession:
             run = await self.run_store.load(self._run_id)
             if (
                 run is None
-                or run.status in _TERMINAL_RUN_STATUSES
+                or run.status in TERMINAL_RUN_STATUSES
                 or run.recovery_claim.owner_id != owner
             ):
                 return
@@ -288,7 +283,7 @@ class RoomAgentSession:
         typed recoverable failure moves that boundary earlier afterwards
         through ``schedule_run_recovery``.
         """
-        if run.status in _TERMINAL_RUN_STATUSES:
+        if run.status in TERMINAL_RUN_STATUSES:
             return None
         if run.status in SUSPENDED_RUN_STATUSES:
             return dormant_recovery_at(self.clock.now())
@@ -306,12 +301,7 @@ class RoomAgentSession:
         existing = await self.run_store.load(self._run_id)
         if existing is None:
             return False
-        return existing.status not in {
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return existing.status not in TERMINAL_RUN_STATUSES
 
     async def prompt(
         self,
@@ -355,7 +345,7 @@ class RoomAgentSession:
 
     async def continue_run(self) -> KernelRunResult:
         run = await self._current_run()
-        if run.status in {"waiting_external", "awaiting_user"}:
+        if run.status in SUSPENDED_RUN_STATUSES:
             raise SessionConflict("suspended Run requires a new ToolObservation")
         return await self._start_kernel()
 
@@ -449,7 +439,7 @@ class RoomAgentSession:
     async def _terminalize_interrupted_run(self) -> None:
         if self._run_id is not None:
             run = await self.run_store.load(self._run_id)
-            if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
+            if run is not None and run.status not in TERMINAL_RUN_STATUSES:
                 try:
                     await self.kernel.terminalize(
                         self._run_id,
@@ -509,11 +499,11 @@ class RoomAgentSession:
                         "failed": "run_failed",
                     }.get(result.outcome)
                     if terminal_type is not None:
-                        await self._emit(terminal_type, result.run, terminal=True)
+                        await self._emit(terminal_type, result.run)
                     if self._run_id is not None:
                         run = await self.run_store.load(self._run_id)
                         if run is not None:
-                            await self._emit("session_idle", run, terminal=True)
+                            await self._emit("session_idle", run)
                     self._settled_task = task
                     self._idle.set()
             return result
@@ -534,26 +524,13 @@ class RoomAgentSession:
         run: OrchestratorRunState,
         payload: dict[str, object],
     ) -> None:
-        # A completed tool-result message is the durable boundary for the
-        # corresponding agent card. Await listener settlement so its terminal
-        # projection cannot be lost to the short best-effort listener timeout.
-        settle_agent_projection = (
-            event_type == "message_completed"
-            and payload.get("message_kind") == "tool_result"
-        )
-        await self._emit(
-            event_type,
-            run,
-            terminal=settle_agent_projection,
-            payload=payload,
-        )
+        await self._emit(event_type, run, payload=payload)
 
     async def _emit(
         self,
         event_type: str,
         run: OrchestratorRunState,
         *,
-        terminal: bool = False,
         payload: dict[str, object] | None = None,
     ) -> None:
         self._sequence += 1
@@ -566,12 +543,10 @@ class RoomAgentSession:
                 sequence=self._sequence,
                 timestamp=self.clock.now(),
                 payload=payload or {"status": run.status},
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
-            ),
-            terminal=terminal,
+            )
         )
 
 
@@ -594,8 +569,7 @@ async def schedule_run_recovery(
         if (
             current is None
             or current.recovery_claim.owner_id is not None
-            or current.status
-            in {"canceling", "completed", "failed", "canceled", "budget_exhausted"}
+            or current.status in {"canceling", *TERMINAL_RUN_STATUSES}
             or current.recovery_claim.quarantined_at is not None
         ):
             return

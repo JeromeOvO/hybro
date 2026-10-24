@@ -49,7 +49,7 @@ def _formatter(output_format: str = "json") -> StructuredFormatter:
 
 
 def test_json_formatter_includes_context_extra_and_fixed_fields():
-    with bind_log_context(trace_id="trace-1", room_id="room-1"):
+    with bind_log_context(trace_id="trace-1", conversation_id="room-1"):
         output = json.loads(
             _formatter().format(
                 _record(
@@ -65,7 +65,7 @@ def test_json_formatter_includes_context_extra_and_fixed_fields():
     assert output["version"] == "test-version"
     assert len(output["instance_id"]) == 8
     assert output["trace_id"] == "trace-1"
-    assert output["room_id"] == "room-1"
+    assert output["conversation_id"] == "room-1"
     assert output["nested.answer"] == 42
     assert output["nested.outcome"] == "ok"
     assert output["happened_at"] == "2026-01-02T00:00:00+00:00"
@@ -200,31 +200,6 @@ def test_safe_exception_fingerprint_is_stable_and_excludes_chained_messages():
     assert "PRIVATE_OUTER_SENTINEL" not in json.dumps(first)
 
 
-def test_a2a_server_failure_log_keeps_safe_diagnostics(caplog):
-    from common.server.server import A2AServer
-
-    server = A2AServer()
-    caplog.set_level(logging.ERROR, logger="common.server.server")
-
-    try:
-        raise RuntimeError("PRIVATE_A2A_SERVER_EXCEPTION_SENTINEL")
-    except RuntimeError as exc:
-        response = server._handle_exception(exc)
-
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_server_request_failed"
-    )
-    output = _formatter().format(record)
-
-    assert response.status_code == 400
-    assert record.error_type == "RuntimeError"
-    assert len(record.error_fingerprint) == 16
-    assert "test_observability_logging.py:" in record.error_stack
-    assert "PRIVATE_A2A_SERVER_EXCEPTION_SENTINEL" not in output
-
-
 def test_logfmt_is_parseable_and_preserves_extra():
     record = logging.LogRecord(
         "tests.observability",
@@ -248,8 +223,8 @@ def test_logfmt_is_parseable_and_preserves_extra():
 
 def test_nested_bind_restores_outer_context_and_rejects_unknown_fields():
     with bind_log_context(trace_id="outer"):
-        with bind_log_context(room_id="room"):
-            assert get_log_context() == {"trace_id": "outer", "room_id": "room"}
+        with bind_log_context(conversation_id="room"):
+            assert get_log_context() == {"trace_id": "outer", "conversation_id": "room"}
         with bind_log_context(trace_id=None):
             assert get_log_context() == {}
         with bind_log_context(trace_id={"PRIVATE_TRACE": "payload"}):
@@ -272,16 +247,16 @@ async def test_traced_tasks_copy_context_without_cross_task_leaks():
         await release.wait()
         return get_log_context()
 
-    with bind_log_context(trace_id="trace-a", room_id="room-a"):
+    with bind_log_context(trace_id="trace-a", conversation_id="room-a"):
         first = traced_create_task(observe(), name="trace-a")
-    with bind_log_context(trace_id="trace-b", room_id="room-b"):
+    with bind_log_context(trace_id="trace-b", conversation_id="room-b"):
         second = traced_create_task(observe(), name="trace-b")
 
     release.set()
     first_context, second_context = await asyncio.gather(first, second)
 
-    assert first_context == {"trace_id": "trace-a", "room_id": "room-a"}
-    assert second_context == {"trace_id": "trace-b", "room_id": "room-b"}
+    assert first_context == {"trace_id": "trace-a", "conversation_id": "room-a"}
+    assert second_context == {"trace_id": "trace-b", "conversation_id": "room-b"}
     assert get_log_context() == {}
 
 
@@ -373,66 +348,6 @@ def test_python_module_entrypoint_owns_uvicorn_logging(monkeypatch):
 
     assert captured["kwargs"]["log_config"] is None
     assert captured["kwargs"]["access_log"] is False
-
-
-def test_a2a_server_start_owns_uvicorn_logging(monkeypatch):
-    import uvicorn
-
-    from common.server import server as server_module
-
-    captured: dict = {}
-    configured: list[object] = []
-    app_server = server_module.A2AServer(
-        agent_card=object(),
-        task_manager=object(),
-    )
-    monkeypatch.setattr(
-        uvicorn,
-        "run",
-        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs),
-    )
-    monkeypatch.setattr(
-        server_module,
-        "configure_logging",
-        lambda settings: configured.append(settings),
-    )
-
-    app_server.start()
-
-    assert len(configured) == 1
-    assert captured["kwargs"]["log_config"] is None
-    assert captured["kwargs"]["access_log"] is False
-
-
-def test_a2a_server_requests_receive_request_observability(caplog):
-    from starlette.testclient import TestClient
-
-    from common.server.server import A2AServer
-
-    server = A2AServer()
-    caplog.set_level(logging.INFO, logger="common.middleware.request_logging")
-
-    with TestClient(server.app) as client:
-        response = client.post(
-            "/",
-            content="{invalid-json",
-            headers={
-                "content-type": "application/json",
-                "x-request-id": "a2a-request-1",
-            },
-        )
-
-    assert response.status_code == 400
-    assert response.headers["x-request-id"] == "a2a-request-1"
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "http_request_completed"
-    )
-    assert record.request_id == "a2a-request-1"
-    assert record.trace_id == "a2a-request-1"
-    assert record.route == "/"
-    assert record.status == 400
 
 
 def test_formatter_rejects_hostile_keys_spoofed_context_and_nonfinite_numbers():

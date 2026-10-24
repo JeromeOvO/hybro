@@ -28,7 +28,7 @@ export function resolveTemplateAgents(
 ): Agent[] {
   const idMap = new Map(catalog.map((a) => [a.agent_id, a]))
   const nameMap = new Map(
-    catalog.map((a) => [a.agent_card.name.toLowerCase(), a]),
+    catalog.map((a) => [a.name.toLowerCase(), a]),
   )
 
   const resolved: Agent[] = []

@@ -18,17 +18,13 @@ export interface CanonicalAgentCallDetailResponse {
   run_id: string
   public_call_id: string
   status: string
-  /** Compatibility projection for frontend instances predating typed parts. */
-  output: string
-  /** Absent only while talking to an older backend during a rolling deploy. */
-  parts?: CanonicalAgentCallPart[]
+  parts: CanonicalAgentCallPart[]
   artifacts: CanonicalArtifactDescriptor[]
 }
 
 export function canonicalAgentCallParts(
-  parts: CanonicalAgentCallPart[] | undefined,
-): ArtifactPart[] | undefined {
-  if (parts === undefined) return undefined
+  parts: CanonicalAgentCallPart[],
+): ArtifactPart[] {
   const normalized: ArtifactPart[] = []
   for (const part of parts) {
     if (part.kind === 'text' && typeof part.text === 'string') {
@@ -80,7 +76,7 @@ export function parseCanonicalCardIdentity(messageId: string): {
 }
 
 export async function fetchCanonicalAgentCallDetail(
-  roomId: string,
+  conversationId: string,
   messageId: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
@@ -88,6 +84,6 @@ export async function fetchCanonicalAgentCallDetail(
   const identity = parseCanonicalCardIdentity(messageId)
   if (!identity) return null
   return apiClient<CanonicalAgentCallDetailResponse>(getApiUrl(
-    `rooms/${encodeURIComponent(roomId)}/agent-calls/${encodeURIComponent(identity.runId)}/${encodeURIComponent(identity.publicCallId)}/detail`,
+    `rooms/${encodeURIComponent(conversationId)}/agent-calls/${encodeURIComponent(identity.runId)}/${encodeURIComponent(identity.publicCallId)}/detail`,
   ), { getToken, signal })
 }

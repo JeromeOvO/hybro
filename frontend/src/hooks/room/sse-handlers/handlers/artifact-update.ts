@@ -8,7 +8,7 @@ import { sseArtifactDataFromPayload } from '../artifacts'
 import { resolveUserMessageId } from '../client-request'
 
 export interface ArtifactUpdateContext {
-  roomId: string
+  conversationId: string
   lifecycle: ProcessingLifecycle
 }
 
@@ -23,7 +23,7 @@ export function handleArtifactUpdate(
   const streaming = useStreamingStore.getState()
 
   if (!ctx.lifecycle.isPlaceholderDismissed()) {
-    store.removeMessage(ctx.lifecycle.placeholderId(ctx.roomId))
+    store.removeMessage(ctx.lifecycle.placeholderId(ctx.conversationId))
     ctx.lifecycle.dismissPlaceholder()
   }
 
@@ -46,14 +46,14 @@ export function handleArtifactUpdate(
     .some(a => a.artifactId === artifactId)
   const resolvedAppend = isAppend ?? hasExistingArtifact
 
-  streaming.append(message_id, ctx.roomId, artifactData, resolvedAppend, {
+  streaming.append(message_id, ctx.conversationId, artifactData, resolvedAppend, {
     clientRequestId: clientReqId ?? undefined,
-    userMessageId: resolveUserMessageId(ctx.roomId, clientReqId),
+    userMessageId: resolveUserMessageId(ctx.conversationId, clientReqId),
   })
   if (last_chunk) streaming.markComplete(message_id)
 
   if (!resolvedAppend) {
-    appendEvent(ctx.roomId, {
+    appendEvent(ctx.conversationId, {
       kind: 'artifact_emitted',
       timestamp: sseMessage.timestamp,
       agentId: sseMessage.data.agent_id,

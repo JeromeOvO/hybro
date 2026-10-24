@@ -18,7 +18,6 @@ describe('canonical Agent call detail identity', () => {
       { kind: 'text', text: '{"declared":"text"}' },
       { kind: 'data', data: [{ quote: 37200 }] },
     ])
-    expect(canonicalAgentCallParts(undefined)).toBeUndefined()
   })
 
   it('maps authenticated room-file descriptors to preview-ready artifacts', () => {

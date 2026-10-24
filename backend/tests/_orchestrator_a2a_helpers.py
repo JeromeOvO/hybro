@@ -40,14 +40,14 @@ def binding(
     run_id: str = "run-1",
     transport_kind: str = "direct",
     agent_id: str = "agent-1",
-    authorization_kind: str | None = None,
+    authorization_kind: str = "room_member",
 ) -> AgentToolBindingRecord:
     tool = definition()
     return AgentToolBindingRecord(
         binding_id=f"binding-{run_id}",
         binding_digest=f"binding-digest-{run_id}",
         run_id=run_id,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         tool_name=tool.name,
         definition=tool,
@@ -78,7 +78,7 @@ def prepared(*, run_id: str = "run-1") -> PreparedInvocationSnapshot:
     return PreparedInvocationSnapshot(
         run_id=run_id,
         invocation_id="call-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         requesting_subject_id="user-1",
         binding=binding(run_id=run_id),
@@ -120,7 +120,7 @@ def ledger_record(
         acceptance_id=f"acceptance-{run_id}-{call_id}",
         idempotency_key=f"key-{run_id}-{call_id}",
         run_id=run_id,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         assistant_message_id="assistant-1",
         source_index=0,
@@ -140,7 +140,7 @@ def ledger_record(
             endpoint_scope=bound.endpoint_scope,
             transport_kind=bound.transport_kind,
             requesting_subject_digest=sha256(b"user-1").hexdigest(),
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             deadline_at=NOW,
             resource_manifest=resources,

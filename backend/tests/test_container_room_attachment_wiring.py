@@ -48,10 +48,3 @@ def test_container_startup_binds_file_storage_to_conversation_runtime():
     assert (
         "conversation_runtime.bind_attachment_metadata_reader(file_storage)" in source
     )
-    assert "conversation_runtime.bind_attachment_content_reader(file_storage)" in source
-    assert "conversation_runtime.bind_a2a_inline_file_limits(" in source
-    assert "max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes" in source
-    assert (
-        "max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes"
-        in source
-    )

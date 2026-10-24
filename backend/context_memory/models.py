@@ -2,14 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any
-
-
-class TruncationReason(str, Enum):
-    TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
-    TURN_COUNT_EXCEEDED = "turn_count_exceeded"
-    CHAR_LIMIT_EXCEEDED = "char_limit_exceeded"
 
 
 @dataclass(slots=True)
@@ -59,7 +52,6 @@ class ConversationTurnData:
     estimated_tokens_full: int = 0
     estimated_tokens_compact: int = 20
     brief_summary: str | None = None
-    turn_notes: dict[str, Any] | None = None
     was_successful: bool | None = None
 
     def role_prefix(self) -> str:
@@ -100,7 +92,6 @@ class ConversationTurnData:
             "estimated_tokens_full": self.estimated_tokens_full,
             "estimated_tokens_compact": self.estimated_tokens_compact,
             "brief_summary": self.brief_summary,
-            "turn_notes": self.turn_notes,
             "was_successful": self.was_successful,
         }
         return {key: value for key, value in data.items() if value is not None}
@@ -116,30 +107,10 @@ class RoomSummaryData:
     last_updated_at: datetime | str | None = None
     updated_after_turn_id: str | None = None
 
-    def has_content(self) -> bool:
-        return bool(
-            self.current_goal
-            or self.key_decisions
-            or self.open_questions
-            or self.recent_agent_contributions
-            or self.important_constraints
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "current_goal": self.current_goal,
-            "key_decisions": list(self.key_decisions),
-            "open_questions": list(self.open_questions),
-            "recent_agent_contributions": list(self.recent_agent_contributions),
-            "important_constraints": list(self.important_constraints),
-            "last_updated_at": self.last_updated_at,
-            "updated_after_turn_id": self.updated_after_turn_id,
-        }
-
 
 @dataclass(slots=True)
 class RoomMemoryState:
-    room_id: str
+    conversation_id: str
     memory_id: str
     conversation_history: list[ConversationTurnData] = field(default_factory=list)
     summary: str | None = None
@@ -150,29 +121,3 @@ class RoomMemoryState:
     total_messages: int = 0
     total_compactions: int = 0
     raw: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class AssemblyResult:
-    context: str
-    total_tokens: int
-    occupancy_pct: float
-    was_truncated: bool
-    truncation_reason: TruncationReason | None
-    turns_included: int
-    turns_truncated: int
-    stable_prefix_tokens: int
-    dynamic_suffix_tokens: int
-
-
-@dataclass(slots=True)
-class SearchRankingRecord:
-    turn_id: str
-    room_id: str
-    content: str = ""
-    keyword_score: float = 0.0
-    raw_keyword_score: float | None = None
-    relevance_score: float = 0.0
-    temporal_decay_factor: float = 1.0
-    timestamp: datetime | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)

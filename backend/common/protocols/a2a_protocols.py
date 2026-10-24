@@ -1,11 +1,7 @@
-from collections.abc import AsyncIterator, Sequence
 from typing import Protocol, runtime_checkable
 
 from common.dto import (
     AgentCardSnapshot,
-    AgentStreamEvent,
-    AgentTaskResult,
-    InternalAgentMessage,
 )
 
 
@@ -20,27 +16,6 @@ class SSEUserMessageRecord(Protocol):
 
 
 @runtime_checkable
-class AgentTransport(Protocol):
-    async def send_message(
-        self,
-        agent_url: str,
-        message: InternalAgentMessage,
-        *,
-        user_id: str | None = None,
-        accepted_output_modes: Sequence[str] | None = None,
-    ) -> AgentTaskResult: ...
-
-    async def stream_message(
-        self,
-        agent_url: str,
-        message: InternalAgentMessage,
-        *,
-        user_id: str | None = None,
-        accepted_output_modes: Sequence[str] | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]: ...
-
-
-@runtime_checkable
 class AgentCardResolver(Protocol):
     async def resolve_card(self, agent_url: str) -> AgentCardSnapshot | None: ...
     async def supports_push_notifications(self, agent_url: str) -> bool: ...
@@ -49,7 +24,9 @@ class AgentCardResolver(Protocol):
 
 @runtime_checkable
 class RoomRouteReader(Protocol):
-    async def get_room_by_room_id(self, room_id: str) -> RoomRouteRecord | None: ...
+    async def get_room_by_room_id(
+        self, conversation_id: str
+    ) -> RoomRouteRecord | None: ...
 
 
 @runtime_checkable
@@ -61,7 +38,6 @@ class SSEStateReader(RoomRouteReader, Protocol):
 
 __all__ = [
     "AgentCardResolver",
-    "AgentTransport",
     "RoomRouteRecord",
     "RoomRouteReader",
     "SSEStateReader",

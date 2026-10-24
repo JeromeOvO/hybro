@@ -89,7 +89,17 @@ def test_removed_routes_are_absent_from_checked_in_openapi():
         "/api/v1/agent/getAllActiveAgents",
         "/api/v1/agents",
         "/api/v1/agents/{item_id}",
+        "/api/v1/roomCenter/createNewRoom",
+        "/api/v1/roomCenter/history",
+        "/api/v1/roomCenter/history/pinned-order",
+        "/api/v1/roomCenter/history/{room_id}",
+        "/api/v1/roomCenter/inquiryActiveRuns",
+        "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+        "/api/v1/roomCenter/inquiryRoomSetting",
         "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
+        "/api/v1/roomCenter/sendMessage",
+        "/api/v1/roomCenter/suggestAgents",
+        "/api/v1/roomCenter/updateRoomAgentSet",
         "/api/v1/roomCenter/updateRoomExtendInfo",
         "/api/v1/roomCenter/updateRoomName",
         "/api/v1/rooms/{room_id}/a2a-tasks",
@@ -212,3 +222,16 @@ def test_public_api_routes_do_not_use_old_api_endpoint_modules():
             bad.append((row["path"], row["name"], endpoint_module))
 
     assert bad == []
+
+
+def test_route_group_matching_is_segment_bounded():
+    from api_gateway.registry import route_group_for_path
+
+    assert route_group_for_path("/api/v1/local-agents/discovery") == "agent"
+    assert route_group_for_path("/api/v1/agent/getAgent/abc") == "agent"
+    assert route_group_for_path("/api/v1/agents/discovery") == "agent"
+    assert route_group_for_path("/api/v1/agentGroups") == "agent_group"
+    assert route_group_for_path("/api/v1/local-agents-something") == "unknown"
+    assert route_group_for_path("/api/v1/agentGroups-v2") == "unknown"
+    assert route_group_for_path("/api/v1/agentish") == "unknown"
+    assert route_group_for_path("/api/v1/agents-something") == "unknown"

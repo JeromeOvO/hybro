@@ -17,7 +17,7 @@ def _is_backend_available() -> bool:
     """Check if live backend service is reachable."""
     try:
         resp = httpx.get(
-            f"{API_BASE_URL}/roomCenter/inquiryActiveRuns",
+            f"{API_BASE_URL}/rooms",
             timeout=1.0,
         )
         return resp.status_code in {200, 401, 403, 405, 422}
@@ -42,7 +42,9 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 async def functional_client() -> AsyncGenerator[httpx.AsyncClient, None]:
     """Provides an AsyncClient connected to the running backend service."""
-    async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=60.0) as client:
+    # Answering an agent question resumes the live A2A call inline, so a
+    # single request can take as long as the agent's model turn.
+    async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=180.0) as client:
         yield client
 
 
@@ -55,8 +57,7 @@ async def travel_planner_agent_id(functional_client: httpx.AsyncClient) -> str:
             if resp.status_code == 200:
                 agents = resp.json().get("agents", [])
                 for a in agents:
-                    card = a.get("agent_card") or {}
-                    name = card.get("name", "").lower()
+                    name = (a.get("name") or "").lower()
                     if "travel" in name or "planner" in name:
                         return a.get("agent_id")
         except Exception:
@@ -74,8 +75,7 @@ async def weather_agent_id(functional_client: httpx.AsyncClient) -> str:
             if resp.status_code == 200:
                 agents = resp.json().get("agents", [])
                 for a in agents:
-                    card = a.get("agent_card") or {}
-                    name = card.get("name", "").lower()
+                    name = (a.get("name") or "").lower()
                     if "weather" in name:
                         return a.get("agent_id")
         except Exception:
@@ -96,6 +96,7 @@ def test_room_payload(travel_planner_agent_id: str):
         return {
             "room_name": room_name,
             "room_owner_name": "Developer",
+            "membership_seed_input": "manual",
             "room_agent_ids": agent_ids or [travel_planner_agent_id],
             "extend_info": {"use_supervisor": use_supervisor},
         }
@@ -105,12 +106,12 @@ def test_room_payload(travel_planner_agent_id: str):
 
 async def auto_respond_pending_hitl(
     client: httpx.AsyncClient,
-    room_id: str,
+    conversation_id: str,
     answers: list[str] | None = None,
     client_request_id: str | None = None,
     seen_request_ids: set[str] | None = None,
 ) -> list[dict]:
-    """Inspects pending HITL requests for a room and automatically submits answers immediately."""
+    """Answer each new pending HITL interaction for a conversation in one batch."""
     if seen_request_ids is None:
         seen_request_ids = set()
     default_answers = answers or [
@@ -119,40 +120,47 @@ async def auto_respond_pending_hitl(
         "Mid-range hotels and public transit",
     ]
     answered = []
-    pending_resp = await client.get(f"/rooms/{room_id}/hitl/pending")
+    pending_resp = await client.get(f"/rooms/{conversation_id}/hitl/pending")
     if pending_resp.status_code != 200:
         return answered
 
-    requests = pending_resp.json().get("requests", [])
-    for r in requests:
-        req_id = r.get("request_id")
-        if req_id and req_id not in seen_request_ids:
-            seen_request_ids.add(req_id)
-            answer_idx = min(len(seen_request_ids) - 1, len(default_answers) - 1)
-            user_answer = default_answers[answer_idx]
+    # One interaction may ask several questions; it is answered as one batch,
+    # the same way the frontend submits it.
+    # A later round can reuse the interaction id with a new version, so the
+    # seen set is keyed by both.
+    by_interaction: dict[tuple[str, str], list[dict]] = {}
+    for r in pending_resp.json().get("requests", []):
+        interaction_id = r.get("interaction_id")
+        seen_key = f"{interaction_id}@{r.get('interaction_version')}"
+        if interaction_id and seen_key not in seen_request_ids:
+            by_interaction.setdefault((interaction_id, seen_key), []).append(r)
 
-            submit_resp = await client.post(
-                f"/rooms/{room_id}/hitl/respond-batch",
-                json={
-                    "interaction_id": r["interaction_id"],
-                    "answers": [
-                        {
-                            "request_id": req_id,
-                            "user_input": user_answer,
-                        }
-                    ],
-                    "client_request_id": r.get("client_request_id")
-                    or client_request_id,
-                },
+    for (interaction_id, seen_key), requests in by_interaction.items():
+        seen_request_ids.add(seen_key)
+        batch = [
+            {
+                "request_id": r["request_id"],
+                "user_input": default_answers[min(index, len(default_answers) - 1)],
+            }
+            for index, r in enumerate(requests)
+        ]
+        submit_resp = await client.post(
+            f"/rooms/{conversation_id}/hitl/respond-batch",
+            json={
+                "interaction_id": interaction_id,
+                "answers": batch,
+                "client_request_id": requests[0].get("client_request_id")
+                or client_request_id,
+            },
+        )
+        if submit_resp.status_code == 200:
+            answered.append(
+                {
+                    "requests": requests,
+                    "answers": batch,
+                    "response": submit_resp.json(),
+                }
             )
-            if submit_resp.status_code == 200:
-                answered.append(
-                    {
-                        "request": r,
-                        "answer": user_answer,
-                        "response": submit_resp.json(),
-                    }
-                )
     return answered
 
 
@@ -190,7 +198,7 @@ def find_terminal_synthesis(
 
 async def wait_for_completion_with_auto_hitl(
     client: httpx.AsyncClient,
-    room_id: str,
+    conversation_id: str,
     answers: list[str] | None = None,
     client_request_id: str | None = None,
     timeout_seconds: float = 65.0,
@@ -206,16 +214,15 @@ async def wait_for_completion_with_auto_hitl(
     while time.time() - start_time < timeout_seconds:
         newly_answered = await auto_respond_pending_hitl(
             client=client,
-            room_id=room_id,
+            conversation_id=conversation_id,
             answers=answers,
             client_request_id=client_request_id,
             seen_request_ids=seen_request_ids,
         )
         all_hitl_answered.extend(newly_answered)
 
-        history_resp = await client.post(
-            "/roomCenter/inquiryRoomMessagesByRoomId",
-            json={"room_id": room_id},
+        history_resp = await client.get(
+            f"/rooms/{conversation_id}/messages",
         )
         if history_resp.status_code == 200:
             messages = history_resp.json().get("message_list", [])

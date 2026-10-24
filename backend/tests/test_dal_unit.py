@@ -173,17 +173,14 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agent_groups",
         "agents",
         "conversation_content",
-        "cancelled_messages",
         "migration_markers",
-        "orchestration_run_events",
-        "orchestration_runs",
         "room_agent_messages",
         "room_user_messages",
         "room_memories",
         "room_quotes",
-        "run_events",
-        "runs",
     }
+    assert not {"runs", "run_events"} & set(collections)
+    assert not {"orchestration_runs", "orchestration_run_events"} & set(collections)
     collections["agents"].drop_index.assert_awaited_once_with("unique_normalized_url")
     assert _has_create_index(
         collections["agents"],
@@ -223,38 +220,23 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         unique=True,
         name="room_turn_unique",
     )
-    assert _has_create_index(
-        collections["conversation_content"],
-        [
-            ("content", "text"),
-            ("turn_notes.keywords", "text"),
-            ("turn_notes.entities", "text"),
-            ("turn_notes.tags", "text"),
-            ("turn_notes.one_liner", "text"),
-        ],
-        unique=False,
-        name="turn_notes_text",
-        weights={
-            "content": 1,
-            "turn_notes.keywords": 1,
-            "turn_notes.entities": 1,
-            "turn_notes.tags": 1,
-            "turn_notes.one_liner": 1,
-        },
-    )
-    assert _has_create_index(
-        collections["cancelled_messages"],
-        [("reconciliation_status", 1), ("message_id", 1)],
-        unique=False,
-        name="cancellation_reconciliation_message",
-    )
-    assert _has_create_index(
-        collections["room_agent_messages"],
-        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
-        unique=False,
-        name="room_task_created_sparse",
-        sparse=True,
-    )
+    content_index_names = {
+        call.kwargs.get("name")
+        for call in collections["conversation_content"].create_index.call_args_list
+    }
+    assert "turn_notes_text" not in content_index_names
+    assert "cancelled_messages" not in collections
+    task_index_names = {
+        call.kwargs.get("name")
+        for call in collections["room_agent_messages"].create_index.call_args_list
+    }
+    assert not task_index_names & {
+        "has_task_tracking_sparse",
+        "task_updated_state_sparse",
+        "task_created_state_sparse",
+        "user_task_state_sparse",
+        "room_task_created_sparse",
+    }
     assert _has_create_index(
         collections["room_agent_messages"],
         [("message_id", 1)],
@@ -309,8 +291,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
 @pytest.mark.parametrize(
     "critical_index_name",
     [
-        "orchestration_run_id_unique",
-        "orchestration_event_id_unique",
         "room_user_message_id_unique",
         "room_user_client_request_id_unique",
         "room_agent_message_id_unique",
@@ -365,7 +345,9 @@ async def test_user_message_index_readiness_blocks_historical_conflicts(
     failed_check_index: int,
     expected_error: str,
 ):
-    from container import _ensure_user_message_indexes
+    from conversation.repository.indexes import (
+        ensure_user_message_indexes as _ensure_user_message_indexes,
+    )
 
     collection = MagicMock()
     responses = [[], [], [], [], []]
@@ -391,7 +373,9 @@ async def test_user_message_index_readiness_blocks_historical_conflicts(
 
 @pytest.mark.asyncio
 async def test_user_message_index_readiness_passes_then_creates_both_indexes():
-    from container import _ensure_user_message_indexes
+    from conversation.repository.indexes import (
+        ensure_user_message_indexes as _ensure_user_message_indexes,
+    )
 
     collection = MagicMock()
     collection.aggregate = AsyncMock(return_value=[])
@@ -422,7 +406,9 @@ async def test_user_message_index_readiness_passes_then_creates_both_indexes():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_blocks_invalid_rows_before_indexes():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(
@@ -452,7 +438,9 @@ async def test_room_timeline_readiness_blocks_invalid_rows_before_indexes():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_requires_final_audit_marker_for_existing_rows():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -481,7 +469,9 @@ async def test_room_timeline_readiness_requires_final_audit_marker_for_existing_
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_rejects_legacy_marker_id_only_row():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -520,7 +510,9 @@ async def test_room_timeline_readiness_rejects_legacy_marker_id_only_row():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_accepts_valid_final_audit_marker():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -568,7 +560,9 @@ async def test_room_timeline_readiness_accepts_valid_final_audit_marker():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_requires_manual_identity_repair():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(side_effect=[[{"message_id": None}], []])
@@ -600,7 +594,7 @@ def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
 
 @pytest.mark.asyncio
 async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current():
-    from container import _ensure_agent_indexes
+    from agent.repository import AgentMongoRepository
 
     collection = MagicMock()
     collection.index_information = AsyncMock(
@@ -615,7 +609,7 @@ async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current(
     mongo = MagicMock()
     mongo.collection.return_value = collection
 
-    assert await _ensure_agent_indexes(mongo) is True
+    assert await AgentMongoRepository(mongo).ensure_indexes() is True
     collection.drop_index.assert_not_awaited()
     assert any(
         call.kwargs.get("name") == "agent_lexical_text"
@@ -625,7 +619,7 @@ async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current(
 
 @pytest.mark.asyncio
 async def test_text_index_with_scalar_prefix_is_rebuilt_even_when_weights_match():
-    from container import _ensure_text_index
+    from common.utils.mongo_indexes import ensure_text_index as _ensure_text_index
 
     collection = MagicMock()
     collection.index_information = AsyncMock(
@@ -659,29 +653,8 @@ async def test_text_index_with_scalar_prefix_is_rebuilt_even_when_weights_match(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failed_name", "expected"),
-    [
-        (
-            "agent_lexical_text",
-            {
-                "agent_search_index_ready": False,
-                "memory_search_index_ready": True,
-            },
-        ),
-        (
-            "turn_notes_text",
-            {
-                "agent_search_index_ready": True,
-                "memory_search_index_ready": False,
-            },
-        ),
-    ],
-)
-async def test_search_index_failures_are_reported_independently(
-    failed_name,
-    expected,
-):
+async def test_agent_search_index_failure_is_reported():
+    failed_name = "agent_lexical_text"
     from container import ensure_runtime_indexes
 
     collections: dict[str, MagicMock] = {}
@@ -707,7 +680,9 @@ async def test_search_index_failures_are_reported_independently(
     mongo = MagicMock()
     mongo.collection.side_effect = _collection
 
-    assert await ensure_runtime_indexes(mongo=mongo) == expected
+    assert await ensure_runtime_indexes(mongo=mongo) == {
+        "agent_search_index_ready": False
+    }
 
 
 @pytest.mark.asyncio
@@ -1263,49 +1238,3 @@ async def test_leader_elector_impl_close_closes_client():
     await elector.close()
 
     client.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_index_registry_ensures_registered_indexes_in_order():
-    from dal.index_registry import IndexRegistryImpl
-
-    collection_a = MagicMock()
-    collection_a.create_index = AsyncMock(return_value="idx-a")
-    collection_b = MagicMock()
-    collection_b.create_index = AsyncMock(return_value="idx-b")
-    mongo = MagicMock()
-    mongo.collection.side_effect = [collection_a, collection_b]
-
-    registry = IndexRegistryImpl(mongo=mongo)
-    registry.register("agent", "agents", [("agent_id", 1)], unique=True)
-    registry.register("room", "rooms", [("room_id", 1)])
-
-    await registry.ensure_all()
-
-    assert mongo.collection.call_args_list[0].args == ("agents",)
-    assert mongo.collection.call_args_list[1].args == ("rooms",)
-    collection_a.create_index.assert_awaited_once_with([("agent_id", 1)], unique=True)
-    collection_b.create_index.assert_awaited_once_with([("room_id", 1)])
-
-
-@pytest.mark.asyncio
-async def test_index_registry_attempts_all_indexes_before_raising():
-    from dal.index_registry import IndexRegistryImpl
-
-    collection_a = MagicMock()
-    collection_a.create_index = AsyncMock(side_effect=ValueError("bad index"))
-    collection_b = MagicMock()
-    collection_b.create_index = AsyncMock(return_value="idx-b")
-    mongo = MagicMock()
-    mongo.collection.side_effect = [collection_a, collection_b]
-
-    registry = IndexRegistryImpl(mongo=mongo)
-    registry.register("agent", "agents", [("agent_id", 1)])
-    registry.register("room", "rooms", [("room_id", 1)])
-
-    with pytest.raises(RuntimeError, match="agent:agents: bad index"):
-        await registry.ensure_all()
-
-    assert mongo.collection.call_count == 2
-    collection_a.create_index.assert_awaited_once_with([("agent_id", 1)])
-    collection_b.create_index.assert_awaited_once_with([("room_id", 1)])

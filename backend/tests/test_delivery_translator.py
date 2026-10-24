@@ -20,7 +20,7 @@ NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 def test_processing_status_translation_uses_final_frame_without_nested_timestamp():
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="awaiting_input",
         details={"reason": "hitl"},
@@ -34,7 +34,7 @@ def test_processing_status_translation_uses_final_frame_without_nested_timestamp
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "processing_status",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "status": "awaiting_input",
             "message_id": "msg-1",
@@ -50,7 +50,7 @@ def test_processing_status_translation_uses_final_frame_without_nested_timestamp
 
 def test_terminal_delivery_id_is_exposed_in_processing_frame():
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="completed",
         delivery_id="terminal:event-1:processing",
@@ -76,7 +76,7 @@ def test_processing_status_accepts_all_final_statuses():
 
     for status in statuses:
         event = ProcessingStatusEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             status=status,
             details=None,
@@ -89,32 +89,33 @@ def test_processing_status_accepts_all_final_statuses():
 
 def test_run_event_translation_always_includes_correlation_id():
     event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="evt-1",
         run_id="run-1",
         seq=2,
-        run_event_type="agent_started",
-        payload={"agent_id": "agent-1"},
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "run_event",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "event_id": "evt-1",
             "run_id": "run-1",
             "seq": 2,
-            "type": "agent_started",
-            "payload": {"agent_id": "agent-1"},
-            "correlation_id": None,
+            "type": "turn_start",
+            "payload": {"internal_turn_id": "turn-1", "attempt": 1},
+            "correlation_id": "client-1",
         },
     }
 
 
 def test_agent_message_partial_translation():
     event = AgentMessagePartial(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         agent_id="agent-1",
         content_delta="hello",
@@ -123,7 +124,7 @@ def test_agent_message_partial_translation():
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "agent_response_partial",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "message_id": "msg-1",
             "agent_id": "agent-1",
@@ -134,7 +135,7 @@ def test_agent_message_partial_translation():
 
 def test_agent_message_final_translation_merges_content():
     event = AgentMessageFinal(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         agent_id="agent-1",
         content={"content": "done", "parts": [{"text": "done"}]},
@@ -143,7 +144,7 @@ def test_agent_message_final_translation_merges_content():
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "agent_response",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "message_id": "msg-1",
             "agent_id": "agent-1",
@@ -155,7 +156,7 @@ def test_agent_message_final_translation_merges_content():
 
 def test_agent_message_final_translation_drops_reserved_timestamp_from_content():
     event = AgentMessageFinal(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         agent_id="agent-1",
         content={"content": "done", "timestamp": "nested"},
@@ -168,12 +169,14 @@ def test_agent_message_final_translation_drops_reserved_timestamp_from_content()
 
 
 def test_cancellation_translation():
-    event = CancellationEvent(room_id="room-1", message_id="msg-1", reason="user")
+    event = CancellationEvent(
+        conversation_id="room-1", message_id="msg-1", reason="user"
+    )
 
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "cancellation",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "message_id": "msg-1",
             "reason": "user",
@@ -183,7 +186,7 @@ def test_cancellation_translation():
 
 def test_hitl_request_translation():
     event = HITLRequestEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         request_id="hitl-1",
         message_id="msg-1",
         prompt="Continue?",
@@ -194,7 +197,7 @@ def test_hitl_request_translation():
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "hitl_request",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "request_id": "hitl-1",
             "message_id": "msg-1",
@@ -211,7 +214,7 @@ def test_hitl_request_translation():
 
 def test_hitl_request_translation_preserves_full_payload():
     event = HITLRequestEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         request_id="hitl-1",
         message_id="msg-1",
         source="agent",
@@ -233,7 +236,7 @@ def test_hitl_request_translation_preserves_full_payload():
     assert frame == {
         "type": "hitl_request",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "request_id": "hitl-1",
             "message_id": "msg-1",
@@ -257,7 +260,7 @@ def test_hitl_request_translation_preserves_full_payload():
 
 def test_hitl_resolved_translation():
     event = HITLResolvedEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         request_id="hitl-1",
         message_id="msg-1",
         source="agent",
@@ -266,7 +269,7 @@ def test_hitl_resolved_translation():
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "hitl_response",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "request_id": "hitl-1",
             "message_id": "msg-1",
@@ -280,7 +283,7 @@ def test_hitl_resolved_translation():
 
 def test_hitl_status_translation_preserves_status_source_and_error():
     event = HITLResolvedEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         request_id="hitl-1",
         message_id="msg-1",
         source="agent",
@@ -295,7 +298,7 @@ def test_hitl_status_translation_preserves_status_source_and_error():
     assert frame == {
         "type": "hitl_response",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "request_id": "hitl-1",
             "message_id": "msg-1",
@@ -314,7 +317,7 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
     private_keys = {"orchestration_run_id"}
     for source in ("agent", "supervisor"):
         request_event = HITLRequestEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             request_id="hitl-1",
             message_id="msg-1",
             source=source,
@@ -332,7 +335,7 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
             trace_id="trace-1",
         )
         resolved_event = HITLResolvedEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             request_id="hitl-1",
             message_id="msg-1",
             source=source,
@@ -381,7 +384,7 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
 
 def test_task_submitted_translation():
     event = TaskSubmittedEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-msg-1",
         task_id="task-1",
         agent_name="Agent",
@@ -398,7 +401,7 @@ def test_task_submitted_translation():
     assert to_sse_frame(event, timestamp=NOW) == {
         "type": "task_submitted",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "message_id": "agent-msg-1",
             "task_id": "task-1",
@@ -417,7 +420,7 @@ def test_task_submitted_translation():
 
 def test_task_update_translation():
     event = TaskUpdateEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-msg-1",
         status="input-required",
         content="content",
@@ -447,7 +450,7 @@ def test_task_update_translation():
 
 def test_task_update_delivery_id_is_exposed_in_frame():
     event = TaskUpdateEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-msg-1",
         status="completed",
         delivery_id="terminal:event-1:system-task",
@@ -462,7 +465,7 @@ def test_task_update_delivery_id_is_exposed_in_frame():
 
 def test_artifact_update_translation():
     event = ArtifactUpdateEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="agent-msg-1",
         agent_id="agent-1",
         artifact={"kind": "file"},
@@ -483,7 +486,7 @@ def test_artifact_update_translation():
 
 def test_error_event_translation():
     event = ErrorEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         error="slow down",
         error_type="rate_limit_exceeded",
         message_id="msg-1",

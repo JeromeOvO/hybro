@@ -143,10 +143,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "generation_provider=llm_gateway_config.generation_provider,",
         "settings_obj=runtime.settings,",
         "agent_selection_llm_service = AgentSelectionLLMService(",
-        "message_parser_llm_service = MessageParserLLMService(",
-        "conversation_runtime.bind_message_parser_service(message_parser_llm_service)",
-        "context_memory_facade = create_context_memory_facade(",
-        "llm_provider=llm_provider,",
     ]
     forbidden_snippets = [
         "discovery_llm_service = DiscoveryLLMService(",

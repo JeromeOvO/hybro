@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from common.dto import AgentInfo, MembershipSeed
-from common.protocols import AgentRegistry, RoomMembershipSeedSource
+from common.protocols import AgentRegistry
+from conversation.dto import SavedAgentGroupSnapshot
+
+
+@runtime_checkable
+class RoomMembershipSeedSource(Protocol):
+    async def get_saved_group(
+        self, group_id: str
+    ) -> SavedAgentGroupSnapshot | None: ...
+    async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]: ...
 
 
 @dataclass(frozen=True)
@@ -146,7 +156,7 @@ def _is_visible(agent: AgentInfo, user_id: str | None) -> bool:
 
 
 def _looks_like_agent_id(value: object) -> bool:
-    # Keep this local to avoid coupling the pure room package back to legacy ConversationRuntime.
+    # Kept local so this pure membership module has no runtime dependencies.
     if not isinstance(value, str):
         return False
     try:

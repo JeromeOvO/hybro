@@ -5,7 +5,7 @@ import pytest
 
 from agent.facade import AgentFacade
 from agent.network import AgentNetworkService
-from agent.protocols import AgentGroupStoreCompatibility
+from agent.protocols import AgentGroupStore
 from common.errors import AppError, ConflictError, NotFoundError, ValidationError
 from models.agent_group import AgentGroup
 from tests.test_agent_facade import Resolver, _doc
@@ -26,7 +26,7 @@ def _network(
         now=lambda: datetime.now(UTC),
     )
     groups_by_id = {group.group_id: group for group in groups or []}
-    group_store = AsyncMock(spec=AgentGroupStoreCompatibility)
+    group_store = AsyncMock(spec=AgentGroupStore)
     group_store.get_agent_group_by_id.side_effect = groups_by_id.get
     group_store.get_agent_groups_by_owner.side_effect = lambda owner_id: [
         group for group in groups_by_id.values() if group.owner_id == owner_id

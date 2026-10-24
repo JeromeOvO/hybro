@@ -15,14 +15,6 @@ from execution.orchestrator.a2a_runtime.catalog_assembler import (
 )
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import (
     SURFACE_AGENT_QUESTIONS_TOOL_NAME,
     OrchestratorKernel,
@@ -30,6 +22,7 @@ from execution.orchestrator.kernel import (
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.models import (
     AssistantMessage,
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     OrchestratorProfile,
     TextPart,
@@ -46,6 +39,14 @@ from execution.orchestrator.profiles import (
 )
 from execution.orchestrator.public_projection import PublicProjectionTranslator
 from execution.orchestrator.session import DefaultRunFactory, RoomAgentSessionConfig
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
+)
 
 from ._orchestrator_helpers import (
     NOW,
@@ -93,13 +94,14 @@ def agent_tool(name: str, label: str) -> ToolDefinition:
 def make_passthrough_run(*, agent_ids=("agent-1",), source="mention", text="hello"):
     config = RoomAgentSessionConfig(
         session_id="session-1",
-        room_id="room-1",
+        conversation_id="room-1",
         profile=passthrough_profile(),
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             source=source,
-            room_id="room-1",
+            conversation_id="room-1",
             agent_ids=list(agent_ids),
+            authorization_basis=AuthorizationBasis(kind="mention"),
         ),
         room_epoch=1,
         requesting_subject_id="user-1",
@@ -213,9 +215,9 @@ class PublicHistory:
     def __init__(self) -> None:
         self.records: dict[str, dict] = {}
         self.events: list[str] = []
-        self.translator = PublicProjectionTranslator(lifecycle_family="canonical")
+        self.translator = PublicProjectionTranslator()
 
-    async def read(self, _room_id, _run_id):
+    async def read(self, _conversation_id, _run_id):
         return list(self.records.values())
 
     async def lifecycle(self, event_type, run, payload):
@@ -229,17 +231,16 @@ class PublicHistory:
                 sequence=len(self.events),
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
         if projected is None or projected.event_id in self.records:
             return
         self.records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": len(self.records) + 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -269,7 +270,7 @@ class PublicHistory:
             room_seq += 1
             assert fold.apply(
                 {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "room_seq": room_seq,
                     "kind": "agent_response",
                     "ts": NOW.isoformat(),
@@ -283,7 +284,7 @@ class PublicHistory:
             )
         room_seq += 1
         settled = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_seq,
             "kind": "run_event",
             "ts": NOW.isoformat(),

@@ -37,9 +37,9 @@ class MockResizeObserver {
   disconnect() {}
 }
 
-function makeAdapter(roomId = 'room-1'): TimelineAdapter {
+function makeAdapter(conversationId = 'room-1'): TimelineAdapter {
   return {
-    roomId,
+    conversationId,
     onSendMessage: vi.fn(),
     onCancelProcessing: vi.fn(),
       onRespondToHitlBatch: vi.fn(),
@@ -87,13 +87,13 @@ describe('RoomPageShell agent detail pane', () => {
     store.setRoom('room-1')
     store.upsertMessage(createUserMessage({
       id: 'user-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       content: 'Research a2a agents',
     }), 'db')
     const messageId = 'orchestrator:run-research:inv_research_0001'
     store.upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Researcher Alex',
@@ -124,7 +124,7 @@ describe('RoomPageShell agent detail pane', () => {
     }])
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-research', public_call_id: 'inv_research_0001', status: 'completed',
-      output: '# Report\n\nA2A findings.', artifacts: [],
+      parts: [{ kind: 'text', text: '# Report\n\nA2A findings.' }], artifacts: [],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
   })
 
@@ -182,7 +182,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_weather_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Weather Agent',
@@ -200,7 +200,6 @@ describe('RoomPageShell agent detail pane', () => {
     }])
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-1', public_call_id: 'inv_weather_0001', status: 'completed',
-      output: 'FLATTENED OUTPUT MUST NOT RENDER',
       parts: [
         { kind: 'data', data: { temperature: 27, unit: 'C' } },
         { kind: 'text', text: '# Private weather output\n\nSunny.' },
@@ -213,7 +212,6 @@ describe('RoomPageShell agent detail pane', () => {
     act(() => useRoomUiStore.getState().openAgentDetail('room-1', messageId))
 
     expect(await screen.findByRole('heading', { name: 'Private weather output' })).toBeInTheDocument()
-    expect(screen.queryByText('FLATTENED OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
     const jsonToggle = screen.getByRole('button', { name: /json.*lines/i })
     expect(jsonToggle).toHaveAttribute('aria-expanded', 'false')
     await userEvent.click(jsonToggle)
@@ -228,11 +226,37 @@ describe('RoomPageShell agent detail pane', () => {
     expect(screen.getAllByText('Weather Agent').length).toBeGreaterThan(0)
   })
 
+  it('uses the canonical card status over a status-less HITL recovery shell entity', async () => {
+    // Snapshot HITL recovery anchors an open question on a shell entity under
+    // the card id. It never receives the call's completion; the Turn does.
+    const messageId = 'orchestrator:run-research:inv_research_0001'
+    const store = useMessageStore.getState()
+    store.removeMessage(messageId)
+    store.upsertMessage({
+      id: messageId,
+      conversationId: 'room-1',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Researcher Alex',
+      timestamp: '2030-01-01T00:00:00.000Z',
+      relatedMessageId: 'user-1',
+      isEphemeral: false,
+    }, 'sse')
+
+    render(<RoomPageShell adapter={{ ...makeAdapter(), getToken: async () => 'token' }} />)
+    act(() => useRoomUiStore.getState().openAgentDetail('room-1', messageId))
+
+    const pane = await screen.findByTestId('agent-response-detail-pane')
+    expect(await within(pane).findByRole('heading', { name: 'Report' })).toBeInTheDocument()
+    expect(within(pane).queryByText('Working on your request…')).not.toBeInTheDocument()
+    expect(within(pane).queryByText('Working')).not.toBeInTheDocument()
+  })
+
   it('shows a private-detail loading state without falling back to public content', () => {
     const messageId = 'orchestrator:run-1:inv_private_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Private Agent',
@@ -252,7 +276,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_working_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Working Agent',
@@ -275,7 +299,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_pending_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Pending Agent',
@@ -289,7 +313,7 @@ describe('RoomPageShell agent detail pane', () => {
       ))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         run_id: 'run-1', public_call_id: 'inv_pending_0001', status: 'completed',
-        output: 'Projection is ready.', artifacts: [],
+        parts: [{ kind: 'text', text: 'Projection is ready.' }], artifacts: [],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -305,7 +329,7 @@ describe('RoomPageShell agent detail pane', () => {
     const messageId = 'orchestrator:run-1:inv_artifact_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
       id: messageId,
-      roomId: 'room-1',
+      conversationId: 'room-1',
       relatedMessageId: 'user-1',
       agentId: undefined,
       senderName: 'Artifact Agent',
@@ -314,7 +338,7 @@ describe('RoomPageShell agent detail pane', () => {
     }), 'sse')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-1', public_call_id: 'inv_artifact_0001', status: 'completed',
-      output: '',
+      parts: [],
       artifacts: [{
         artifact_ref: '/api/v1/files/af011190aaba4f97b459e7656bba7f7e/content',
         file_id: 'af011190aaba4f97b459e7656bba7f7e',
@@ -365,7 +389,6 @@ describe('RoomPageShell agent detail pane', () => {
       if (url.includes('/agent-calls/')) {
         return new Response(JSON.stringify({
           run_id: 'run-image', public_call_id: 'inv_image_0001', status: 'completed',
-          output: 'FLATTENED IMAGE OUTPUT MUST NOT RENDER',
           parts: [{ kind: 'text', text: 'Generated image response.' }],
           artifacts: [{
             artifact_ref: `/api/v1/files/${fileId}/content`,
@@ -400,7 +423,6 @@ describe('RoomPageShell agent detail pane', () => {
     expect(await screen.findByTestId('agent-response-detail-pane')).toBeInTheDocument()
     expect((await screen.findAllByRole('img', { name: 'shared-image.png' }))).toHaveLength(2)
     expect(screen.getByText('Generated image response.')).toBeInTheDocument()
-    expect(screen.queryByText('FLATTENED IMAGE OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
 
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
     expect(urls.filter((url) => url.includes('/agent-calls/'))).toHaveLength(1)

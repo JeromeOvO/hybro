@@ -21,8 +21,8 @@ describe('selectComposerState', () => {
 
   it('returns normal mode with no processing when idle', () => {
     const { entities, orderedIds } = setup([
-      createUserMessage({ id: 'u1', roomId: 'room-1' }),
-      createAgentMessage({ id: 'a1', roomId: 'room-1', taskStatus: TASK_STATE.COMPLETED }),
+      createUserMessage({ id: 'u1', conversationId: 'room-1' }),
+      createAgentMessage({ id: 'a1', conversationId: 'room-1', taskStatus: TASK_STATE.COMPLETED }),
     ])
     const result = selectComposerState('room-1', entities, orderedIds)
     expect(result.mode).toBe('normal')
@@ -32,7 +32,7 @@ describe('selectComposerState', () => {
 
   it('returns isProcessing=true when agent is working', () => {
     const { entities, orderedIds } = setup([
-      createAgentMessage({ id: 'a1', roomId: 'room-1', taskStatus: TASK_STATE.WORKING }),
+      createAgentMessage({ id: 'a1', conversationId: 'room-1', taskStatus: TASK_STATE.WORKING }),
     ])
     const result = selectComposerState('room-1', entities, orderedIds)
     expect(result.isProcessing).toBe(true)
@@ -40,7 +40,7 @@ describe('selectComposerState', () => {
 
   it('excludes ephemeral from processing check', () => {
     const { entities, orderedIds } = setup([
-      createAgentMessage({ id: 'a1', roomId: 'room-1', taskStatus: TASK_STATE.WORKING, isEphemeral: true }),
+      createAgentMessage({ id: 'a1', conversationId: 'room-1', taskStatus: TASK_STATE.WORKING, isEphemeral: true }),
     ])
     const result = selectComposerState('room-1', entities, orderedIds)
     expect(result.isProcessing).toBe(false)
@@ -49,7 +49,7 @@ describe('selectComposerState', () => {
   it('returns hitl_responding mode when HITL is pending', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'a1', roomId: 'room-1',
+        id: 'a1', conversationId: 'room-1',
         hitlRequestId: 'req-1', hitlPrompt: 'Q?',
         senderName: 'Agent', taskStatus: TASK_STATE.INPUT_REQUIRED,
       }),
@@ -62,7 +62,7 @@ describe('selectComposerState', () => {
   it('input-required is NOT counted as processing', () => {
     const { entities, orderedIds } = setup([
       createAgentMessage({
-        id: 'a1', roomId: 'room-1',
+        id: 'a1', conversationId: 'room-1',
         taskStatus: TASK_STATE.INPUT_REQUIRED,
         hitlRequestId: 'req-1', hitlPrompt: 'Q?', senderName: 'Agent',
       }),
@@ -73,7 +73,7 @@ describe('selectComposerState', () => {
 
   it('excludes agents from other rooms', () => {
     const { entities, orderedIds } = setup([
-      createAgentMessage({ id: 'a1', roomId: 'room-2', taskStatus: TASK_STATE.WORKING }),
+      createAgentMessage({ id: 'a1', conversationId: 'room-2', taskStatus: TASK_STATE.WORKING }),
     ])
     const result = selectComposerState('room-1', entities, orderedIds)
     expect(result.isProcessing).toBe(false)

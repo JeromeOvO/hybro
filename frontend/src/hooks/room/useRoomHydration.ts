@@ -4,7 +4,7 @@ import { useMessageStore } from '@/stores/message-store'
 import { hydrateRoomFromDb } from '@/lib/room-sync/hydrate-room'
 
 export function useRoomHydration(
-  roomId: string,
+  conversationId: string,
   userId: string | undefined,
   userName: string | undefined,
   getToken: (() => Promise<string | null>) | undefined,
@@ -16,12 +16,12 @@ export function useRoomHydration(
   const hydrationStartedRef = useRef<string | null>(null)
   const reconcileInflightRef = useRef<string | null>(null)
 
-  const hydrateFromDb = useCallback(async (targetRoomId: string) => {
+  const hydrateFromDb = useCallback(async (targetConversationId: string) => {
     const store = useMessageStore.getState()
-    if (store.hydratedFromDb && store.roomId === targetRoomId) return
+    if (store.hydratedFromDb && store.conversationId === targetConversationId) return
 
     await hydrateRoomFromDb({
-      roomId: targetRoomId,
+      conversationId: targetConversationId,
       phase: 'initial',
       getToken,
       userId,
@@ -32,12 +32,12 @@ export function useRoomHydration(
     })
   }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
 
-  const reconcileWithDb = useCallback(async (targetRoomId: string) => {
-    if (reconcileInflightRef.current === targetRoomId) return
-    reconcileInflightRef.current = targetRoomId
+  const reconcileWithDb = useCallback(async (targetConversationId: string) => {
+    if (reconcileInflightRef.current === targetConversationId) return
+    reconcileInflightRef.current = targetConversationId
     try {
       let result = await hydrateRoomFromDb({
-        roomId: targetRoomId,
+        conversationId: targetConversationId,
         phase: 'reconcile',
         getToken,
         userId,
@@ -48,9 +48,9 @@ export function useRoomHydration(
 
       if (!result.fetchFailed && result.filteredCount === 0) {
         await new Promise(r => setTimeout(r, 2000))
-        if (reconcileInflightRef.current !== targetRoomId) return
+        if (reconcileInflightRef.current !== targetConversationId) return
         result = await hydrateRoomFromDb({
-          roomId: targetRoomId,
+          conversationId: targetConversationId,
           phase: 'reconcile',
           getToken,
           userId,
@@ -62,7 +62,7 @@ export function useRoomHydration(
     } catch (error) {
       console.error('[NormalizedStore] Reconciliation failed:', error)
     } finally {
-      if (reconcileInflightRef.current === targetRoomId) {
+      if (reconcileInflightRef.current === targetConversationId) {
         reconcileInflightRef.current = null
       }
     }
@@ -71,14 +71,14 @@ export function useRoomHydration(
   useEffect(() => {
     hydrationStartedRef.current = null
     reconcileInflightRef.current = null
-  }, [roomId])
+  }, [conversationId])
 
   useEffect(() => {
-    if (!roomId || !userName || !_room) return
-    if (hydrationStartedRef.current === roomId) return
-    hydrationStartedRef.current = roomId
-    hydrateFromDb(roomId)
-  }, [roomId, userName, _room, hydrateFromDb])
+    if (!conversationId || !userName || !_room) return
+    if (hydrationStartedRef.current === conversationId) return
+    hydrationStartedRef.current = conversationId
+    hydrateFromDb(conversationId)
+  }, [conversationId, userName, _room, hydrateFromDb])
 
   return { hydrateFromDb, reconcileWithDb }
 }

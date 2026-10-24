@@ -1,5 +1,44 @@
 [
   {
+    "path": "/api/v1/a2a/push/{call_record_id}",
+    "methods": [
+      "POST"
+    ],
+    "name": "receive_a2a_push",
+    "endpoint_module": "api_gateway.routes.a2a_push_routes",
+    "declared_owner": "api_gateway.routes.a2a_push_routes",
+    "tags": [
+      "a2a_push"
+    ],
+    "status_code": 202,
+    "dependencies": [
+      "get_a2a_push_receiver"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent-suggestions",
+    "methods": [
+      "POST"
+    ],
+    "name": "suggest_agents",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_selection_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
     "methods": [
       "POST"
@@ -34,7 +73,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -55,7 +94,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -76,8 +115,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
-      "get_agent_liveness_checker",
+      "get_agent_catalog",
       "get_optional_user"
     ],
     "auth_dependencies": [
@@ -98,7 +136,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center"
+      "get_agent_catalog"
     ],
     "auth_dependencies": [],
     "include_in_schema": true
@@ -116,7 +154,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_optional_user"
     ],
     "auth_dependencies": [
@@ -137,7 +175,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user_or_service"
     ],
     "auth_dependencies": [
@@ -554,28 +592,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/createNewRoom",
-    "methods": [
-      "POST"
-    ],
-    "name": "create_new_room",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/history",
+    "path": "/api/v1/rooms",
     "methods": [
       "GET"
     ],
@@ -587,9 +604,9 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_execution_engine",
-      "get_room_center"
+      "get_execution_engine"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -597,7 +614,28 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/history/pinned-order",
+    "path": "/api/v1/rooms",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_new_room",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_chat_rooms",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/pinned-order",
     "methods": [
       "PUT"
     ],
@@ -609,8 +647,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -619,7 +657,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/history/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
     "methods": [
       "DELETE"
     ],
@@ -631,8 +669,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -641,7 +679,30 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/history/{room_id}",
+    "path": "/api/v1/rooms/{conversation_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "inquiry_room_setting",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_chat_rooms",
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{conversation_id}",
     "methods": [
       "PATCH"
     ],
@@ -653,8 +714,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -663,9 +724,9 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/inquiryActiveRuns",
+    "path": "/api/v1/rooms/{conversation_id}/active-runs",
     "methods": [
-      "POST"
+      "GET"
     ],
     "name": "inquiry_active_runs",
     "endpoint_module": "api_gateway.routes.room_routes",
@@ -677,7 +738,6 @@
     "dependencies": [
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -686,118 +746,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
-    "methods": [
-      "POST"
-    ],
-    "name": "inquiry_room_messages",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/inquiryRoomSetting",
-    "methods": [
-      "POST"
-    ],
-    "name": "inquiry_room_setting",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_execution_engine",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/sendMessage",
-    "methods": [
-      "POST"
-    ],
-    "name": "send_message",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_execution_engine",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/suggestAgents",
-    "methods": [
-      "POST"
-    ],
-    "name": "suggest_agents",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_agent_selection_service",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/updateRoomAgentSet",
-    "methods": [
-      "POST"
-    ],
-    "name": "update_room_agent_set",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "path": "/api/v1/rooms/{conversation_id}/agent-calls/{run_id}/{public_call_id}/detail",
     "methods": [
       "GET"
     ],
@@ -818,7 +767,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/interactions/{interaction_id}/cancel",
     "methods": [
       "POST"
     ],
@@ -841,7 +790,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/pending",
     "methods": [
       "GET"
     ],
@@ -864,7 +813,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
+    "path": "/api/v1/rooms/{conversation_id}/hitl/respond-batch",
     "methods": [
       "POST"
     ],
@@ -880,6 +829,51 @@
       "get_current_user",
       "get_hitl_manager",
       "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{conversation_id}/messages",
+    "methods": [
+      "GET"
+    ],
+    "name": "inquiry_room_messages",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_chat_rooms",
+      "get_current_user",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{conversation_id}/messages",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_chat_rooms",
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -999,7 +993,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/events",
+    "path": "/api/v1/sse/room/{conversation_id}/events",
     "methods": [
       "GET"
     ],
@@ -1020,7 +1014,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/status",
+    "path": "/api/v1/sse/room/{conversation_id}/status",
     "methods": [
       "GET"
     ],
@@ -1042,7 +1036,7 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/sse/room/{room_id}/stream",
+    "path": "/api/v1/sse/room/{conversation_id}/stream",
     "methods": [
       "GET"
     ],
@@ -1061,22 +1055,6 @@
     "auth_dependencies": [
       "get_current_user_with_query_token"
     ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/webhooks/a2a/{message_id}",
-    "methods": [
-      "POST"
-    ],
-    "name": "handle_a2a_webhook",
-    "endpoint_module": "api_gateway.routes.webhook_routes",
-    "declared_owner": "api_gateway.routes.webhook_routes",
-    "tags": [
-      "webhooks"
-    ],
-    "status_code": null,
-    "dependencies": [],
-    "auth_dependencies": [],
     "include_in_schema": true
   },
   {

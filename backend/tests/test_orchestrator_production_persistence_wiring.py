@@ -2,34 +2,23 @@
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dal.orchestrator.epoch_bindings import (
+from execution.orchestrator.a2a_runtime.persistence import A2A_RUNTIME_COLLECTIONS
+from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+from execution.repository.orchestrator.epoch_bindings import (
     EpochScopedOrchestratorCleanup,
     bind_room_epoch_store,
     require_room_epoch_store,
     reset_room_epoch_store,
 )
-from dal.orchestrator.stores import MongoRoomEpochStore
-from execution.orchestrator.a2a_runtime.persistence import A2A_RUNTIME_COLLECTIONS
-from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+from execution.repository.orchestrator.stores import MongoRoomEpochStore
 
 ROOT = Path(__file__).resolve().parents[1]
-
-ROOM_OWNED_ORCHESTRATOR_COLLECTIONS = {
-    "orchestrator_runs",
-    "orchestrator_run_events",
-    "orchestrator_agent_tool_bindings",
-    "orchestrator_agent_calls",
-    "orchestrator_a2a_observations",
-    "orchestrator_a2a_observation_conflicts",
-    "orchestrator_room_epochs",
-}
 
 
 def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
@@ -41,7 +30,9 @@ def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_registers_exact_metadata_inventory():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     collections: dict[str, MagicMock] = {}
 
@@ -83,7 +74,9 @@ async def test_ensure_orchestrator_indexes_registers_exact_metadata_inventory():
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_removes_obsolete_active_room_index():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     collections: dict[str, MagicMock] = {}
 
@@ -131,7 +124,9 @@ async def test_ensure_orchestrator_indexes_removes_obsolete_active_room_index():
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_fails_if_obsolete_index_cannot_be_removed():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     runs = MagicMock()
     runs.index_information = AsyncMock(
@@ -147,37 +142,6 @@ async def test_ensure_orchestrator_indexes_fails_if_obsolete_index_cannot_be_rem
         await _ensure_orchestrator_indexes(mongo)
 
     runs.create_index.assert_not_called()
-
-
-def _room_owned_collection_names() -> set[str]:
-    tree = ast.parse((ROOT / "container.py").read_text(), filename="container.py")
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id != "create_file_storage":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "room_owned_collections":
-                continue
-            list_comp = keyword.value
-            assert isinstance(list_comp, ast.ListComp)
-            assert len(list_comp.generators) == 1
-            names = list_comp.generators[0].iter
-            assert isinstance(names, ast.Tuple)
-            return {
-                element.value
-                for element in names.elts
-                if isinstance(element, ast.Constant) and isinstance(element.value, str)
-            }
-    raise AssertionError(
-        "create_file_storage call with room_owned_collections not found"
-    )
-
-
-def test_orchestrator_collections_are_room_owned():
-    names = _room_owned_collection_names()
-
-    assert ROOM_OWNED_ORCHESTRATOR_COLLECTIONS <= names
 
 
 def test_epoch_store_binding_is_bind_reset_and_fail_fast():

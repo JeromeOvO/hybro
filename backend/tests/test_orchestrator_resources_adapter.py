@@ -30,17 +30,17 @@ def _future_deadline() -> datetime:
 
 
 class FakeRoomFiles:
-    def __init__(self, files, *, room_id="room-1"):
+    def __init__(self, files, *, conversation_id="room-1"):
         self.files = files
-        self.room_id = room_id
+        self.conversation_id = conversation_id
 
     async def get_bytes(self, file_id, *, max_bytes):
         return self.files.get(file_id)
 
-    async def get_for_room_file(self, room_id, file_id):
-        if file_id not in self.files or room_id != self.room_id:
+    async def get_for_room_file(self, conversation_id, file_id):
+        if file_id not in self.files or conversation_id != self.conversation_id:
             return None
-        return {"room_id": room_id, "file_id": file_id}
+        return {"room_id": conversation_id, "file_id": file_id}
 
 
 class FakeWriter:
@@ -56,7 +56,7 @@ def _ref(ref_id, kind, content_digest=None, mime_type=None):
     return FrozenCallResourceRef(
         ref_id=ref_id,
         kind=kind,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_message_id="message-1",
         mime_type=mime_type,
@@ -89,7 +89,7 @@ async def test_context_ref_materializes_to_text_part():
     )
     parts = await adapter.materialize(
         manifest,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         allowed_input_modes=["text"],
         deadline_at=_future_deadline(),
@@ -115,7 +115,7 @@ async def test_attachment_ref_materializes_to_file_part():
     )
     parts = await adapter.materialize(
         manifest,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         allowed_input_modes=["application/pdf"],
         deadline_at=_future_deadline(),
@@ -137,7 +137,7 @@ async def test_changed_content_is_rejected():
     with pytest.raises(ResourceSelectionError, match="changed"):
         await adapter.materialize(
             manifest,
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             allowed_input_modes=["file"],
             deadline_at=_future_deadline(),
@@ -191,7 +191,7 @@ async def test_inline_data_artifact_is_described_and_materialized_from_observati
             payload_digest="payload-digest",
             received_at=datetime.now(UTC),
             binding_scope="scope",
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             call_record_id="call-1",
             task_id="task-1",
@@ -206,7 +206,7 @@ async def test_inline_data_artifact_is_described_and_materialized_from_observati
     )
 
     prepared = await adapter.describe_artifact(
-        descriptor.ref_id, room_id="room-1", room_epoch=1
+        descriptor.ref_id, conversation_id="room-1", room_epoch=1
     )
     assert prepared is not None
     assert prepared.mime_type == "application/vnd.hybro.result+json"
@@ -215,7 +215,7 @@ async def test_inline_data_artifact_is_described_and_materialized_from_observati
     ref = FrozenCallResourceRef(
         ref_id=prepared.ref_id,
         kind="artifact",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_message_id=prepared.source_message_id,
         mime_type=prepared.mime_type,
@@ -226,7 +226,7 @@ async def test_inline_data_artifact_is_described_and_materialized_from_observati
         FrozenCallResourceManifest(
             manifest_id="m", refs=[ref], content_digest="manifest-digest"
         ),
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         allowed_input_modes=["application/vnd.hybro.result+json"],
         deadline_at=_future_deadline(),
@@ -256,12 +256,14 @@ async def test_inbound_artifacts_delegate_to_writer():
 async def test_owned_room_file_url_rejects_cross_room_file():
     writer = FakeWriter()
     adapter = RoomFilesResourceMaterializer(
-        room_files=FakeRoomFiles({"stolen-file": b"secret"}, room_id="other-room"),
+        room_files=FakeRoomFiles(
+            {"stolen-file": b"secret"}, conversation_id="other-room"
+        ),
         artifact_writer=writer,
     )
 
     class Call:
-        room_id = "room-1"
+        conversation_id = "room-1"
 
     with pytest.raises(ResourceSelectionError, match="not owned by the room"):
         await adapter.materialize_inbound_artifacts(

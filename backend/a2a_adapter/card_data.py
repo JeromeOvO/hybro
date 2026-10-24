@@ -4,8 +4,9 @@ Card data reaches the adapter in several shapes: an internal ``AgentCard``, a
 raw dict from persistence, or a card fetched from the wire. All of them are
 converted to a plain dict here and then parsed by the SDK's own card parser,
 which also maps the pre-1.0 ``url``/``preferredTransport``/``protocolVersion``
-shape onto ``supportedInterfaces``. That keeps legacy and 1.0 agents on one
-code path instead of two hand-written variants.
+shape onto ``supportedInterfaces``. The SDK client then selects its 0.3
+compatibility transport for a pre-1.0 interface, so legacy and 1.0 agents share
+one code path instead of two hand-written variants.
 """
 
 from __future__ import annotations

@@ -1,15 +1,8 @@
 import type { Agent } from '@/lib/types/response'
 
 function isVisibleAgent(agent: Agent): boolean {
-  if (agent.agent_status === 'deleted') return false
-
-  if (agent.source === 'hub') {
-    return agent.agent_status === 'active' && agent.is_hub_online === true
-  }
-  if (agent.source === 'local') {
-    return agent.agent_status === 'active'
-  }
-
+  if (agent.status === 'deleted') return false
+  if (agent.source === 'local') return agent.status === 'active'
   return true
 }
 

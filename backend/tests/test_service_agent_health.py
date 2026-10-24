@@ -20,11 +20,13 @@ from common.types import AgentCard
 from models.agent import Agent
 
 
-def _card_payload(**overrides):
+def _card_payload(url: str = "https://agent.example", **overrides):
     payload = {
         "name": "Health Agent",
         "description": "Checks health",
-        "url": "https://agent.example",
+        "supportedInterfaces": [
+            {"url": url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ],
         "version": "1.0.0",
         "capabilities": {},
         "defaultInputModes": ["text"],
@@ -193,9 +195,9 @@ async def test_check_agent_health_delegates_to_adapter_probe(monkeypatch):
         _probe,
     )
     service = AgentHealthService(repository=_Repo(), timeout_seconds=9)
-    agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))
-
-    assert await service.check_agent_health(agent, timeout=2) == (True, live_card)
+    assert await service.check_agent_health(
+        "agent-1", "https://agent.example", "Agent", timeout=2
+    ) == (True, live_card)
     assert captured == {
         "agent_url": "https://agent.example",
         "timeout": 2,
@@ -212,34 +214,39 @@ async def test_check_agent_health_returns_unhealthy_on_adapter_errors(monkeypatc
         _raise_adapter_error,
     )
     service = AgentHealthService(repository=_Repo())
-    agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))
-
-    assert await service.check_agent_health(agent) == (False, None)
+    assert await service.check_agent_health(
+        "agent-1", "https://agent.example", "Agent"
+    ) == (False, None)
 
 
 @pytest.mark.asyncio
-async def test_update_agent_card_in_db_preserves_blocklisted_fields():
+async def test_sync_agent_card_preserves_blocklisted_fields():
     repo = _Repo()
     service = AgentHealthService(repository=repo)
     agent = Agent(
         agent_id="agent-1",
+        is_public=True,
         agent_card=AgentCard(
             **_card_payload(
                 name="Stored Agent",
-                url="https://registered.example",
                 iconUrl="https://registered.example/icon.png",
-            )
+            ),
+            url="https://registered.example",
         ),
     )
     fetched = AgentCard(
         **_card_payload(
             name="Live Agent",
-            url="https://live.example",
             iconUrl="https://live.example/icon.png",
-        )
+        ),
+        url="https://live.example",
     )
 
-    await service._update_agent_card_in_db(agent, fetched)
+    await service.sync_agent_card(
+        agent.agent_id,
+        agent.agent_card.model_dump(mode="json", by_alias=True),
+        fetched,
+    )
 
     assert repo.updates == [
         (
@@ -253,11 +260,12 @@ async def test_update_agent_card_in_db_preserves_blocklisted_fields():
 
 
 @pytest.mark.asyncio
-async def test_update_agent_card_in_db_syncs_extra_sdk_card_fields():
+async def test_sync_agent_card_syncs_extra_sdk_card_fields():
     repo = _Repo()
     service = AgentHealthService(repository=repo)
     agent = Agent(
         agent_id="agent-1",
+        is_public=True,
         agent_card=AgentCard(**_card_payload()),
     )
     fetched = AgentCard(
@@ -270,7 +278,11 @@ async def test_update_agent_card_in_db_syncs_extra_sdk_card_fields():
         )
     )
 
-    await service._update_agent_card_in_db(agent, fetched)
+    await service.sync_agent_card(
+        agent.agent_id,
+        agent.agent_card.model_dump(mode="json", by_alias=True),
+        fetched,
+    )
 
     assert repo.updates == [
         (

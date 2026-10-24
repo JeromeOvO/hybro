@@ -6,7 +6,7 @@ import type { MessageEntity } from '@/stores/message-store/types'
 function makeUserMessage(content = 'Hello'): MessageEntity {
   return {
     id: 'msg-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     messageType: 'user',
     content,
     senderName: 'User',

@@ -10,12 +10,9 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
@@ -150,7 +147,7 @@ class ProcessingStatusCall:
     path: str
     function_or_method: str
     line: int
-    room_id_expression: str | None
+    conversation_id_expression: str | None
     status_expression: str | None
     sse_message_id_expression: str | None
     client_request_id_expression: str | None
@@ -166,7 +163,7 @@ class ProcessingStatusCall:
         if self.function_or_method != entry.get("function_or_method"):
             return False
         fields = (
-            "room_id_expression",
+            "conversation_id_expression",
             "status_expression",
             "sse_message_id_expression",
             "client_request_id_expression",
@@ -201,7 +198,9 @@ def _discover_calls() -> list[ProcessingStatusCall]:
             else:
                 continue
             if call_name == "send_processing_status":
-                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                conversation_id_expression = _unparse(
+                    _arg_or_kw(node, 0, "conversation_id")
+                )
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
                 sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
                 client_request_id_expression = _unparse(
@@ -226,7 +225,9 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                 rel_path.startswith("execution/")
                 and call_name in EXECUTION_STATUS_HELPERS
             ):
-                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                conversation_id_expression = _unparse(
+                    _arg_or_kw(node, 0, "conversation_id")
+                )
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
                 sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
                 client_request_id_expression = _unparse(
@@ -242,7 +243,7 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                     path=rel_path,
                     function_or_method=_enclosing_function(node, parents),
                     line=node.lineno,
-                    room_id_expression=room_id_expression,
+                    conversation_id_expression=conversation_id_expression,
                     status_expression=status_expression,
                     sse_message_id_expression=sse_message_id_expression,
                     client_request_id_expression=client_request_id_expression,
@@ -281,10 +282,10 @@ def _assert_lifecycle_helper_matches(
     entry: dict[str, Any],
 ) -> None:
     if item.emitter_kind in EXECUTION_STATUS_HELPERS:
-        record_lifecycle = _keyword(item.call, "record_lifecycle")
-        assert record_lifecycle is None or _expr_equal(
-            _unparse(record_lifecycle), "True"
-        ), f"{entry['call_id']} disables lifecycle recording"
+        for retired in ("record_lifecycle", "run_lifecycle", "run_event_enabled"):
+            assert _keyword(item.call, retired) is None, (
+                f"{entry['call_id']} passes retired {retired}"
+            )
         assert _expr_equal(
             _unparse(_keyword(item.call, "lifecycle_message_id")),
             entry["lifecycle_message_id_expression"],
@@ -295,48 +296,8 @@ def _assert_lifecycle_helper_matches(
         )
         return
 
-    helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
-    if (
-        helper is None
-        and item.path == "conversation/runtime.py"
-        and item.function_or_method
-        == "ConversationRuntime._emit_processing_status_event"
-    ):
-        for stmt in reversed(_prior_statements(item)):
-            if not isinstance(stmt, ast.If) or not _expr_equal(
-                _unparse(stmt.test), "record_lifecycle"
-            ):
-                continue
-            for child in stmt.body:
-                helper = _direct_awaited_call(
-                    child,
-                    name="record_and_maybe_emit_run_event",
-                )
-                if helper is not None:
-                    break
-            if helper is not None:
-                break
-    assert helper is not None, f"{entry['call_id']} missing awaited lifecycle helper"
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 0, "room_id")), entry["room_id_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 1, "status")), entry["status_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 2, "message_id")),
-        entry["lifecycle_message_id_expression"],
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "details")), entry["details_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "client_request_id")),
-        entry["client_request_id_expression"],
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "event_publisher")),
-        entry["run_event_delivery_expression"],
+    raise AssertionError(
+        f"{entry['call_id']} emits processing status outside the execution helper"
     )
 
 
@@ -345,124 +306,6 @@ def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) ->
     run_event_emit = _find_prior_awaited_helper(item, "emit_run_event_payload")
     assert helper is None, f"{call_id} is transport-only but has lifecycle helper"
     assert run_event_emit is None, f"{call_id} is transport-only but has run_event emit"
-
-
-def _assert_pre_recorded_payload(
-    item: ProcessingStatusCall, entry: dict[str, Any]
-) -> None:
-    prior = _prior_statements(item)
-
-    def assignment_index(target_expr: str, value_expr: str) -> int | None:
-        for idx, stmt in enumerate(prior):
-            if not isinstance(stmt, ast.Assign):
-                continue
-            if not any(
-                _expr_equal(_unparse(target), target_expr) for target in stmt.targets
-            ):
-                continue
-            if _expr_equal(_unparse(stmt.value), value_expr):
-                return idx
-        return None
-
-    tid_index = assignment_index("tid", "doc.get('trigger_message_id') or run_id")
-    assert tid_index is not None, (
-        f"{entry['call_id']} missing trigger message assignment before send"
-    )
-    assert _expr_equal(item.sse_message_id_expression, "str(tid)"), (
-        f"{entry['call_id']} send must use trigger message id tid"
-    )
-
-    client_request_index = assignment_index(
-        "client_request_id", "doc.get('client_request_id')"
-    )
-    assert client_request_index is not None, (
-        f"{entry['call_id']} missing client_request_id assignment before send"
-    )
-    assert _expr_equal(item.client_request_id_expression, "client_request_id"), (
-        f"{entry['call_id']} send must use assigned client_request_id"
-    )
-
-    payload_index: int | None = None
-    for idx, stmt in enumerate(prior):
-        if not isinstance(stmt, ast.Assign):
-            continue
-        if not any(
-            _expr_equal(_unparse(target), entry["payload_variable"])
-            for target in stmt.targets
-        ):
-            continue
-        if (
-            isinstance(stmt.value, ast.Await)
-            and isinstance(stmt.value.value, ast.Call)
-            and _expr_equal(
-                _unparse(stmt.value.value),
-                entry["pre_record_call_expression"],
-            )
-        ):
-            payload_index = idx
-            break
-    assert payload_index is not None, (
-        f"{entry['call_id']} missing awaited pre-record assignment"
-    )
-
-    guard_test = (
-        entry["payload_none_guard"].removeprefix("if ").removesuffix(": continue")
-    )
-    guard_index: int | None = None
-    for idx, stmt in enumerate(prior):
-        if not isinstance(stmt, ast.If):
-            continue
-        if not _expr_equal(_unparse(stmt.test), guard_test):
-            continue
-        if any(isinstance(child, ast.Continue) for child in stmt.body):
-            guard_index = idx
-            break
-    assert guard_index is not None, (
-        f"{entry['call_id']} missing payload None continue guard"
-    )
-    assert payload_index < guard_index, (
-        f"{entry['call_id']} payload None guard must occur after payload assignment"
-    )
-
-    metric_index: int | None = None
-    for idx, stmt in enumerate(prior):
-        if idx <= payload_index:
-            continue
-        if any(
-            isinstance(node, ast.Call) and _call_name(node) == "increment_counter"
-            for node in ast.walk(stmt)
-        ):
-            metric_index = idx
-            break
-    assert metric_index is not None, (
-        f"{entry['call_id']} missing watchdog metric increment"
-    )
-    assert guard_index < metric_index, (
-        f"{entry['call_id']} payload None guard must occur before metric increment"
-    )
-
-    emit_index: int | None = None
-    emit_call: ast.Call | None = None
-    for idx, stmt in enumerate(prior):
-        candidate = _direct_awaited_call(stmt, name="emit_run_event_payload")
-        if candidate is not None:
-            emit_index = idx
-            emit_call = candidate
-            break
-    assert emit_call is not None and emit_index is not None, (
-        f"{entry['call_id']} missing run_event payload emit"
-    )
-    assert guard_index < emit_index, (
-        f"{entry['call_id']} payload None guard must occur before run_event emit"
-    )
-    assert _expr_equal(
-        _call_expression(emit_call),
-        entry["run_event_emit_expression"],
-    )
-    assert _expr_equal(
-        _unparse(_keyword(emit_call, "event_publisher")),
-        entry["run_event_delivery_expression"],
-    )
 
 
 def test_production_processing_status_callers_are_manifest_covered() -> None:
@@ -511,11 +354,6 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
                 _assert_lifecycle_helper_matches(call, entry)
             except AssertionError as exc:
                 errors.append(str(exc))
-        elif recording_kind == "pre_recorded_payload":
-            try:
-                _assert_pre_recorded_payload(call, entry)
-            except AssertionError as exc:
-                errors.append(str(exc))
         elif recording_kind == "transport_only":
             if not entry.get("transport_only_reason"):
                 errors.append(
@@ -538,7 +376,7 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
             + "\n".join(
                 f"- {call.path}:{call.line} {call.function_or_method} "
                 f"{call.delivery_expression}.send_processing_status("
-                f"{call.room_id_expression}, {call.status_expression}, "
+                f"{call.conversation_id_expression}, {call.status_expression}, "
                 f"{call.sse_message_id_expression})"
                 for call in unlisted
             )
@@ -567,7 +405,9 @@ async def send(flag):
         path="example.py",
         function_or_method="send",
         line=send_call.lineno,
-        room_id_expression=_unparse(_arg_or_kw(send_call, 0, "room_id")),
+        conversation_id_expression=_unparse(
+            _arg_or_kw(send_call, 0, "conversation_id")
+        ),
         status_expression=_unparse(_arg_or_kw(send_call, 1, "status")),
         sse_message_id_expression=_unparse(_arg_or_kw(send_call, 2, "message_id")),
         client_request_id_expression=None,
@@ -579,148 +419,6 @@ async def send(flag):
     )
 
     assert _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event") is None
-
-
-def _pre_recorded_item_from_source(source: str) -> ProcessingStatusCall:
-    tree = ast.parse(source)
-    parents = _build_parents(tree)
-    send_call = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "send_processing_status"
-    )
-    item = ProcessingStatusCall(
-        path="example.py",
-        function_or_method="fail_stale_runs",
-        line=send_call.lineno,
-        room_id_expression=_unparse(_arg_or_kw(send_call, 0, "room_id")),
-        status_expression=_unparse(_arg_or_kw(send_call, 1, "status")),
-        sse_message_id_expression=_unparse(_arg_or_kw(send_call, 2, "message_id")),
-        client_request_id_expression=_unparse(_keyword(send_call, "client_request_id")),
-        details_expression=_unparse(_keyword(send_call, "details")),
-        delivery_expression=_unparse(send_call.func.value),
-        emitter_kind="direct_transport",
-        call=send_call,
-        parents=parents,
-    )
-    return item
-
-
-def _pre_recorded_entry() -> dict[str, Any]:
-    return {
-        "call_id": "example.fail_stale_runs.failed",
-        "pre_record_call_expression": (
-            "run_command_handler.append_run_timeout_failure("
-            "room_id, run_id, stale_minutes=stale_mins)"
-        ),
-        "payload_variable": "payload",
-        "payload_none_guard": "if payload is None: continue",
-        "run_event_emit_expression": (
-            "emit_run_event_payload("
-            "room_id, payload, client_request_id=client_request_id, event_publisher=event_publisher)"
-        ),
-        "delivery_expression": "sse_manager",
-        "run_event_delivery_expression": "event_publisher",
-    }
-
-
-def test_pre_recorded_payload_requires_awaited_assignment() -> None:
-    source = """
-async def fail_stale_runs():
-    for doc in docs:
-        tid = doc.get("trigger_message_id") or run_id
-        client_request_id = doc.get("client_request_id")
-        payload = run_command_handler.append_run_timeout_failure(
-            room_id, run_id, stale_minutes=stale_mins
-        )
-        if payload is None:
-            continue
-        increment_counter("run_watchdog_forced_failure_total")
-        await emit_run_event_payload(
-            room_id,
-            payload,
-            client_request_id=client_request_id,
-            event_publisher=event_publisher,
-        )
-        await sse_manager.send_processing_status(
-            room_id,
-            SSEProcessingStatus.FAILED,
-            str(tid),
-            client_request_id=client_request_id,
-            details="Run watchdog: stale non-terminal run timed out",
-        )
-"""
-    item = _pre_recorded_item_from_source(source)
-    entry = _pre_recorded_entry()
-
-    with pytest.raises(AssertionError, match="missing awaited pre-record assignment"):
-        _assert_pre_recorded_payload(item, entry)
-
-
-def test_pre_recorded_payload_requires_trigger_and_client_assignments() -> None:
-    source = """
-async def fail_stale_runs():
-    for doc in docs:
-        payload = await run_command_handler.append_run_timeout_failure(
-            room_id, run_id, stale_minutes=stale_mins
-        )
-        if payload is None:
-            continue
-        increment_counter("run_watchdog_forced_failure_total")
-        await emit_run_event_payload(
-            room_id,
-            payload,
-            client_request_id=client_request_id,
-            event_publisher=event_publisher,
-        )
-        await sse_manager.send_processing_status(
-            room_id,
-            SSEProcessingStatus.FAILED,
-            str(run_id),
-            client_request_id=client_request_id,
-            details="Run watchdog: stale non-terminal run timed out",
-        )
-"""
-    item = _pre_recorded_item_from_source(source)
-    entry = _pre_recorded_entry()
-
-    with pytest.raises(AssertionError, match="missing trigger message assignment"):
-        _assert_pre_recorded_payload(item, entry)
-
-
-def test_pre_recorded_payload_requires_guard_before_metric_and_emit() -> None:
-    source = """
-async def fail_stale_runs():
-    for doc in docs:
-        tid = doc.get("trigger_message_id") or run_id
-        client_request_id = doc.get("client_request_id")
-        payload = await run_command_handler.append_run_timeout_failure(
-            room_id, run_id, stale_minutes=stale_mins
-        )
-        increment_counter("run_watchdog_forced_failure_total")
-        if payload is None:
-            continue
-        await emit_run_event_payload(
-            room_id,
-            payload,
-            client_request_id=client_request_id,
-            event_publisher=event_publisher,
-        )
-        await sse_manager.send_processing_status(
-            room_id,
-            SSEProcessingStatus.FAILED,
-            str(tid),
-            client_request_id=client_request_id,
-            details="Run watchdog: stale non-terminal run timed out",
-        )
-"""
-    item = _pre_recorded_item_from_source(source)
-    entry = _pre_recorded_entry()
-
-    with pytest.raises(AssertionError, match="payload None guard must occur"):
-        _assert_pre_recorded_payload(item, entry)
 
 
 def test_manifest_call_ids_do_not_encode_line_numbers() -> None:
@@ -745,49 +443,3 @@ def test_manifest_paths_do_not_reference_deleted_packages() -> None:
     ]
 
     assert not deleted_paths
-
-
-def test_delivery_facade_processing_status_has_no_run_lifecycle_side_effects() -> None:
-    if os.environ.get("PHASE7A_ALLOW_LEGACY_SSE_MANAGER") == "1":
-        return
-
-    path = ROOT / "delivery" / "facade.py"
-    tree = ast.parse(path.read_text(), filename=str(path))
-    forbidden_imports: list[str] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module == "execution.run_command_handler"
-        ):
-            forbidden_imports.extend(alias.name for alias in node.names)
-    assert "run_command_handler" not in forbidden_imports
-    assert "run_event_sse_enabled" not in forbidden_imports
-
-    send_func: ast.AsyncFunctionDef | None = None
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "send_processing_status"
-        ):
-            send_func = node
-            break
-    assert send_func is not None
-
-    for node in ast.walk(send_func):
-        if (
-            isinstance(node, ast.Call)
-            and _call_name(node) == "record_processing_status"
-        ):
-            raise AssertionError(
-                f"send_processing_status still records lifecycle at line {node.lineno}"
-            )
-        if isinstance(node, ast.Call) and _call_name(node) == "emit_to_room":
-            event_type = _arg_or_kw(node, 1, "message_type")
-            if isinstance(event_type, ast.Constant) and event_type.value == "run_event":
-                raise AssertionError(
-                    f"send_processing_status still emits run_event at line {node.lineno}"
-                )
-        if isinstance(node, ast.Call) and _call_name(node) == "run_event_sse_enabled":
-            raise AssertionError(
-                f"send_processing_status still checks run_event_sse_enabled at line {node.lineno}"
-            )

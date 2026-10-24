@@ -15,7 +15,6 @@ from execution.orchestrator import (
     AssistantMessage,
     BudgetState,
     DataPart,
-    EventProjector,
     MalformedToolArgumentsError,
     ModelMessage,
     ModelRouteConfiguration,
@@ -25,14 +24,11 @@ from execution.orchestrator import (
     ModelStreamEvent,
     ModelTurnRequest,
     OrchestratorEvent,
-    OrchestratorEventStore,
     OrchestratorProfile,
     OrchestratorRunState,
     OrchestratorRunStore,
     ProfileConfiguration,
     PromptConfiguration,
-    ProviderConformanceCase,
-    ProviderConformanceError,
     ResolvedModelSnapshot,
     SessionNotice,
     TextPart,
@@ -48,13 +44,17 @@ from execution.orchestrator import (
     evaluate_event_append,
     resolve_model_snapshot,
     resolve_profile_snapshot,
-    run_provider_conformance,
     validate_tool_result_correlation,
 )
+from execution.orchestrator.a2a_runtime.ingress import InvocationOutcomeCheckpointReader
 from execution.orchestrator.a2a_runtime.models import AGENT_CALL_STATES
 from execution.orchestrator.a2a_runtime.ports import HITLApplicationPort
 from execution.orchestrator.models import AgentMessage
-from execution.orchestrator.ports import InvocationOutcomeCheckpointReader
+from tests.orchestrator_harness.conformance import (
+    ProviderConformanceCase,
+    ProviderConformanceError,
+    run_provider_conformance,
+)
 
 NOW = datetime(2026, 3, 12, tzinfo=UTC)
 
@@ -739,7 +739,7 @@ def event(event_id: str, sequence: int, state_version: int = 1) -> OrchestratorE
         event_type="turn_started",
         session_id="room-1",
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         sequence=sequence,
         state_version=state_version,
@@ -793,13 +793,11 @@ def test_protocols_are_narrow_and_explicit():
             "load_answer",
             "ensure_answer",
         },
-        OrchestratorEventStore: {"append", "read"},
         InvocationOutcomeCheckpointReader: {
             "is_outcome_checkpointed",
             "has_processed_observation",
             "is_run_terminal",
         },
-        EventProjector: {"project"},
         OrchestratorRunStore: {
             "create",
             "load",

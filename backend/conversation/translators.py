@@ -16,7 +16,7 @@ from conversation.membership import normalize_room_agent_set
 def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
     agent_set = normalize_room_agent_set(doc.get("room_agent_set"))
     return RoomInfo(
-        room_id=str(doc["room_id"]),
+        conversation_id=str(doc["room_id"]),
         room_name=str(doc.get("room_name") or ""),
         owner_id=str(doc.get("room_owner_id") or doc.get("owner_id") or ""),
         owner_name=doc.get("room_owner_name") or doc.get("owner_name"),
@@ -26,7 +26,7 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         membership_origin_status=(
             _string_value(doc.get("membership_origin_status")) or "manual"
         ),
-        source_group_id=doc.get("source_group_id") or doc.get("applied_from_group"),
+        source_group_id=doc.get("source_group_id"),
         source_group_name=doc.get("source_group_name"),
         created_at=doc.get("room_created_at") or doc.get("created_at"),
         last_activity_at=(
@@ -36,7 +36,6 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         ),
         is_pinned=bool(doc.get("is_pinned", False)),
         pin_order=doc.get("pin_order"),
-        processing_message_id=doc.get("processing_message_id"),
         extend_info=doc.get("extend_info"),
         owner_product=_string_value(doc.get("owner_product")) or "chat",
     )
@@ -44,7 +43,7 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
 
 def create_room_doc(
     *,
-    room_id: str,
+    conversation_id: str,
     owner_id: str,
     owner_name: str,
     room_name: str,
@@ -54,12 +53,11 @@ def create_room_doc(
     membership_origin_status: str,
     source_group_id: str | None = None,
     source_group_name: str | None = None,
-    processing_message_id: str | None = None,
     extend_info: dict[str, Any] | None = None,
     owner_product: str = "chat",
 ) -> dict[str, Any]:
     doc = {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "room_name": room_name,
         "room_owner_id": owner_id,
         "room_owner_name": owner_name,
@@ -72,7 +70,6 @@ def create_room_doc(
         "membership_origin_status": membership_origin_status,
         "source_group_id": source_group_id,
         "source_group_name": source_group_name,
-        "processing_message_id": processing_message_id,
         "lifecycle_state": "active",
         "write_leases": [],
         "owner_product": owner_product,
@@ -101,7 +98,7 @@ def message_info_from_doc(doc: dict[str, Any]) -> RoomMessageInfo:
     )
     metadata = {key: doc[key] for key in metadata_keys if key in doc}
     return RoomMessageInfo(
-        room_id=str(doc["room_id"]),
+        conversation_id=str(doc["room_id"]),
         message_id=str(doc["message_id"]),
         message_type=str(doc.get("message_type") or _infer_message_type(doc)),
         content=dict(content),
@@ -116,14 +113,14 @@ def message_info_from_doc(doc: dict[str, Any]) -> RoomMessageInfo:
 
 def user_message_doc_from_input(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     message: UserMessageInput,
     created_at: datetime,
 ) -> dict[str, Any]:
     metadata = _plain(message.metadata or {})
     doc: dict[str, Any] = {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "message_id": message_id,
         "message_type": "user",
         "user_id": message.sender_id,
@@ -145,13 +142,13 @@ def user_message_doc_from_input(
 
 def agent_message_doc_from_input(
     *,
-    room_id: str,
+    conversation_id: str,
     message_id: str,
     message: AgentMessageInput,
     created_at: datetime,
 ) -> dict[str, Any]:
     doc: dict[str, Any] = {
-        "room_id": room_id,
+        "room_id": conversation_id,
         "message_id": message_id,
         "message_type": "agent",
         "agent_id": message.agent_id,
@@ -169,7 +166,7 @@ def agent_message_doc_from_input(
 def saved_user_message_from_doc(doc: dict[str, Any]) -> SavedUserMessage:
     message_id = str(doc["message_id"])
     return SavedUserMessage(
-        room_id=str(doc["room_id"]),
+        conversation_id=str(doc["room_id"]),
         message_id=message_id,
         dispatch_root_message_id=message_id,
         user_id=str(doc.get("user_id") or ""),

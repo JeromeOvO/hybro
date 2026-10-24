@@ -35,13 +35,14 @@ test.describe('Chat Page with local identity', () => {
   })
 
   test('submitting creates a room and navigates without a sign-in redirect', async ({ page }) => {
-    await page.route('**/roomCenter/createNewRoom', async (route) => {
+    await page.route('**/api/v1/rooms', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback()
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room: { room_id: 'e2e-created-room' },
+          room: { conversation_id: 'e2e-created-room' },
         }),
       })
     })

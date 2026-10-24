@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol, runtime_checkable
 
-from common.protocols import AttachmentContentReader, AttachmentMetadataReader
-from common.types import Part, TextPart
-from conversation.a2a_file_parts import (
-    AttachmentDispatchContext,
-    AttachmentPreflightFailure,
-    build_attachment_file_parts,
-)
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import RoomUserMessage, UserAttachment
+
+
+@runtime_checkable
+class AttachmentMetadataReader(Protocol):
+    async def get_for_room_file(
+        self, conversation_id: str, file_id: str
+    ) -> dict | None: ...
 
 
 @dataclass
@@ -25,7 +25,7 @@ class ResolvedAttachments:
 async def resolve_room_attachments(
     *,
     file_ids: list[str],
-    room_id: str,
+    conversation_id: str,
     attachment_reader: AttachmentMetadataReader | None,
 ) -> ResolvedAttachments | RoomCenterUserMessageResponse:
     if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
@@ -47,7 +47,7 @@ async def resolve_room_attachments(
 
     attachments: list[UserAttachment] = []
     for file_id in file_ids:
-        file_meta = await attachment_reader.get_for_room_file(room_id, file_id)
+        file_meta = await attachment_reader.get_for_room_file(conversation_id, file_id)
         if not file_meta:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -114,7 +114,7 @@ async def resolve_and_apply_room_attachments(
 
     resolved = await resolve_room_attachments(
         file_ids=file_ids,
-        room_id=request.room_id,
+        conversation_id=request.conversation_id,
         attachment_reader=attachment_reader,
     )
     if isinstance(resolved, RoomCenterUserMessageResponse):
@@ -122,38 +122,3 @@ async def resolve_and_apply_room_attachments(
     user_message.message_content.attachments = resolved.attachments
     user_message.message_content.content_summary = resolved.content_summary
     return None
-
-
-async def build_message_parts(
-    *,
-    text: str,
-    attachments: list[UserAttachment] | None,
-    agent_card: Any,
-    content_reader: AttachmentContentReader | None,
-    max_raw_bytes: int,
-    max_encoded_bytes: int,
-    context: AttachmentDispatchContext | None = None,
-) -> list[Part] | AttachmentPreflightFailure:
-    parts = [Part(root=TextPart(text=text))]
-    if not attachments:
-        return parts
-
-    if content_reader is None:
-        return AttachmentPreflightFailure(
-            code="storage_unavailable",
-            message="Attachment content resolution unavailable.",
-            file_names=tuple(attachment.file_name for attachment in attachments),
-        )
-
-    result = await build_attachment_file_parts(
-        attachments=attachments,
-        agent_card=agent_card,
-        content_reader=content_reader,
-        max_raw_bytes=max_raw_bytes,
-        max_encoded_bytes=max_encoded_bytes,
-        context=context,
-    )
-    if result.failure is not None:
-        return result.failure
-    parts.extend(result.parts)
-    return parts

@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from common.run_status import TERMINAL_RUN_STATUSES as TERMINAL_RUN_STATUSES
+
 ORCHESTRATOR_RUNS_COLLECTION = "orchestrator_runs"
 ORCHESTRATOR_RUN_EVENTS_COLLECTION = "orchestrator_run_events"
 ORCHESTRATOR_RECOVERY_LEASES_COLLECTION = "orchestrator_recovery_leases"
@@ -20,6 +22,7 @@ NON_TERMINAL_RUN_STATUSES = (
     "canceling",
     "finalizing",
 )
+
 
 # A suspended Run waits for the owner or an external Agent. Its deadline clock
 # is stopped while it waits (``BudgetState.suspended_at``), so it does not end

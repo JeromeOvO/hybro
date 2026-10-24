@@ -14,20 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.exceptions import HITLConflictError
+from approval.service import HITLService
 from common.dto.hitl import HITLPublicSource
-from execution.hitl.exceptions import HITLConflictError
-from execution.hitl.service import HITLService
 from models.hitl import (
     HITLEventType,
     HITLPromptType,
     HITLStatus,
 )
-
-
-async def _iter_docs(docs):
-    for doc in docs:
-        yield doc
-
 
 # =============================================================================
 # HITL Service Fixtures
@@ -69,11 +63,6 @@ def mock_hitl_db_service():
     mock.complete_hitl_open_projection = AsyncMock(return_value=None)
     mock.release_hitl_open_projection = AsyncMock(return_value=True)
     mock.reset_last_notified_state = AsyncMock()
-    mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
-    mock.save_continuation_on_user_message = AsyncMock(return_value=True)
-    mock.get_and_clear_continuation_on_message = AsyncMock()
-    mock.get_and_clear_continuation_on_user_message = AsyncMock()
-    mock.iter_stale_processing_hitl_requests = MagicMock(return_value=_iter_docs([]))
     return mock
 
 
@@ -105,7 +94,7 @@ def test_agent_pending_hydration_preserves_typed_controls(
     prompt_type,
     choices,
 ):
-    from execution.hitl.service import _public_hitl_request_from_doc
+    from approval.service import _public_hitl_request_from_doc
 
     doc = sample_hitl_request.model_copy(
         update={
@@ -123,7 +112,7 @@ def test_agent_pending_hydration_preserves_typed_controls(
 
 
 def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request):
-    from execution.hitl.translators import model_hitl_request_to_common
+    from approval.translators import model_hitl_request_to_common
 
     sample_hitl_request.display_message_id = "display-msg-1"
     sample_hitl_request.interaction_id = "group-1"
@@ -142,7 +131,7 @@ def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request
 
 
 def test_hitl_response_translator_preserves_route_dict_shape():
-    from execution.hitl.translators import hitl_response_dict_to_common
+    from approval.translators import hitl_response_dict_to_common
 
     response = hitl_response_dict_to_common(
         {
@@ -156,27 +145,6 @@ def test_hitl_response_translator_preserves_route_dict_shape():
     assert response.status == "ok"
     assert response.request_id == "req-1"
     assert response.reclaimed is True
-
-
-def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_binding():
-    from execution.hitl.factory import BoundHITLServiceProxy
-
-    proxy = BoundHITLServiceProxy()
-    with pytest.raises(RuntimeError):
-        attr_name = "recover_stale_processing"
-        getattr(proxy, attr_name)
-
-    target = MagicMock()
-    target.recover_stale_processing = AsyncMock(return_value=3)
-    proxy.bind(target)
-    assert proxy.recover_stale_processing is target.recover_stale_processing
-
-
-def test_bound_hitl_proxy_class_is_available_without_global_singleton():
-    from execution.hitl.service import BoundHITLServiceProxy
-
-    proxy = BoundHITLServiceProxy()
-    assert proxy._service is None
 
 
 @pytest.mark.asyncio
@@ -208,12 +176,12 @@ async def test_canonical_interaction_cancel_claims_run_before_hitl_mutation():
 
     service = HITLService(
         lifecycle=lifecycle,
-        lifecycle_family_reader=AsyncMock(return_value="canonical"),
+        canonical_run_state_reader=AsyncMock(return_value="running"),
         canonical_cancellation_requester=request_cancellation,
     )
 
     version = await service.cancel_interaction_by_user(
-        room_id="room-1", interaction_id="interaction-1", expected_version=1
+        conversation_id="room-1", interaction_id="interaction-1", expected_version=1
     )
 
     assert version == 2
@@ -235,13 +203,13 @@ async def test_canonical_interaction_cancel_loses_to_completed_run():
     lifecycle.terminalize_interaction = AsyncMock()
     service = HITLService(
         lifecycle=lifecycle,
-        lifecycle_family_reader=AsyncMock(return_value="canonical"),
+        canonical_run_state_reader=AsyncMock(return_value="running"),
         canonical_cancellation_requester=AsyncMock(return_value="completed"),
     )
 
     with pytest.raises(HITLConflictError, match="lifecycle winner"):
         await service.cancel_interaction_by_user(
-            room_id="room-1", interaction_id="interaction-1", expected_version=1
+            conversation_id="room-1", interaction_id="interaction-1", expected_version=1
         )
 
     lifecycle.terminalize_interaction.assert_not_awaited()
@@ -263,7 +231,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=sample_hitl_request,
         )
@@ -271,7 +239,7 @@ class TestEmitHitlEvent:
         mock_hitl_delivery.emit.assert_awaited_once()
         event = mock_hitl_delivery.emit.await_args.args[0]
 
-        assert event.room_id == sample_hitl_request.room_id
+        assert event.conversation_id == sample_hitl_request.conversation_id
         assert event.event_type == "hitl_request"
         assert event.request_id == sample_hitl_request.request_id
         assert event.prompt == sample_hitl_request.prompt
@@ -290,7 +258,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_RECEIVED,
             request=sample_hitl_request,
         )
@@ -312,7 +280,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.ERROR,
             request=sample_hitl_request,
             error="Something went wrong",
@@ -344,7 +312,7 @@ class TestEmitHitlEvent:
         )
 
         await hitl_service._emit_hitl_event(
-            room_id=req.room_id,
+            conversation_id=req.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=req,
         )
@@ -381,7 +349,7 @@ class TestEmitHitlEvent:
         )
 
         await hitl_service._emit_hitl_event(
-            room_id=req.room_id,
+            conversation_id=req.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=req,
         )
@@ -403,7 +371,7 @@ class TestEmitHitlEvent:
         hitl_service._delivery = mock_hitl_delivery
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_REQUESTED,
             request=sample_hitl_request,
         )
@@ -411,7 +379,7 @@ class TestEmitHitlEvent:
         assert request_event.related_message_id == sample_hitl_request.user_message_id
 
         await hitl_service._emit_hitl_event(
-            room_id=sample_hitl_request.room_id,
+            conversation_id=sample_hitl_request.conversation_id,
             event_type=HITLEventType.INPUT_RECEIVED,
             request=sample_hitl_request,
         )

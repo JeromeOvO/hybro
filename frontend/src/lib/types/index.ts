@@ -32,7 +32,8 @@ export type {
 } from './response'
 
 export type {
-  AgentCenterRequest,
+  AgentRegisterRequest,
+  AgentDeleteRequest,
   InspectionCenterRequest,
   TaskCenterRequest,
   UserInput,
@@ -40,7 +41,7 @@ export type {
 } from './request'
 
 export type {
-  AgentCenterResponse,
+  AgentRouteResponse,
   APIKeyCreateResponse,
   APIKeyItemResponse,
   APIKeyListResponse,

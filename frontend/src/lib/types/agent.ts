@@ -25,8 +25,6 @@ export type {
   PasswordOAuthFlow,
 } from '@a2a-js/sdk'
 
-import type { AgentCard } from '@a2a-js/sdk'
-
 // ── Types NOT in SDK ─────────────────────────────────────────────────────
 
 /**
@@ -37,24 +35,60 @@ export type In = "cookie" | "header" | "query";
 
 export type AgentStatus = "active" | "inactive" | "deleted";
 
-export interface Agent {
+/** One advertised agent skill, as the `/agent/*` routes return it. */
+export interface AgentSkillView {
+  id: string;
+  name: string;
+  description?: string | null;
+  tags: string[];
+  examples: string[];
+}
+
+export interface AgentCapabilitiesView {
+  streaming: boolean;
+  push_notifications: boolean;
+  state_transition_history: boolean;
+  extensions: boolean;
+}
+
+/** The public part of an agent card. Transport URLs are never included. */
+export interface AgentCardView {
+  name: string;
+  description?: string | null;
+  version?: string | null;
+  provider_organization?: string | null;
+  icon_url?: string | null;
+  documentation_url?: string | null;
+  skills: AgentSkillView[];
+  capabilities: AgentCapabilitiesView;
+  default_input_modes: string[];
+  default_output_modes: string[];
+}
+
+/** An agent as the `/agent/*` routes return it (backend `AgentView`). */
+export interface Agent extends AgentCardView {
   agent_id: string;
-  agent_card: AgentCard;
-  agent_status?: AgentStatus;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
-  /** Agent source: registered Remote, directly discovered Local, or Hub-relayed */
-  source?: "cloud" | "local" | "hub";
-  /** Hub ID if this is a hub-sourced agent */
-  hub_id?: string;
-  /** User ID of the hub owner */
-  hub_owner_id?: string;
-  /** Whether the hub providing this agent is currently online */
-  is_hub_online?: boolean;
-  /** Agent ID on the local hub (maps to the hub's internal registry) */
-  local_agent_id?: string;
-  /** Display name resolved from provider_id when agent_card.provider is absent. */
+  provider_id?: string | null;
+  /** Display name resolved from provider_id when the card names no provider. */
   provider_name?: string | null;
+  status: AgentStatus;
+  source: "cloud" | "local";
+  is_public: boolean;
+  public_url?: string | null;
+  call_count: number;
+  /** Maximum requests per user per hour (null = unlimited) */
+  rate_limit_per_user_per_hour?: number | null;
+  /** Maximum requests for entire system per hour (null = unlimited) */
+  rate_limit_system_per_hour?: number | null;
+}
+
+/** Envelope for the `/agent/*` routes (backend `AgentRouteResponse`). */
+export interface AgentRouteResponse {
+  agent?: Agent | null;
+  agents?: Agent[] | null;
+  card?: AgentCardView | null;
+  success: boolean;
+  error?: string | null;
+  error_code?: string | null;
+  status_code?: number;
 }

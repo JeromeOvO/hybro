@@ -60,47 +60,15 @@ export type In = "cookie" | "header" | "query";
  */
 export type Role = "agent" | "user";
 
-export type AgentStatus = "active" | "inactive" | "deleted";
-
-export interface Agent {
+export interface AgentRegisterRequest {
+  agent_url: string;
+}
+export interface AgentDeleteRequest {
   agent_id: string;
-  provider_id?: string | null;
-  agent_card: AgentCard;
-  public_url?: string | null;
-  agent_status?: AgentStatus | null;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
 }
-export interface AgentCenterRequest {
-  agent_id?: string | null;
-  agent_url?: string | null;
-  provider_id?: string | null;
-  agent_card?: AgentCard | null;
-  call_increment?: number | null;
-  call_success_increment?: number | null;
-  like_increment?: number | null;
-  dislike_increment?: number | null;
-  query_text?: string | null;
-  agent?: Agent | null;
-  agent_count?: number | null;
-}
+
 export interface APIKeyCreateRequest {
   name: string;
-}
-export interface AgentCreate {
-  agent_url: string;
-  agent_card: AgentCard;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
-  /**
-   * Must be a valid UUID string
-   */
-  agent_id?: string | null;
 }
 export interface AgentGroupCreateRequest {
   name: string;
@@ -121,15 +89,6 @@ export interface AgentGroupUpdateRequest {
   description?: string | null;
   agents?: string[] | null;
 }
-export interface AgentPatch {
-  agent_url?: string | null;
-  agent_card?: AgentCard | null;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
-}
 export interface AgentTaskRequest {
   task_id: string;
   agent_id: string;
@@ -139,25 +98,6 @@ export interface AgentTaskRequest {
     [k: string]: unknown;
   } | null;
   message?: Message | null;
-}
-export interface AgentUpdate {
-  agent_url?: string | null;
-  agent_card: AgentCard | null;
-  call_count: number | null;
-  call_success_count: number | null;
-  like_count: number | null;
-  dislike_count: number | null;
-  agent_status: AgentStatus | null;
-  agent_id: string | null;
-}
-export interface BaseAgent {
-  agent_url?: string | null;
-  agent_card?: AgentCard | null;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
 }
 /**
  * A BaseTask represents a complete user request and serves as the top-level container.
@@ -217,13 +157,6 @@ export interface MetaTask {
   } | null;
   extend_info?: unknown;
 }
-export interface OrchestrationRequest {
-  task_id?: string | null;
-  room_id?: string | null;
-  room_user_message_id?: string | null;
-  room_agent_message_id?: string | null;
-  room_related_message_id?: string | null;
-}
 export interface PaginationParams {
   /**
    * Page number (1-indexed)
@@ -235,7 +168,7 @@ export interface PaginationParams {
   limit?: number | null;
 }
 export interface RoomAgentMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type?: string;
@@ -251,7 +184,7 @@ export interface MessageContent {
   [k: string]: unknown;
 }
 export interface RoomCenterAgentMessageRequest {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   related_message_id?: string | null;
   agent_id?: string | null;
@@ -263,24 +196,11 @@ export interface RoomCenterAgentMessageRequest {
   } | null;
   message?: RoomAgentMessage | null;
 }
-export interface RoomCenterRoomMessageRequest {
-  room_id?: string | null;
-  limit?: number | null;
-  cursor?: string | null;
-  message_id?: string | null;
-  message_type?: string | null;
-  message_content?: string | null;
-  message_created_at?: string | null;
-  extend_info?: {
-    [k: string]: unknown;
-  } | null;
-  message?: RoomMessage | null;
-}
 /**
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type: string;
@@ -289,32 +209,19 @@ export interface RoomMessage {
   related_message_id?: string | null;
   message_content: MessageContent;
 }
-export interface RoomCenterRoomSettingRequest {
-  room_id?: string | null;
-  room_name?: string | null;
-  room_owner_id?: string | null;
-  room_owner_name?: string | null;
-  room_created_at?: string | null;
+export interface CreateRoomRequest {
+  room_name: string;
+  room_owner_name: string;
   extend_info?: {
     [k: string]: unknown;
   } | null;
-  room?: Room | null;
-
-  // ── Legacy fields (accepted during rollout, canonical wins) ────────────
-  room_agent_set?: {
-    [k: string]: string;
-  } | null;
-  /** @deprecated Use canonical membership_seed_input instead. */
-  applied_from_group?: string | null;
-
-  // ── Canonical membership write input (mutually exclusive union) ────────
   membership_seed_input?: "manual" | "saved_group" | "all_current_agents";
   room_agent_ids?: string[];
   seed_group_id?: string;
   seed_all_current_agents?: true;
 }
 export interface RoomCenterUserMessageRequest {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   related_message_id?: string | null;
   user_id?: string | null;
@@ -344,7 +251,7 @@ export type SendMessagePayload = {
 }
 
 export interface RoomUserMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   message_created_at?: string;
   message_type?: string;

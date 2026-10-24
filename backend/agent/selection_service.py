@@ -1,8 +1,8 @@
 """
-Agent Selection Service for Auto Room Mode
+Agent selection for explicit target scopes and agent suggestions.
 
-Thin facade over AgentMatcher. Provides backward-compatible API
-for agent selection with legacy RoutingStrategy and AgentSelectionResult types.
+Wraps AgentMatcher with optional LLM reranking and returns ranked agents as
+AgentSelectionResult, plus the route-facing AgentSuggestionResult.
 """
 
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from agent.matcher import AgentMatcher
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
-from common.dto import AgentRoutingCandidate
+from common.dto import AgentInfo, AgentRoutingCandidate
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -46,10 +46,10 @@ class AgentSelectionResult:
 
 class AgentSelectionService:
     """
-    Facade over AgentMatcher for backward compatibility.
+    Rank agents for a message through AgentMatcher.
 
-    Delegates to AgentMatcher.match() and converts results to legacy
-    AgentSelectionResult format.
+    Delegates to AgentMatcher.match(), optionally reranks the top candidates,
+    and returns an AgentSelectionResult.
     """
 
     def __init__(self, matcher=None, llm_reranker=None):
@@ -85,14 +85,14 @@ class AgentSelectionService:
         )
 
         # Delegate to AgentMatcher — let exceptions propagate so callers
-        # (e.g. _resolve_explicit_target_scope) can surface a proper 500.
+        # (e.g. TargetScopeResolver.resolve_explicit_target_scope) can surface a proper 500.
         match_result = await self._matcher.match(
             message_text=message_text,
             user_id=user_id,
             required_input_modes=required_input_modes,
         )
 
-        # Convert MatchResult to AgentSelectionResult for backward compatibility
+        # Convert MatchResult to AgentSelectionResult.
         if not match_result.agents:
             logger.warning("AgentSelectionService: No agents matched")
             return AgentSelectionResult(
@@ -114,14 +114,14 @@ class AgentSelectionService:
         agent_selections = [
             AgentSelection(
                 agent_id=matched.agent.agent_id,
-                agent_name=matched.agent.agent_card.name,
+                agent_name=matched.agent.name or "",
                 reason=f"Lexical match score: {matched.lexical_score:.2f}",
                 score=matched.final_score,
             )
             for matched in ranked_agents[:top_k]
         ]
 
-        # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1
+        # Reported strategy: SINGLE for one agent, PARALLEL for more.
         strategy = (
             RoutingStrategy.SINGLE
             if len(agent_selections) == 1
@@ -140,7 +140,7 @@ class AgentSelectionService:
             strategy=strategy,
             agents=agent_selections,
             reasoning=reasoning,
-            needs_debate=False,  # Backward-compat: always False
+            needs_debate=False,  # Selection never requests a debate.
         )
 
     async def suggest_agents(
@@ -221,21 +221,21 @@ class AgentSelectionService:
         ]
 
 
-def _routing_candidate(agent) -> AgentRoutingCandidate:
-    card = agent.agent_card
+def _routing_candidate(agent: AgentInfo) -> AgentRoutingCandidate:
+    card = agent.raw_card
     skills = [
         str(
             (skill.get("name") or skill.get("id") or "Unknown")
             if isinstance(skill, dict)
-            else getattr(skill, "name", None) or skill
+            else skill
         )
-        for skill in (card.skills or [])
+        for skill in (card.get("skills") or [])
     ]
-    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
+    capabilities = card.get("capabilities")
     return AgentRoutingCandidate(
         agent_id=str(agent.agent_id),
-        name=str(card.name),
-        description=str(card.description or ""),
-        capabilities=capabilities,
+        name=str(agent.name or ""),
+        description=str(agent.description or ""),
+        capabilities=capabilities if isinstance(capabilities, dict) else {},
         skills=skills,
     )

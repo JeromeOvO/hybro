@@ -15,18 +15,18 @@ from common.dto import HITLCancelCommand, HITLRequest
 from common.protocols import HITLManager, RoomOwnershipReader
 from models.hitl import HITLBatchResponseRequest
 
-router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
+router = APIRouter(prefix="/rooms/{conversation_id}/hitl", tags=["hitl"])
 
 
 async def verify_room_ownership(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser,
     room_ownership: RoomOwnershipReader,
 ) -> None:
-    if not room_id:
-        raise HTTPException(status_code=400, detail="room_id is required")
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id is required")
 
-    owner_id = await room_ownership.get_room_owner(room_id)
+    owner_id = await room_ownership.get_room_owner(conversation_id)
     if owner_id is None:
         raise HTTPException(status_code=404, detail="Room not found")
     if owner_id != user.user_id:
@@ -103,18 +103,18 @@ def _pending_hitl_public_payload(request: HITLRequest) -> dict:
 
 @router.post("/respond-batch")
 async def respond_to_hitl_interaction(
-    room_id: str,
+    conversation_id: str,
     body: HITLBatchResponseRequest,
     user: ClerkUser = Depends(get_current_user),
     manager: HITLManager = Depends(get_hitl_manager),
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Atomically submit every required answer for one interaction."""
-    await verify_room_ownership(room_id, user, room_ownership)
+    await verify_room_ownership(conversation_id, user, room_ownership)
 
     try:
         response = await manager.resolve_hitl_batch(
-            room_id,
+            conversation_id,
             body.interaction_id,
             [answer.model_dump() for answer in body.answers],
             user.user_id,
@@ -132,21 +132,21 @@ async def respond_to_hitl_interaction(
 
 @router.get("/pending")
 async def get_pending_hitl_requests(
-    room_id: str,
+    conversation_id: str,
     user: ClerkUser = Depends(get_current_user),
     manager: HITLManager = Depends(get_hitl_manager),
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Get pending HITL requests for a room (SSE reconnect catch-up)."""
-    await verify_room_ownership(room_id, user, room_ownership)
+    await verify_room_ownership(conversation_id, user, room_ownership)
 
-    requests = await manager.get_pending_hitl(room_id)
+    requests = await manager.get_pending_hitl(conversation_id)
     return {"requests": [_pending_hitl_public_payload(r) for r in requests]}
 
 
 @router.post("/interactions/{interaction_id}/cancel")
 async def cancel_hitl_interaction(
-    room_id: str,
+    conversation_id: str,
     interaction_id: str,
     body: HITLCancelCommand,
     user: ClerkUser = Depends(get_current_user),
@@ -154,12 +154,12 @@ async def cancel_hitl_interaction(
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Cancel one complete interaction with optimistic version fencing."""
-    await verify_room_ownership(room_id, user, room_ownership)
+    await verify_room_ownership(conversation_id, user, room_ownership)
     if body.interaction_id != interaction_id:
         raise HTTPException(status_code=400, detail="interaction_id mismatch")
     try:
         new_version = await manager.cancel_hitl_interaction(
-            room_id,
+            conversation_id,
             interaction_id,
             body.expected_interaction_version,
         )

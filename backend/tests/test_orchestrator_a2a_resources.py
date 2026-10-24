@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
 from execution.orchestrator.a2a_runtime.errors import StaleRoomEpochError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from execution.orchestrator.a2a_runtime.models import (
@@ -26,10 +25,11 @@ from execution.orchestrator.models import (
     PreparedResourceRef,
     RunResourceManifestSnapshot,
 )
+from execution.repository.orchestrator.artifacts import GuardedRoomFileArtifactWriter
 from room_files import MemoryFileContentStore, RoomFiles
 
 from ._orchestrator_a2a_helpers import binding, ledger_record
-from .test_room_files import AlwaysValidLeases, InMemoryCollection
+from .test_room_files import AlwaysValidLeases, InMemoryCollection, room_lifecycle
 
 
 def manifest():
@@ -55,10 +55,10 @@ def test_selected_refs_are_frozen_with_room_epoch_and_digest():
         arguments={"task": "review", "attachment_refs": ["attachment-1"]},
         run_manifest=manifest(),
         binding=bound,
-        source_room_id="room-1",
+        source_conversation_id="room-1",
         source_room_epoch=1,
     )
-    assert frozen.refs[0].room_id == "room-1"
+    assert frozen.refs[0].conversation_id == "room-1"
     assert frozen.refs[0].room_epoch == 1
     assert frozen.refs[0].content_digest == "digest-1"
 
@@ -124,7 +124,7 @@ def test_omitted_context_refs_freeze_only_compatible_root_context_deterministica
         "arguments": {"task": "review"},
         "run_manifest": run_manifest,
         "binding": bound,
-        "source_room_id": "room-1",
+        "source_conversation_id": "room-1",
         "source_room_epoch": 1,
         "root_context_source_message_id": "root-message",
     }
@@ -162,7 +162,7 @@ def test_explicit_context_refs_remain_exact_without_implicit_root_context():
         arguments={"task": "review", "context_refs": ["ctx:message:selected"]},
         run_manifest=run_manifest,
         binding=binding().model_copy(update={"input_modes": ["text"]}),
-        source_room_id="room-1",
+        source_conversation_id="room-1",
         source_room_epoch=1,
         root_context_source_message_id="root-message",
     )
@@ -177,7 +177,7 @@ def test_unknown_or_wrong_kind_resource_ref_is_rejected():
             arguments={"task": "review", "attachment_refs": ["missing"]},
             run_manifest=manifest(),
             binding=bound,
-            source_room_id="room-1",
+            source_conversation_id="room-1",
             source_room_epoch=1,
         )
     with pytest.raises(ResourceSelectionError, match="wrong kind"):
@@ -185,7 +185,7 @@ def test_unknown_or_wrong_kind_resource_ref_is_rejected():
             arguments={"task": "review", "artifact_refs": ["attachment-1"]},
             run_manifest=manifest(),
             binding=bound,
-            source_room_id="room-1",
+            source_conversation_id="room-1",
             source_room_epoch=1,
         )
 
@@ -215,7 +215,7 @@ async def test_guarded_remote_fetch_and_room_file_owner_run_through_plan3_adapte
             self.calls = []
 
         @asynccontextmanager
-        async def write_lease(self, room_id, owner):
+        async def write_lease(self, conversation_id, owner):
             yield "lease-1"
 
         async def store_agent_artifact(self, **kwargs):
@@ -250,7 +250,7 @@ async def test_guarded_remote_fetch_and_room_file_owner_run_through_plan3_adapte
         observation_id="observation-1",
     )
     assert durable == ["/api/v1/files/durable-file-1/content"]
-    assert owner.calls[0]["room_id"] == "room-1"
+    assert owner.calls[0]["conversation_id"] == "room-1"
     assert owner.calls[0]["source_message_id"] == "observation-1"
     assert owner.calls[0]["content"] == b"safe-content"
 
@@ -270,7 +270,7 @@ async def test_guarded_plan3_adapter_persists_through_real_room_file_owner():
     owner = RoomFiles(
         metadata=metadata,
         content=content,
-        rooms=rooms,
+        room_lifecycle=room_lifecycle(rooms),
         file_id_factory=lambda: file_id,
     )
     owner._leases = AlwaysValidLeases()
@@ -304,7 +304,7 @@ async def test_guarded_artifact_commit_rejects_fetch_time_epoch_recreation():
             self.writes = 0
 
         @asynccontextmanager
-        async def write_lease(self, room_id, owner):
+        async def write_lease(self, conversation_id, owner):
             yield "recreated-room-lease"
 
         async def store_agent_artifact(self, **kwargs):
@@ -344,7 +344,7 @@ async def test_guarded_artifact_commit_rejects_fetch_time_epoch_recreation():
 async def test_default_guarded_fetch_primitive_rejects_path_before_owner_write():
     class Owner:
         @asynccontextmanager
-        async def write_lease(self, room_id, owner):
+        async def write_lease(self, conversation_id, owner):
             yield "lease-1"
 
         async def store_agent_artifact(self, **kwargs):
@@ -378,7 +378,7 @@ async def test_durable_projection_regenerates_once_and_replays_after_restart():
     ref = FrozenCallResourceRef(
         ref_id="context-1",
         kind="context",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_message_id="message-1",
         mime_type="application/pdf",
@@ -404,7 +404,7 @@ async def test_raw_and_encoded_limits_are_enforced_separately():
     ref = FrozenCallResourceRef(
         ref_id="attachment-1",
         kind="attachment",
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_message_id="message-1",
         size_bytes=2,
@@ -433,7 +433,7 @@ async def test_raw_and_encoded_limits_are_enforced_separately():
     with pytest.raises(ResourceSelectionError, match="outbound resource bytes"):
         await raw_limited.materialize(
             frozen,
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             allowed_input_modes=["file"],
             deadline_at=datetime.now(UTC) + timedelta(minutes=1),
@@ -449,7 +449,7 @@ async def test_raw_and_encoded_limits_are_enforced_separately():
     with pytest.raises(ResourceSelectionError, match="encoded"):
         await adapter.materialize(
             frozen,
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             allowed_input_modes=["file"],
             deadline_at=datetime.now(UTC) + timedelta(minutes=1),
@@ -466,7 +466,7 @@ def test_materialized_content_must_match_frozen_digest_exactly():
         arguments={"task": "review", "attachment_refs": ["attachment-1"]},
         run_manifest=manifest(),
         binding=bound,
-        source_room_id="room-1",
+        source_conversation_id="room-1",
         source_room_epoch=1,
     )
     verify_materialized_digests(

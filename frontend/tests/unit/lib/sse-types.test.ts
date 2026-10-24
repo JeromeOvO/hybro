@@ -28,14 +28,14 @@ describe('final room SSE types', () => {
     expect(hasSSEFrameEnvelope({
       type: 'heartbeat',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       data: {},
     })).toBe(true)
 
     expect(hasSSEFrameEnvelope({
       type: 'heartbeat',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
     })).toBe(false)
   })
 
@@ -44,7 +44,7 @@ describe('final room SSE types', () => {
     expect(hasSSEFrameEnvelope({
       type: 'heartbeat',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       data: {},
       [legacyEventTypeKey]: 'heartbeat',
     })).toBe(false)
@@ -53,7 +53,7 @@ describe('final room SSE types', () => {
     expect(hasSSEFrameEnvelope({
       type: 'run_event',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       data: {},
       [legacyPayloadKey]: {},
     })).toBe(false)
@@ -62,7 +62,7 @@ describe('final room SSE types', () => {
     expect(hasSSEFrameEnvelope({
       type: 'task_submitted',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       data: {},
       [legacyRoutingKey]: 'all_agents',
     })).toBe(false)
@@ -70,7 +70,7 @@ describe('final room SSE types', () => {
     expect(hasSSEFrameEnvelope({
       type: 'run_event',
       timestamp: '2026-06-04T00:00:00.000Z',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       data: { payload: {} },
     })).toBe(true)
   })
@@ -88,7 +88,7 @@ describe('final room SSE types', () => {
   it('carries the room_seq handshake on connected and heartbeat data', () => {
     const connected = {
       type: 'connected',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: { connection_id: 'conn-1', room_seq: 42 },
     } satisfies RoomSSEFrameMap['connected']
@@ -96,7 +96,7 @@ describe('final room SSE types', () => {
 
     const heartbeat = {
       type: 'heartbeat',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: { room_seq: 42 },
     } satisfies RoomSSEFrameMap['heartbeat']
@@ -106,16 +106,14 @@ describe('final room SSE types', () => {
   it('pins the snapshot frame shape', () => {
     const snapshot = {
       type: 'snapshot',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: {
         room_seq: 7,
         messages: [],
         tasks: [],
-        runs: [],
         hitl: { requests: [], resolved: [] },
         streaming: {},
-        trace: {},
       },
     } satisfies RoomSSEFrameMap['snapshot']
     expect(snapshot.data.room_seq).toBe(7)
@@ -124,7 +122,7 @@ describe('final room SSE types', () => {
   it('allows room_seq / room_event_id / parent_event_id on delta data', () => {
     const delta = {
       type: 'task_update',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: {
         message_id: 'm1',
@@ -145,7 +143,7 @@ describe('RoomSSEFrameMap HITL durable events', () => {
   it('allows hitl_request without client_request_id', () => {
     const frame = {
       type: 'hitl_request',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: {
         request_id: 'hitl-1',
@@ -164,7 +162,7 @@ describe('RoomSSEFrameMap HITL durable events', () => {
   it('allows hitl_response without client_request_id', () => {
     const frame = {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp: '2026-07-02T00:00:00.000Z',
       data: {
         request_id: 'hitl-1',

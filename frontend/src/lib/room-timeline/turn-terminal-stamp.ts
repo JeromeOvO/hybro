@@ -37,7 +37,7 @@ export function canStampTurnTerminalFromEntityState(
   real: AgentResultViewModel[] = getStripSourceResults(turn),
   backendRunActive: boolean | null = null,
   options?: { lifecycleActive?: boolean },
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): boolean {
   if (turn.turnTerminalStatus) return false
   if (turn.status === 'awaiting_input') return false
@@ -109,17 +109,17 @@ function isActiveLifecycleTurn(
 }
 
 function writeTurnTerminalStatus(
-  roomId: string,
+  conversationId: string,
   user: { id: string; content: string; senderName: string; timestamp: string },
   terminalStatus: 'completed' | 'failed' | 'canceled',
   lifecycle: ProcessingLifecycle,
   clientRequestId?: string | null,
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): void {
   const store = useMessageStore.getState()
   store.upsertMessage({
     id: user.id,
-    roomId,
+    conversationId,
     messageType: 'user',
     content: user.content,
     senderName: user.senderName,
@@ -135,29 +135,29 @@ function writeTurnTerminalStatus(
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing({ clearMessageId: false })
     lifecycle.disarmCancelTimeout()
-    store.removeMessage(lifecycle.placeholderId(roomId))
+    store.removeMessage(lifecycle.placeholderId(conversationId))
     lifecycle.dismissPlaceholder()
   }
 }
 
 export function buildTurnForRecoveryHint(
-  roomId: string,
+  conversationId: string,
   hint: {
     clientRequestId?: string | null
     relatedMessageId?: string | null
   },
 ): TurnViewModel | undefined {
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return undefined
+  if (store.conversationId !== conversationId) return undefined
 
-  const user = findProcessingStatusUserEntity(roomId, {
+  const user = findProcessingStatusUserEntity(conversationId, {
     messageId: hint.relatedMessageId,
     clientRequestId: hint.clientRequestId,
     preferClientRequestId: true,
   })
   if (!user) return undefined
 
-  return buildTurnForUser(roomId, user.id)
+  return buildTurnForUser(conversationId, user.id)
 }
 
 /**
@@ -170,7 +170,6 @@ export function shouldScheduleTurnTerminalRecovery(
   if (turn) {
     if (turnHasSubstantiveLlmSynthesis(turn)) return false
     if (hasActiveSynthesisGap(turn)) return false
-    if (turn.turnCompletionKind === 'synthesis') return false
   }
 
   if (
@@ -189,34 +188,34 @@ export function shouldScheduleTurnTerminalRecovery(
   return false
 }
 
-function buildTurnForUser(roomId: string, userId: string): TurnViewModel | undefined {
+function buildTurnForUser(conversationId: string, userId: string): TurnViewModel | undefined {
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return undefined
-  const roomOrderedIds = store.orderedIds.filter(id => store.entities[id]?.roomId === roomId)
+  if (store.conversationId !== conversationId) return undefined
+  const roomOrderedIds = store.orderedIds.filter(id => store.entities[id]?.conversationId === conversationId)
   return buildTurns(store.entities, roomOrderedIds, []).find(t => t.userMessageId === userId)
 }
 
 export function stampTurnTerminalFromBackendTruth(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   hint: {
     clientRequestId?: string | null
     relatedMessageId?: string | null
   },
   backendRunActive: boolean | null,
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): boolean {
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return false
+  if (store.conversationId !== conversationId) return false
 
-  const user = findProcessingStatusUserEntity(roomId, {
+  const user = findProcessingStatusUserEntity(conversationId, {
     messageId: hint.relatedMessageId,
     clientRequestId: hint.clientRequestId,
     preferClientRequestId: true,
   })
   if (!user || user.turnTerminalStatus) return false
 
-  const turn = buildTurnForUser(roomId, user.id)
+  const turn = buildTurnForUser(conversationId, user.id)
   if (!turn) return false
 
   const real = getStripSourceResults(turn)
@@ -245,7 +244,7 @@ export function stampTurnTerminalFromBackendTruth(
     )
 
   writeTurnTerminalStatus(
-    roomId,
+    conversationId,
     user,
     terminalStatusForTurn(turn),
     lifecycle,
@@ -256,7 +255,7 @@ export function stampTurnTerminalFromBackendTruth(
 }
 
 export async function ensureTurnTerminalStampedFromBackendTruth(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   hint: {
     clientRequestId?: string | null
@@ -265,9 +264,9 @@ export async function ensureTurnTerminalStampedFromBackendTruth(
   getToken?: (() => Promise<string | null>) | undefined,
 ): Promise<boolean> {
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return false
+  if (store.conversationId !== conversationId) return false
 
-  const user = findProcessingStatusUserEntity(roomId, {
+  const user = findProcessingStatusUserEntity(conversationId, {
     messageId: hint.relatedMessageId,
     clientRequestId: hint.clientRequestId,
     preferClientRequestId: true,
@@ -275,29 +274,24 @@ export async function ensureTurnTerminalStampedFromBackendTruth(
   if (!user || user.turnTerminalStatus) return false
 
   let backendRunActive: boolean | null = null
-  let turnCompletionKind: 'synthesis' | 'deterministic' | undefined
   if (getToken) {
     try {
-      const result = await inquiryActiveRuns(roomId, getToken, undefined, user.id)
+      const result = await inquiryActiveRuns(conversationId, getToken)
       if (result.success) {
         backendRunActive = isBackendRunActiveForTurn(result.active_runs, user.id)
-        const kind = result.turn_completion_kind
-        if (kind === 'synthesis' || kind === 'deterministic') {
-          turnCompletionKind = kind
-        }
       }
     } catch {
       backendRunActive = null
     }
   }
 
-  return stampTurnTerminalFromBackendTruth(roomId, lifecycle, hint, backendRunActive, turnCompletionKind)
+  return stampTurnTerminalFromBackendTruth(conversationId, lifecycle, hint, backendRunActive)
 }
 
 const pendingBackendTruthChecks = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function scheduleTurnTerminalBackendTruthCheck(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   hint: {
     clientRequestId?: string | null
@@ -306,13 +300,13 @@ export function scheduleTurnTerminalBackendTruthCheck(
   getToken?: (() => Promise<string | null>) | undefined,
   debounceMs = 1500,
 ): void {
-  const key = `${roomId}:${hint.relatedMessageId ?? hint.clientRequestId ?? 'unknown'}`
+  const key = `${conversationId}:${hint.relatedMessageId ?? hint.clientRequestId ?? 'unknown'}`
   const existing = pendingBackendTruthChecks.get(key)
   if (existing) clearTimeout(existing)
 
   pendingBackendTruthChecks.set(key, setTimeout(() => {
     pendingBackendTruthChecks.delete(key)
-    void ensureTurnTerminalStampedFromBackendTruth(roomId, lifecycle, hint, getToken)
+    void ensureTurnTerminalStampedFromBackendTruth(conversationId, lifecycle, hint, getToken)
   }, debounceMs))
 }
 

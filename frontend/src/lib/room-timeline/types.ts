@@ -27,7 +27,7 @@ export type TurnPhase =
 
 export interface TurnViewModel {
   id: string
-  roomId: string
+  conversationId: string
   userMessageId: string | null
   userContent: string
   userAttachments: AttachmentData[]
@@ -56,8 +56,8 @@ export interface TurnViewModel {
   primaryMessageId?: string
   /** Room-level terminal signal from user entity (processing_status SSE). */
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
-  /** Backend-authoritative signal for how the turn completed (synthesis vs deterministic). */
-  turnCompletionKind?: 'synthesis' | 'deterministic'
+  /** Frontend stamp set when backend truth confirms a non-synthesis completion. */
+  turnCompletionKind?: 'deterministic'
   /** Transient room-level processing status details shown while the turn is live. */
   processingStatusLogs: ProcessingStatusLogEntry[]
   /** Ephemeral build-time live-run context; not persisted to the backend. */
@@ -179,6 +179,8 @@ export interface AgentResultViewModel {
   artifacts: ArtifactData[]
   /** Task-level status hint (for terminal/interactive states). */
   taskStatusMessage?: string | null
+  /** The failing Agent's own reason, shown on its card. */
+  failureDetail?: string
   hitlHistory?: { prompt: string; answer: string }[]
   /** Whether this agent is a summary-family system agent. */
   isSummaryAgent: boolean

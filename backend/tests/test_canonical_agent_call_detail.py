@@ -21,8 +21,10 @@ class RoomStore:
     def __init__(self, owner):
         self.owner = owner
 
-    async def get_room_by_room_id(self, room_id):
-        return SimpleNamespace(room_id=room_id, room_owner_id=self.owner)
+    async def get_room_by_room_id(self, conversation_id):
+        return SimpleNamespace(
+            conversation_id=conversation_id, room_owner_id=self.owner
+        )
 
 
 class ArtifactMetadataReader:
@@ -30,8 +32,8 @@ class ArtifactMetadataReader:
         self.metadata = metadata
         self.calls = []
 
-    async def get_for_room_file(self, room_id, file_id):
-        self.calls.append((room_id, file_id))
+    async def get_for_room_file(self, conversation_id, file_id):
+        self.calls.append((conversation_id, file_id))
         return self.metadata
 
 
@@ -57,8 +59,7 @@ def canonical_run(*, output=True, artifacts=(), content=None):
     )
     return SimpleNamespace(
         run_id="run-1",
-        room_id="room-1",
-        lifecycle_family="canonical",
+        conversation_id="room-1",
         tool_batches=[SimpleNamespace(entries=[entry])],
     )
 
@@ -66,13 +67,13 @@ def canonical_run(*, output=True, artifacts=(), content=None):
 @pytest.mark.asyncio
 async def test_private_detail_service_returns_output_without_private_call_identity():
     detail = await CanonicalAgentCallDetailService(RunStore(canonical_run())).get(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         public_call_id="inv_weather_0001",
     )
     assert detail is not None
     payload = detail.model_dump(mode="json")
-    assert payload["output"] == "private full output"
+    assert "output" not in payload
     assert payload["parts"] == [{"kind": "text", "text": "private full output"}]
     assert "private-call-id" not in str(payload)
     assert "private-tool-name" not in str(payload)
@@ -95,7 +96,7 @@ async def test_private_detail_preserves_a2a_text_and_data_part_boundaries():
             )
         )
     ).get(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         public_call_id="inv_weather_0001",
     )
@@ -109,12 +110,6 @@ async def test_private_detail_preserves_a2a_text_and_data_part_boundaries():
         {"kind": "data", "data": [{"quote": 37_200}]},
     ]
     assert "must-not-leak" not in str(payload)
-    assert payload["output"] == (
-        '{"client": {"name": "Acme SaaS Inc."}}\n'
-        "Submission prepared.\n"
-        '{"declared":"text"}\n'
-        '[{"quote": 37200}]'
-    )
 
 
 @pytest.mark.asyncio
@@ -122,7 +117,7 @@ async def test_private_detail_returns_authenticated_artifact_descriptors():
     detail = await CanonicalAgentCallDetailService(
         RunStore(canonical_run(artifacts=("room-file-1",)))
     ).get(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         public_call_id="inv_weather_0001",
     )
@@ -157,7 +152,7 @@ async def test_private_detail_enriches_room_owned_file_artifacts_for_preview():
         ),
         artifact_metadata_reader=metadata_reader,
     ).get(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         public_call_id="inv_weather_0001",
     )
@@ -190,7 +185,7 @@ async def test_private_detail_does_not_remap_external_artifact_urls_to_room_file
         RunStore(canonical_run(artifacts=(external_ref,))),
         artifact_metadata_reader=metadata_reader,
     ).get(
-        room_id="room-1",
+        conversation_id="room-1",
         run_id="run-1",
         public_call_id="inv_weather_0001",
     )
@@ -228,7 +223,6 @@ async def test_private_detail_route_authorizes_room_and_handles_missing_output()
         user,
         RoomStore("owner"),
     )
-    assert detail.output == "private full output"
     assert [part.model_dump(mode="json") for part in detail.parts] == [
         {"kind": "text", "text": "private full output"}
     ]
@@ -257,3 +251,29 @@ async def test_private_detail_route_authorizes_room_and_handles_missing_output()
             RoomStore("owner"),
         )
     assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("conversation_id", "run_id", "public_call_id", "expected"),
+    [
+        ("room-1", "run-1", "inv_weather_0001", True),
+        ("room-2", "run-1", "inv_weather_0001", False),
+        ("room-1", "run-missing", "inv_weather_0001", False),
+        ("room-1", "run-1", "inv_unknown", False),
+    ],
+)
+async def test_agent_call_exists_requires_same_room_run_and_call(
+    conversation_id, run_id, public_call_id, expected
+):
+    # Existence does not depend on buffered output, so a running call counts.
+    service = CanonicalAgentCallDetailService(RunStore(canonical_run(output=False)))
+
+    assert (
+        await service.agent_call_exists(
+            conversation_id=conversation_id,
+            run_id=run_id,
+            public_call_id=public_call_id,
+        )
+        is expected
+    )

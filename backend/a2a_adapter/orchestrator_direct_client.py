@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -32,6 +33,7 @@ from uuid import uuid4
 
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_ERROR_METADATA_KEY,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
     HYBRO_A2A_INTERACTION_METADATA_KEY,
     HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
@@ -53,10 +55,19 @@ from .card_data import agent_card_dict, build_agent_card
 from .client_facade import A2AClientFacadeError
 from .message_factory import to_sdk_message
 from .translators import facade_result_to_model, message_to_completed_task
-from .webhook_payloads import parse_stream_response_payload
+from .webhook_payloads import (
+    parse_push_notification_payload,
+    parse_stream_response_payload,
+)
 
 logger = logging.getLogger(__name__)
 _MAX_INLINE_DATA_ARTIFACTS = 20
+_MAX_FREE_TEXT_PROMPT_CHARS = 10_000
+# Identity of the interaction Hybro derives from a plain A2A input-required.
+FREE_TEXT_INTERACTION_PREFIX = "a2a-input-required:"
+FREE_TEXT_QUESTION_ID = "agent_question"
+_AGENT_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}")
+_MAX_AGENT_ERROR_MESSAGE_CHARS = 500
 
 # ---------------------------------------------------------------------------
 # Provider-neutral command mirrors (structural, never imported from the
@@ -77,9 +88,11 @@ class _DispatchCommand(Protocol):
     direct_mode: str | None
     task: str
     materialized_resources: list[Any]
-    room_id: str
+    conversation_id: str
     room_epoch: int
     deadline_at: Any
+    # url plus a SecretStr token, or None when push is not configured.
+    push_notification: Any
 
 
 class _ContinuationCommand(Protocol):
@@ -95,7 +108,7 @@ class _ContinuationCommand(Protocol):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str
     room_epoch: int
     created_at: Any
 
@@ -109,7 +122,7 @@ class _ModelReplyCommand(Protocol):
     requesting_subject_digest: str
     task_id: str
     context_id: str
-    room_id: str
+    conversation_id: str
     room_epoch: int
     message_text: str
     interaction_fingerprint: str | None
@@ -150,6 +163,7 @@ class StreamMessageFn(Protocol):
         message_data: Any,
         *,
         accepted_output_modes: list[str] | None = None,
+        push_notification_config: dict[str, Any] | None = None,
         timeout: float = 600.0,
     ) -> AsyncIterator[dict[str, Any]]: ...
 
@@ -216,6 +230,18 @@ def endpoint_scope_digest(endpoint_scope: str) -> str:
     return sha256(endpoint_scope.encode()).hexdigest()
 
 
+def _push_notification_config(
+    command: _DispatchCommand, card: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Push config for the send, only when the live card advertises push."""
+    registration = command.push_notification
+    if registration is None:
+        return None
+    if not build_agent_card(card).capabilities.push_notifications:
+        return None
+    return {"url": registration.url, "token": registration.token.get_secret_value()}
+
+
 def _task_state_value(task: Any) -> str:
     return normalize_task_state_value(task.status.state) or "working"
 
@@ -238,19 +264,85 @@ def _event_kind(task: Any) -> str:
     return "working"
 
 
-def _extract_interaction_spec(task: Any) -> dict[str, Any] | None:
+def _extract_interaction_spec(task: Any, *, event_kind: str) -> dict[str, Any] | None:
     message = getattr(getattr(task, "status", None), "message", None)
     metadata = getattr(message, "metadata", None)
-    if not isinstance(metadata, Mapping):
-        return None
-    raw = metadata.get(HYBRO_A2A_INTERACTION_METADATA_KEY)
+    raw = (
+        metadata.get(HYBRO_A2A_INTERACTION_METADATA_KEY)
+        if isinstance(metadata, Mapping)
+        else None
+    )
     if raw is None:
+        if event_kind == "input_required":
+            return _free_text_interaction_spec(task, message)
         return None
     try:
         spec = A2AInteractionSpec.model_validate(raw)
     except (TypeError, ValueError):
         return None
     return spec.model_dump(mode="json")
+
+
+def _free_text_interaction_spec(task: Any, message: Any) -> dict[str, Any] | None:
+    """Treat a plain A2A ``input-required`` question as one free-text question.
+
+    Agents that do not speak Hybro's interaction metadata still ask the user
+    through standard A2A. The status message text becomes the prompt; the
+    answer goes back to the same task as plain text. Without text there is
+    nothing to ask, so the observation keeps no spec.
+    """
+    prompt = get_text_from_message(message).strip()[:_MAX_FREE_TEXT_PROMPT_CHARS]
+    if not prompt:
+        return None
+    # The A2A message id distinguishes repeated rounds that ask the same text.
+    round_key = getattr(message, "message_id", None) or prompt
+    digest = sha256(f"{getattr(task, 'id', '')}\n{round_key}".encode()).hexdigest()[:32]
+    return {
+        "schema_version": 1,
+        "interaction_id": f"{FREE_TEXT_INTERACTION_PREFIX}{digest}",
+        "questions": [
+            {
+                "question_id": FREE_TEXT_QUESTION_ID,
+                "interaction_kind": "questionnaire",
+                "prompt": prompt,
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+
+
+def _agent_error(task: Any) -> tuple[str | None, str | None]:
+    """Read the Agent's own failure code from the documented metadata key.
+
+    Untrusted remote data: only a short identifier code and bounded message
+    text are kept; anything else is ignored.
+    """
+    message = getattr(getattr(task, "status", None), "message", None)
+    metadata = getattr(message, "metadata", None)
+    raw = (
+        metadata.get(HYBRO_A2A_ERROR_METADATA_KEY)
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if not isinstance(raw, Mapping):
+        return None, None
+    code = raw.get("code")
+    if not isinstance(code, str) or not _AGENT_ERROR_CODE.fullmatch(code):
+        return None, None
+    text = raw.get("message")
+    error_message = (
+        text.strip()[:_MAX_AGENT_ERROR_MESSAGE_CHARS]
+        if isinstance(text, str) and text.strip()
+        else None
+    )
+    return code, error_message
+
+
+def _is_free_text_interaction(interaction_id: str | None) -> bool:
+    return bool(interaction_id) and str(interaction_id).startswith(
+        FREE_TEXT_INTERACTION_PREFIX
+    )
 
 
 def _artifact_value(artifact: Any, field: str) -> Any:
@@ -274,7 +366,7 @@ def _task_to_observation_kwargs(  # noqa: C901
     event_kind = _event_kind(task)
     status = _terminal_status(task)
     interaction_spec = (
-        _extract_interaction_spec(task)
+        _extract_interaction_spec(task, event_kind=event_kind)
         if event_kind in {"input_required", "auth_required"}
         else None
     )
@@ -391,6 +483,9 @@ def _task_to_observation_kwargs(  # noqa: C901
         text = f"[Generated file: {', '.join(generated_file_descriptions)}]"
     if text:
         content.append({"kind": "text", "text": text})
+    error_code, error_message = (
+        _agent_error(task) if status in {"failed", "rejected"} else (None, None)
+    )
 
     return {
         "observation_id": stable_id,
@@ -408,8 +503,8 @@ def _task_to_observation_kwargs(  # noqa: C901
         "inline_artifacts": inline_artifacts,
         "artifact_refs": list(dict.fromkeys(artifact_refs)),
         "interaction_spec": interaction_spec,
-        "error_code": None,
-        "error_message": None,
+        "error_code": error_code,
+        "error_message": error_message,
         "cursor": cursor,
     }
 
@@ -566,7 +661,7 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
     task: Any,
     *,
     epoch_owner: Any | None,
-    room_id: str | None,
+    conversation_id: str | None,
     room_epoch: int | None,
     call_record_id: str | None,
     message_id: str | None,
@@ -591,9 +686,9 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
             encoded = getattr(file_content, "bytes", None)
             if not isinstance(encoded, str) or not encoded:
                 continue
-            if epoch_owner is None or not room_id or room_epoch is None:
+            if epoch_owner is None or not conversation_id or room_epoch is None:
                 raise RuntimeError(
-                    "epoch_owner, room_id, and active room_epoch are required to persist inline agent file artifacts"
+                    "epoch_owner, conversation_id, and active room_epoch are required to persist inline agent file artifacts"
                 )
             if len(encoded) > (50 * 1024 * 1024 * 4 // 3) + 4:
                 raise ValueError("encoded payload exceeds max 50 MiB base64 length")
@@ -630,7 +725,7 @@ async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
                 ).encode()
             ).hexdigest()
             content_url = await epoch_owner.commit(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 room_epoch=room_epoch,
                 source_message_id=message_id or "direct",
                 origin_key=origin_key,
@@ -711,7 +806,7 @@ class DirectA2AStream:
             await _materialize_task_artifacts_epoch_fenced(
                 internal_task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(self._command, "room_id", None),
+                conversation_id=getattr(self._command, "conversation_id", None),
                 room_epoch=getattr(self._command, "room_epoch", None),
                 call_record_id=getattr(self._command, "call_record_id", None),
                 message_id=getattr(self._command, "message_id", None),
@@ -987,7 +1082,21 @@ class OrchestratorDirectA2AClient:
     def _build_continuation_message(
         self, command: _ContinuationCommand, *, address: DirectCallAddress
     ) -> dict[str, Any]:
-        text = _continuation_text(command.answers)
+        free_text = _is_free_text_interaction(command.interaction_id)
+        text = _continuation_text(command.answers, bare=free_text)
+        if free_text:
+            # The Agent asked through plain A2A ``input-required``; it gets a
+            # plain A2A reply. Hybro answer metadata would make an Agent that
+            # reads it treat the reply as a typed answer to a question it
+            # never declared.
+            return {
+                "role": "user",
+                "message_id": command.command_id,
+                "task_id": address.task_id,
+                "context_id": address.context_id,
+                "parts": [{"kind": "text", "text": text}],
+                "metadata": {"agent_id": address.agent_id},
+            }
         typed_answers = [
             answer.model_dump(mode="json")
             if hasattr(answer, "model_dump")
@@ -1040,6 +1149,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             blocking=True,
             timeout=self._timeout,
         )
@@ -1050,7 +1160,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "message_id", None),
@@ -1128,6 +1238,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             blocking=False,
             timeout=self._poll_timeout,
         )
@@ -1145,6 +1256,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             timeout=self._timeout,
         )
         return DirectA2AStream(
@@ -1172,7 +1284,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "message_id", None),
@@ -1239,6 +1351,77 @@ class OrchestratorDirectA2AClient:
             context_id=task.context_id,
             terminal_observation=observation,
         )
+
+    async def read_push_notification(
+        self,
+        payload: Any,
+        *,
+        call_record_id: str,
+        endpoint_scope: str,
+        agent_id: str,
+        conversation_id: str,
+        room_epoch: int,
+        message_id: str,
+        expected_task_id: str,
+        expected_context_id: str | None,
+    ) -> dict[str, Any]:
+        """Normalize one authenticated push body for the call it targets.
+
+        Correlation is checked before any artifact is materialized. Only a
+        terminal ``Task`` snapshot becomes an observation; status and artifact
+        updates are deltas that omit earlier output.
+        """
+        frame, task = parse_push_notification_payload(payload)
+        if task.id != expected_task_id or (
+            task.context_id is not None
+            and expected_context_id is not None
+            and task.context_id != expected_context_id
+        ):
+            raise ValueError("push notification does not correlate with the call")
+        event_kind = "artifact" if frame == "artifact_update" else _event_kind(task)
+        observation = None
+        if frame == "task" and event_kind == "terminal":
+            binding_scope = endpoint_scope_digest(endpoint_scope)
+            try:
+                await _materialize_task_artifacts_epoch_fenced(
+                    task,
+                    epoch_owner=self._epoch_owner,
+                    conversation_id=conversation_id,
+                    room_epoch=room_epoch,
+                    call_record_id=call_record_id,
+                    message_id=message_id,
+                )
+            except Exception as exc:
+                if _is_recoverable_materialization_error(exc):
+                    raise
+                logger.error("failed to materialize task artifacts for push: %s", exc)
+                kwargs = _failed_materialization_observation_kwargs(
+                    source_kind="webhook",
+                    call_record_id=call_record_id,
+                    binding_scope=binding_scope,
+                    agent_id=agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                    error_message=f"Failed to materialize agent file artifact: {exc}",
+                )
+            else:
+                kwargs = _task_to_observation_kwargs(
+                    task,
+                    source_kind="webhook",
+                    call_record_id=call_record_id,
+                    binding_scope=binding_scope,
+                    agent_id=agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                )
+            observation = self._observation(**kwargs)
+        return {
+            "frame": frame,
+            "task_id": task.id,
+            "context_id": task.context_id,
+            "event_kind": event_kind,
+            "observation": observation,
+        }
 
     def _receipt_from_task(
         self,
@@ -1312,7 +1495,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),
@@ -1369,7 +1552,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),
@@ -1421,7 +1604,7 @@ class OrchestratorDirectA2AClient:
             await _materialize_task_artifacts_epoch_fenced(
                 task,
                 epoch_owner=self._epoch_owner,
-                room_id=getattr(command, "room_id", None),
+                conversation_id=getattr(command, "conversation_id", None),
                 room_epoch=getattr(command, "room_epoch", None),
                 call_record_id=getattr(command, "call_record_id", None),
                 message_id=getattr(command, "command_id", None),
@@ -1508,10 +1691,15 @@ class OrchestratorDirectA2AClient:
         )
 
 
-def _continuation_text(answers: list[Any]) -> str:
+def _continuation_text(answers: list[Any], *, bare: bool = False) -> str:
+    """Render answers as the A2A text part; ``bare`` omits question ids.
+
+    Free-text interactions derived from plain ``input-required`` use ``bare``
+    so the agent receives exactly what the user typed.
+    """
     parts: list[str] = []
     for answer in answers:
-        question_id = getattr(answer, "question_id", None)
+        question_id = None if bare else getattr(answer, "question_id", None)
         value = getattr(answer, "answer", None)
         text = _answer_text(value)
         if text:

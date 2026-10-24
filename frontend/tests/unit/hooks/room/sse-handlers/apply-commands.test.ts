@@ -22,7 +22,7 @@ describe('applyRoomCommands', () => {
       {
         type: 'upsert_message',
         source: 'sse',
-        message: createUserMessage({ id: 'msg-1', roomId: 'room-1', content: 'final' }),
+        message: createUserMessage({ id: 'msg-1', conversationId: 'room-1', content: 'final' }),
       },
       { type: 'stream_clear', messageId: 'msg-1' },
     ])

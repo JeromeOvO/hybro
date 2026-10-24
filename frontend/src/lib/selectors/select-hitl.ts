@@ -43,14 +43,14 @@ function deriveLifecycleState(entity: MessageEntity, question: string): HitlLife
 }
 
 export function selectPendingHitls(
-  roomId: string,
+  conversationId: string,
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
 ): PendingHitl[] {
   const hitlEntities: MessageEntity[] = []
   for (const id of orderedIds) {
     const e = entities[id]
-    if (e && e.roomId === roomId && e.hitlRequestId) hitlEntities.push(e)
+    if (e && e.conversationId === conversationId && e.hitlRequestId) hitlEntities.push(e)
   }
 
   const activeGroupIds = new Set<string>()

@@ -22,6 +22,7 @@ from ..models import (
     ToolResult,
     ToolSuspension,
 )
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import (
     CancellationSignal,
     InvalidParkedInteractionTarget,
@@ -57,6 +58,7 @@ from .models import (
     A2ADispatchReceipt,
     A2AJoinBinding,
     A2AModelReplyCommand,
+    A2APushNotificationConfig,
     A2ARuntimePolicy,
     AgentCallLedgerRecord,
     NormalizedA2AObservation,
@@ -71,6 +73,7 @@ from .ports import (
     ResourceMaterializerPort,
     RoomEpochStore,
 )
+from .push import A2APushRegistrar
 from .resources import verify_materialized_digests
 from .terminal_interactions import TerminalInteractionFinalizer
 
@@ -115,6 +118,7 @@ class A2AAgentToolRuntime:
         public_secret_values: tuple[str, ...] = (),
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-runtime",
+        push_registrar: A2APushRegistrar | None = None,
     ) -> None:
         self.ledger = ledger
         self.prepared_reader = prepared_reader
@@ -132,6 +136,7 @@ class A2AAgentToolRuntime:
         self.public_secret_values = public_secret_values
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
+        self.push_registrar = push_registrar
 
     async def accept(self, invocation: ToolInvocation) -> ToolAcceptance:
         existing = await self.ledger.load(invocation.run_id, invocation.invocation_id)
@@ -157,7 +162,7 @@ class A2AAgentToolRuntime:
         ):
             raise A2AAcceptanceConflict("frozen binding does not correlate")
         if not await self.room_epochs.verify_active(
-            prepared.room_id, prepared.room_epoch
+            prepared.conversation_id, prepared.room_epoch
         ):
             raise A2AAcceptanceDenied("Room epoch is not active")
         await self._require_run_accepts_new_call(invocation.run_id)
@@ -166,7 +171,7 @@ class A2AAgentToolRuntime:
         decision = await self.authorization.authorize(
             binding=binding,
             requesting_subject_id=prepared.requesting_subject_id,
-            room_id=prepared.room_id,
+            conversation_id=prepared.conversation_id,
             room_epoch=prepared.room_epoch,
             resource_refs=resource_refs,
         )
@@ -198,7 +203,7 @@ class A2AAgentToolRuntime:
             "transport_kind": binding.transport_kind,
             "direct_mode": _select_direct_mode(binding),
             "requesting_subject_digest": _digest(prepared.requesting_subject_id),
-            "room_id": prepared.room_id,
+            "conversation_id": prepared.conversation_id,
             "room_epoch": prepared.room_epoch,
             "deadline_at": invocation.deadline_at,
             "resource_manifest": prepared.resource_manifest,
@@ -209,7 +214,7 @@ class A2AAgentToolRuntime:
             acceptance_id=acceptance_id,
             idempotency_key=invocation.idempotency_key,
             run_id=invocation.run_id,
-            room_id=prepared.room_id,
+            conversation_id=prepared.conversation_id,
             room_epoch=prepared.room_epoch,
             assistant_message_id=invocation.assistant_message_id,
             source_index=invocation.source_index,
@@ -264,13 +269,7 @@ class A2AAgentToolRuntime:
         if self.run_store is None:
             return False
         run = await self.run_store.load(run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def execute(
         self,
@@ -378,7 +377,7 @@ class A2AAgentToolRuntime:
 
         try:
             if not await self.room_epochs.verify_active(
-                record.room_id, record.room_epoch
+                record.conversation_id, record.room_epoch
             ):
                 return await self._terminal(
                     record, invocation, "expired", "room_epoch_gone"
@@ -396,7 +395,7 @@ class A2AAgentToolRuntime:
             decision = await self.authorization.authorize(
                 binding=prepared.binding,
                 requesting_subject_id=prepared.requesting_subject_id,
-                room_id=record.room_id,
+                conversation_id=record.conversation_id,
                 room_epoch=record.room_epoch,
                 resource_refs=[ref.ref_id for ref in record.resource_manifest.refs],
             )
@@ -412,7 +411,7 @@ class A2AAgentToolRuntime:
                 return _suspension(invocation)
             materialized = await self.resources.materialize(
                 record.resource_manifest,
-                room_id=record.room_id,
+                conversation_id=record.conversation_id,
                 room_epoch=record.room_epoch,
                 allowed_input_modes=prepared.binding.input_modes,
                 deadline_at=record.dispatch_snapshot.deadline_at,
@@ -443,11 +442,19 @@ class A2AAgentToolRuntime:
         if record.state != "ready_to_dispatch":
             await self._release(record)
             return _suspension(invocation)
+        # Each attempt sends a fresh push token; the digest is durable before
+        # the send so an early push can already be verified.
+        push = (
+            self.push_registrar.issue(record.call_record_id)
+            if self.push_registrar is not None and record.transport_kind == "direct"
+            else None
+        )
         dispatching = transition_call(
             record,
             to_state="dispatching",
             updated_at=datetime.now(UTC),
             transport_attempts=record.transport_attempts + 1,
+            push_token_digest=push.token_digest if push is not None else None,
         )
         if await self.ledger.cas(
             dispatching, expected_state_version=record.state_version
@@ -458,15 +465,16 @@ class A2AAgentToolRuntime:
         if record is None:
             return _suspension(invocation)
 
-        command = _dispatch_command(record, materialized_resources=materialized)
+        command = _dispatch_command(
+            record,
+            materialized_resources=materialized,
+            push_notification=push.config if push is not None else None,
+        )
         if self.run_store is not None:
             owning_run = await self.run_store.load(invocation.run_id)
             if owning_run is None or owning_run.status in {
                 "canceling",
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
+                *TERMINAL_RUN_STATUSES,
             }:
                 raise ClientCancellationRequested("owning Run is not dispatchable")
         try:
@@ -673,23 +681,41 @@ class A2AAgentToolRuntime:
         error_code: str,
     ) -> ToolResult | ToolSuspension:
         result = _result(invocation, status, error_code)
-        terminal = transition_call(
-            record,
-            to_state=status,
-            updated_at=datetime.now(UTC),
-            terminal_result=result,
-            terminal_result_digest=sha256(
-                result.model_dump_json().encode()
-            ).hexdigest(),
-            error_code=error_code,
+        # Record the outcome as evidence like a dispatched terminal. Background
+        # recovery discards the returned result, so ingress must be able to
+        # deliver it to the suspended Run.
+        observation = NormalizedA2AObservation(
+            observation_id=_stable(
+                "runtime-terminal", record.call_record_id, status, error_code
+            ),
+            call_record_id=record.call_record_id,
+            source_kind="inspection",
+            source_identity=f"runtime:{record.call_record_id}:{status}:{error_code}",
+            binding_scope=record.endpoint_scope_digest,
+            event_kind="terminal",
+            observed_at=datetime.now(UTC),
+            task_id=record.a2a_task_id,
+            context_id=record.a2a_context_id,
+            status=status,
+            content=result.content,
+            error_code=result.error_code,
             error_message=result.error_message,
+        )
+        await self.observations.record(observation)
+        terminal = apply_observation(
+            record, observation, recent_limit=self.policy.recent_observation_id_limit
         )
         outcome = await self.ledger.cas(
             terminal, expected_state_version=record.state_version
         )
-        if outcome in {"accepted", "replayed"}:
-            return await self._finalized_terminal_or_suspension(terminal, invocation)
-        return await self._persisted_outcome_or_suspension(invocation)
+        if outcome not in {"accepted", "replayed"} or terminal.terminal_result is None:
+            return await self._persisted_outcome_or_suspension(invocation)
+        assert terminal.terminal_result_digest is not None
+        await self.observations.mark_executor_outcome(
+            observation.observation_id,
+            outcome_digest=terminal.terminal_result_digest,
+        )
+        return await self._finalized_terminal_or_suspension(terminal, invocation)
 
     async def _persisted_outcome_or_suspension(
         self, invocation: ToolInvocation
@@ -722,9 +748,12 @@ class A2AAgentToolRuntime:
         ``auth_required``, and return ``ToolSuspension`` so the kernel waits
         for the user answer + continuation.
 
-        Missing spec (cyber silent recovery): record the request text as a
-        completed tool result so the next model turn can continue without a
-        UI challenge.
+        Plain A2A ``input-required`` with question text arrives here with a
+        free-text spec derived by the adapter, so it follows the typed path.
+
+        Missing spec (plain ``auth-required``, or no question text): record
+        the request as a completed tool result so the next model turn can
+        continue without a UI challenge.
 
         Invalid spec: fail closed as a terminal failed tool result.
         """
@@ -859,7 +888,7 @@ class A2AAgentToolRuntime:
             requesting_subject_digest=call.requesting_subject_digest,
             task_id=call.a2a_task_id,
             context_id=call.a2a_context_id,
-            room_id=call.room_id,
+            conversation_id=call.conversation_id,
             room_epoch=call.room_epoch,
             message_text=parsed.task,
             interaction_fingerprint=fingerprint or None,
@@ -1297,7 +1326,7 @@ class A2AAgentToolRuntime:
         if renewed is None:
             return None
         if not await self.room_epochs.verify_active(
-            renewed.room_id, renewed.room_epoch
+            renewed.conversation_id, renewed.room_epoch
         ):
             return None
         return renewed
@@ -1380,6 +1409,7 @@ def _dispatch_command(
     record: AgentCallLedgerRecord,
     *,
     materialized_resources: list,
+    push_notification: A2APushNotificationConfig | None = None,
 ) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
@@ -1394,9 +1424,10 @@ def _dispatch_command(
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
         materialized_resources=materialized_resources,
-        room_id=record.room_id,
+        conversation_id=record.conversation_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,
+        push_notification=push_notification,
     )
 
 

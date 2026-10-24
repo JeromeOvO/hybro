@@ -14,7 +14,7 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
 }
 
 export function canonicalAgentCallDetailQueryOptions(
-  roomId: string,
+  conversationId: string,
   messageId: string | undefined,
   getToken: (() => Promise<string | null>) | undefined,
   enabled: boolean,
@@ -23,14 +23,14 @@ export function canonicalAgentCallDetailQueryOptions(
   return {
     queryKey: [
       'canonical-agent-call-detail',
-      roomId,
+      conversationId,
       identity?.runId ?? '',
       identity?.publicCallId ?? '',
     ] as const,
     queryFn: async ({ signal }: { signal: AbortSignal }): Promise<CanonicalAgentCallDetailResponse> => {
       if (!messageId || !identity) throw new Error('Canonical Agent call identity is unavailable')
       const detail = await fetchCanonicalAgentCallDetail(
-        roomId,
+        conversationId,
         messageId,
         getToken,
         signal,

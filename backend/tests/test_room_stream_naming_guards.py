@@ -39,8 +39,8 @@ def test_pinned_sse_endpoint_paths_are_present():
     from main import app
 
     paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/v1/sse/room/{room_id}/stream" in paths
-    assert "/api/v1/sse/room/{room_id}/status" in paths
+    assert "/api/v1/sse/room/{conversation_id}/stream" in paths
+    assert "/api/v1/sse/room/{conversation_id}/status" in paths
 
 
 @pytest.mark.parametrize(
@@ -79,28 +79,38 @@ def test_pinned_delta_frame_type_strings(event_type):
 
     samples = {
         "processing_status": ProcessingStatusEvent(
-            room_id="r", message_id="m", status="processing"
+            conversation_id="r", message_id="m", status="processing"
         ),
         "run_event": RunEventNotification(
-            room_id="r", event_id="e", run_id="run", seq=1, run_event_type="x"
+            conversation_id="r",
+            event_id="e",
+            run_id="run",
+            seq=1,
+            run_event_type="turn_start",
+            payload={"internal_turn_id": "turn-1", "attempt": 1},
+            correlation_id="c",
         ),
         "agent_response_partial": AgentMessagePartial(
-            room_id="r", message_id="m", agent_id="a", content_delta="d"
+            conversation_id="r", message_id="m", agent_id="a", content_delta="d"
         ),
         "agent_response": AgentMessageFinal(
-            room_id="r", message_id="m", agent_id="a", content={}
+            conversation_id="r", message_id="m", agent_id="a", content={}
         ),
         "task_submitted": TaskSubmittedEvent(
-            room_id="r", message_id="m", task_id="t", agent_name="a"
+            conversation_id="r", message_id="m", task_id="t", agent_name="a"
         ),
-        "task_update": TaskUpdateEvent(room_id="r", message_id="m", status="working"),
+        "task_update": TaskUpdateEvent(
+            conversation_id="r", message_id="m", status="working"
+        ),
         "artifact_update": ArtifactUpdateEvent(
-            room_id="r", message_id="m", agent_id="a", artifact={}
+            conversation_id="r", message_id="m", agent_id="a", artifact={}
         ),
-        "error": ErrorEvent(room_id="r", error="boom"),
-        "cancellation": CancellationEvent(room_id="r", message_id="m", reason="why"),
+        "error": ErrorEvent(conversation_id="r", error="boom"),
+        "cancellation": CancellationEvent(
+            conversation_id="r", message_id="m", reason="why"
+        ),
         "hitl_request": HITLRequestEvent(
-            room_id="r",
+            conversation_id="r",
             request_id="h",
             message_id="m",
             prompt="p",
@@ -110,7 +120,7 @@ def test_pinned_delta_frame_type_strings(event_type):
             question_index=0,
         ),
         "hitl_response": HITLResolvedEvent(
-            room_id="r",
+            conversation_id="r",
             request_id="h",
             message_id="m",
             source="agent",
@@ -123,20 +133,6 @@ def test_pinned_delta_frame_type_strings(event_type):
     assert frame["type"] == event_type
 
 
-def test_pinned_terminal_projection_step_keys():
-    from execution.terminal_projection import _STEP_ORDER
-
-    assert _STEP_ORDER == (
-        "descendant_cleanup",
-        "run_event_sse",
-        "processing_sse",
-        "system_task",
-        "system_task_delivery",
-        "completion_metadata",
-        "turn_event",
-    )
-
-
 def test_room_events_schema_pinned_fields():
     """The room_events doc shape (§5) is a durable contract."""
 
@@ -145,7 +141,7 @@ def test_room_events_schema_pinned_fields():
 
     doc = _room_event_doc(
         _id="k",
-        room_id="r",
+        conversation_id="r",
         kind="task_update",
         payload_public={"a": 1},
         event_id="e",

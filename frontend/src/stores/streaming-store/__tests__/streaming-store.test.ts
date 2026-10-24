@@ -25,7 +25,7 @@ describe('append', () => {
     const buf = useStreamingStore.getState().buffers['msg-1']
     expect(buf).toBeDefined()
     expect(buf.text).toBe('Hello')
-    expect(buf.roomId).toBe('room-1')
+    expect(buf.conversationId).toBe('room-1')
     expect(buf.isComplete).toBe(false)
     expect(buf.lastUpdatedAt).toBeGreaterThan(0)
   })
@@ -50,10 +50,10 @@ describe('append', () => {
     expect(buf.text).toBe('Earlier paragraph. Later paragraph.')
   })
 
-  it('stamps roomId from the first append and preserves it on re-append', () => {
+  it('stamps conversationId from the first append and preserves it on re-append', () => {
     useStreamingStore.getState().append('msg-1', 'room-A', makeChunk('chunk'), false)
     useStreamingStore.getState().append('msg-1', 'room-A', makeChunk(' more'), true)
-    expect(useStreamingStore.getState().buffers['msg-1'].roomId).toBe('room-A')
+    expect(useStreamingStore.getState().buffers['msg-1'].conversationId).toBe('room-A')
   })
 
   it('updates lastUpdatedAt on each append', () => {
@@ -245,7 +245,7 @@ describe('clearByClientRequestId', () => {
 // ── clearRoom ─────────────────────────────────────────────────
 
 describe('clearRoom', () => {
-  it('clears all buffers belonging to the specified roomId', () => {
+  it('clears all buffers belonging to the specified conversationId', () => {
     useStreamingStore.getState().append('msg-1', 'room-A', makeChunk('a'), false)
     useStreamingStore.getState().append('msg-2', 'room-A', makeChunk('b'), false)
     useStreamingStore.getState().clearRoom('room-A')

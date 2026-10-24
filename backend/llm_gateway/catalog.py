@@ -1,8 +1,9 @@
 """Small capability catalog shared by setup and the canonical runtime.
 
 Limits are backend operating ceilings, never larger than the Provider limits.
-Only implemented adapters are eligible. Subscription IDs come from pi-ai 0.73.1;
-account entitlement is checked by setup's single text verification, not assumed.
+Only implemented adapters are eligible. Subscription IDs come from the official
+Codex model catalog; account entitlement is checked by setup's single text
+verification, not assumed.
 """
 
 from dataclasses import dataclass
@@ -33,39 +34,28 @@ class TextModel:
 # Anthropic: platform.claude.com/docs/en/about-claude/models/overview.
 # Haiku 4.5: 200K context / 64K output; gateway ceiling is 32K, thinking off.
 TEXT_MODELS = (
-    # Prefer gpt-5.5 for new setups; retain older IDs for explicit selections.
-    # Catalog membership alone does not guarantee current account availability.
-    TextModel(
-        "openai",
-        "gpt-5.5",
-        "responses",
-        272_000,
-        32_768,
-        ("minimal", "low", "medium", "high", "xhigh"),
-        auth="oauth",
-    ),
+    # ChatGPT/Codex subscription models, recommended first. IDs and the 272K
+    # context window follow openai/codex codex-rs/models-manager/models.json and
+    # learn.chatgpt.com/docs/models (2026-10); gpt-5.5 and earlier are retired for
+    # ChatGPT sign-in. Catalog membership does not guarantee plan availability.
     *(
         TextModel(
             "openai",
             model,
             "responses",
-            128_000 if model == "gpt-5.3-codex-spark" else 272_000,
+            272_000,
             32_768,
-            ("minimal", "low", "medium", "high")
-            if model.startswith("gpt-5.1")
-            else ("minimal", "low", "medium", "high", "xhigh"),
+            ("minimal", "low", "medium", "high", "xhigh"),
             auth="oauth",
         )
         for model in (
-            "gpt-5.1",
-            "gpt-5.1-codex-max",
-            "gpt-5.1-codex-mini",
-            "gpt-5.2",
-            "gpt-5.2-codex",
-            "gpt-5.3-codex",
-            "gpt-5.3-codex-spark",
-            "gpt-5.4-mini",
-            "gpt-5.4",
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
         )
     ),
     TextModel(

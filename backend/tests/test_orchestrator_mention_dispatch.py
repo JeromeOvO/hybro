@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.dto.execution import ExecutionRequest
 from common.utils.context_utils import split_agent_mentions
 from execution.orchestrator_routing import (
     RoomMessageEnvelopeResolver,
@@ -22,17 +23,16 @@ OTHER_ID = "aabbccddeeff00112233445566778899"
 def _message(text: str, extend_info: dict | None = None):
     return SimpleNamespace(
         message_id="msg-1",
-        room_id="room-1",
+        conversation_id="room-1",
         message_content=SimpleNamespace(message_text=text, attachments=None),
         extend_info=extend_info or {},
     )
 
 
-def _request(*, scope: dict, mode: str = "supervisor"):
-    return SimpleNamespace(
-        room_user_message_id="msg-1",
-        room_id="room-1",
-        user_id="user-1",
+def _request(*, scope: dict, mode: str = "supervisor") -> ExecutionRequest:
+    return ExecutionRequest(
+        conversation_id="room-1",
+        sender_id="user-1",
         mode=mode,
         agent_scope=scope,
         client_request_id="req-1",
@@ -43,7 +43,7 @@ def _resolver(message, *, room_agents: list[str] | None = None):
     async def get_user_message(message_id):
         return message
 
-    async def list_room_agent_ids(room_id):
+    async def list_room_agent_ids(conversation_id):
         return room_agents or []
 
     return RoomMessageEnvelopeResolver(
@@ -86,7 +86,8 @@ def test_message_of_only_a_mention_still_has_a_body():
 async def test_addressed_agent_is_reported_and_token_stripped():
     raw = f"<@{OPENQFR_ID}|OpenQFR> hello, who are you?"
     envelope = await _resolver(_message(raw)).load_envelope(
-        _request(scope={"source": "mention", "agent_ids": [OPENQFR_ID]})
+        _request(scope={"source": "mention", "agent_ids": [OPENQFR_ID]}),
+        message_id="msg-1",
     )
 
     # The durable text is untouched, so the stored message still renders a chip.
@@ -104,7 +105,8 @@ async def test_addressed_agent_is_reported_and_token_stripped():
 async def test_mention_outside_the_candidate_scope_is_not_reported_as_addressed():
     raw = f"<@{OTHER_ID}|Some Other Agent> do the thing"
     envelope = await _resolver(_message(raw)).load_envelope(
-        _request(scope={"source": "mention", "agent_ids": [OPENQFR_ID]})
+        _request(scope={"source": "mention", "agent_ids": [OPENQFR_ID]}),
+        message_id="msg-1",
     )
 
     assert envelope.addressed_agents == ()
@@ -114,7 +116,7 @@ async def test_mention_outside_the_candidate_scope_is_not_reported_as_addressed(
 @pytest.mark.asyncio
 async def test_message_without_mentions_is_passed_through():
     envelope = await _resolver(_message("just a question")).load_envelope(
-        _request(scope={"source": "room_default"})
+        _request(scope={"source": "room_default"}), message_id="msg-1"
     )
 
     assert envelope.model_text == "just a question"
@@ -123,5 +125,5 @@ async def test_message_without_mentions_is_passed_through():
     # A room-scoped turn still reports a mention of a room member.
     room = await _resolver(
         _message(f"<@{OPENQFR_ID}|OpenQFR> hi"), room_agents=[OPENQFR_ID]
-    ).load_envelope(_request(scope={"source": "room_default"}))
+    ).load_envelope(_request(scope={"source": "room_default"}), message_id="msg-1")
     assert room.addressed_agents == ("OpenQFR",)

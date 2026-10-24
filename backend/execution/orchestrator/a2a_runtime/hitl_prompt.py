@@ -82,6 +82,22 @@ def public_answer_text(
         option.value: option.label or option.value
         for option in question.choice_options or ()
     }
+    return sanitize_public_text(
+        _answer_text(answer, labels), secret_values=secret_values
+    )[:1_000]
+
+
+def model_answer_text(answer: HITLAnswer) -> str:
+    """The owner's answer for the private model transcript.
+
+    Choices keep their values, which the model saw in the question inventory;
+    sign-in results never expose the authorization reference.
+    """
+
+    return _answer_text(answer, {})[:1_000]
+
+
+def _answer_text(answer: HITLAnswer, labels: dict[str, str]) -> str:
     if isinstance(answer, HITLTextAnswer):
         text = answer.text
     elif isinstance(answer, HITLSingleChoiceAnswer):
@@ -100,7 +116,12 @@ def public_answer_text(
         text = "Signed in"
     else:
         text = ""
-    return sanitize_public_text(text, secret_values=secret_values)[:1_000]
+    return text
 
 
-__all__ = ["prompt_type_for_question", "public_answer_text", "public_question_fields"]
+__all__ = [
+    "model_answer_text",
+    "prompt_type_for_question",
+    "public_answer_text",
+    "public_question_fields",
+]

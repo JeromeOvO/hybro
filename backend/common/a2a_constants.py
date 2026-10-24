@@ -9,8 +9,13 @@ HYBRO_A2A_INTERACTION_METADATA_KEY = "hybro.ai/a2a/interaction"
 HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY = "hybro.ai/a2a/interaction-answer"
 HYBRO_A2A_PART_PROVENANCE_METADATA_KEY = "hybro.ai/a2a/part-provenance"
 HYBRO_A2A_SELECTED_SKILL_METADATA_KEY = "hybro.ai/a2a/selected-skill"
+# Agent-reported failure on a failed/rejected task's status message:
+# {"code": "<identifier>", "message": "<short human-readable text>"}.
+HYBRO_A2A_ERROR_METADATA_KEY = "hybro.ai/a2a/error"
 HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE = "orchestrator_instruction"
 HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE = "durable_user_context"
+
+# Error reported when an agent asks for an interaction Hybro cannot route.
 
 
 class TaskStateCategory(Enum):

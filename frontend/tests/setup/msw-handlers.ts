@@ -1,7 +1,8 @@
 import { http, HttpResponse } from 'msw'
 import { getApiUrl } from '@/lib/utils'
+import { createAgent } from '../fixtures'
 
-const roomCenter = getApiUrl('roomCenter')
+const rooms = getApiUrl('rooms')
 const agent = getApiUrl('agent')
 const orchestrationCenter = getApiUrl('orchestrationCenter')
 const task = getApiUrl('task')
@@ -46,30 +47,29 @@ export const handlers = [
     status: 'closed',
   })),
 
-  // Room Center API handlers
-  http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
+  // Room API handlers
+  http.post(rooms, async ({ request }) => {
     const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       success: true,
-      room_id: 'test-room-id',
+      conversation_id: 'test-room-id',
       room: {
-        room_id: 'test-room-id',
+        conversation_id: 'test-room-id',
         room_name: body.room_name || 'Test Room',
-        room_owner_id: body.room_owner_id || 'test-user',
+        room_owner_id: 'test-user',
         room_owner_name: body.room_owner_name || 'Test User',
-        room_agent_set: body.room_agent_set || {},
+        room_agent_set: {},
         room_created_at: new Date().toISOString(),
       },
     })
   }),
 
-  http.post(`${roomCenter}/inquiryRoomSetting`, async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>
+  http.get(`${rooms}/:conversationId`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: body.room_id,
+      conversation_id: params.conversationId,
       room: {
-        room_id: body.room_id,
+        conversation_id: params.conversationId,
         room_name: 'Test Room',
         room_owner_id: 'test-user',
         room_owner_name: 'Test User',
@@ -79,25 +79,24 @@ export const handlers = [
     })
   }),
 
-  http.post(`${roomCenter}/inquiryActiveRuns`, async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>
+  http.get(`${rooms}/:conversationId/active-runs`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: body.room_id,
+      conversation_id: params.conversationId,
       active_runs: [],
     })
   }),
 
-  http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+  http.post(`${rooms}/:conversationId/messages`, async ({ request, params }) => {
     const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       success: true,
-      room_id: body.room_id,
+      conversation_id: params.conversationId,
       message_id: `msg-${Date.now()}`,
       user_id: body.user_id,
       user_name: body.user_name,
       message: {
-        room_id: body.room_id,
+        conversation_id: params.conversationId,
         message_id: `msg-${Date.now()}`,
         message_type: 'user',
         message_content: {
@@ -108,24 +107,15 @@ export const handlers = [
     })
   }),
 
-  http.post(`${roomCenter}/inquiryRoomMessagesByRoomId`, async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>
+  http.get(`${rooms}/:conversationId/messages`, ({ params }) => {
     return HttpResponse.json({
       success: true,
-      room_id: body.room_id,
+      conversation_id: params.conversationId,
       message_list: [],
     })
   }),
 
-  http.post(`${roomCenter}/updateRoomAgentSet`, async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>
-    return HttpResponse.json({
-      success: true,
-      room_id: body.room_id,
-    })
-  }),
-
-  http.post(`${roomCenter}/suggestAgents`, async () => {
+  http.post(getApiUrl('agent-suggestions'), async () => {
     return HttpResponse.json({
       success: true,
       routing_strategy: 'single',
@@ -141,9 +131,9 @@ export const handlers = [
   }),
 
   // SSE API handlers
-  http.get(`${sseBase}/room/:roomId/status`, async () => {
+  http.get(`${sseBase}/room/:conversationId/status`, async () => {
     return HttpResponse.json({
-      room_id: 'test-room',
+      conversation_id: 'test-room',
       active_connections: 1,
       status: 'active',
     })
@@ -159,7 +149,7 @@ export const handlers = [
 
   // Agent API handlers
   http.post(`${agent}/registerAgent`, async () => {
-    return HttpResponse.json({ success: true, agents: [] })
+    return HttpResponse.json({ success: true, agent: createAgent() })
   }),
 
   http.get(`${agent}/getAgent/me`, async () => {
@@ -171,14 +161,24 @@ export const handlers = [
   }),
 
   http.post(`${agent}/getAgentCardFromUrl`, async () => {
-    return HttpResponse.json({ success: true, agents: [] })
+    const agent = createAgent()
+    const card = {
+      name: agent.name,
+      description: agent.description,
+      version: agent.version,
+      provider_organization: agent.provider_organization,
+      icon_url: agent.icon_url,
+      documentation_url: agent.documentation_url,
+      skills: agent.skills,
+      capabilities: agent.capabilities,
+      default_input_modes: agent.default_input_modes,
+      default_output_modes: agent.default_output_modes,
+    }
+    return HttpResponse.json({ success: true, card })
   }),
 
   http.get(`${agent}/getAgent/:agentId`, async () => {
-    return HttpResponse.json({
-      success: true,
-      agents: [{ agent_id: 'agent-1', agent_status: 'active' }],
-    })
+    return HttpResponse.json({ success: true, agent: createAgent() })
   }),
 
   http.get(`${agent}/getAllAgents`, async () => {
@@ -246,25 +246,25 @@ export const handlers = [
 
 // Error response handlers for testing error scenarios
 export const errorHandlers = {
-  networkError: http.post(`${roomCenter}/sendMessage`, () => {
+  networkError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.error()
   }),
 
-  serverError: http.post(`${roomCenter}/sendMessage`, () => {
+  serverError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       { success: false, error: 'Internal server error', status_code: 500 },
       { status: 500 }
     )
   }),
 
-  authError: http.post(`${roomCenter}/sendMessage`, () => {
+  authError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       { success: false, error: 'Unauthorized', status_code: 401 },
       { status: 401 }
     )
   }),
 
-  rateLimitError: http.post(`${roomCenter}/sendMessage`, () => {
+  rateLimitError: http.post(`${rooms}/:conversationId/messages`, () => {
     return HttpResponse.json(
       {
         success: false,

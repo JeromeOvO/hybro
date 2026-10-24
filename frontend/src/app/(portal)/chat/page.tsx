@@ -77,7 +77,7 @@ function ChatPageContent() {
 
     // Group management (extracted hook)
     const seedLabel = seedAgents.length === 1
-      ? seedAgents[0].agent_card.name
+      ? seedAgents[0].name
       : seedAgents.length > 1
         ? `Room agents (${seedAgents.length})`
         : undefined
@@ -98,8 +98,8 @@ function ChatPageContent() {
     const agentListForMentions = useMemo(() => {
         return gm.availableAgents.map(agent => ({
             id: agent.agent_id,
-            name: agent.agent_card.name,
-            iconUrl: agent.agent_card.iconUrl,
+            name: agent.name,
+            iconUrl: agent.icon_url,
         }))
     }, [gm.availableAgents])
 

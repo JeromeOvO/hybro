@@ -27,13 +27,15 @@ interface AgentCardProps {
   /** Appended to status label in compact mode (e.g. artifact count). */
   statusSuffix?: string
   lifecycleStatus?: 'running' | 'awaiting_input' | 'completed' | 'failed' | 'canceled'
+  /** The Agent's own reason for a failed call. */
+  failureDetail?: string
 }
 
 function useAgentFromCatalog(agentId: string | undefined, agentName: string): Agent | undefined {
   const agents = useCachedAgentCatalog()
   if (agentId) return agents?.find(a => a.agent_id === agentId)
 
-  const matchingAgents = agents?.filter(a => a.agent_card.name === agentName)
+  const matchingAgents = agents?.filter(a => a.name === agentName)
   return matchingAgents?.length === 1 ? matchingAgents[0] : undefined
 }
 
@@ -94,11 +96,11 @@ export function AgentCard({
   compact = false,
   statusSuffix,
   lifecycleStatus,
+  failureDetail,
 }: AgentCardProps) {
   const catalogAgent = useAgentFromCatalog(agentId, agentName)
   const profileAgentId = agentId ?? catalogAgent?.agent_id
-  const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
-  const isHubOnline = catalogAgent?.is_hub_online
+  const iconUrl = catalogAgent?.icon_url || undefined
 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'hsl(var(--color-primary))',
@@ -162,7 +164,6 @@ export function AgentCard({
         {agentSource != null && (
           <AgentSourceBadge
             source={agentSource}
-            isHubOnline={isHubOnline}
             className="h-3.5 w-3.5"
           />
         )}
@@ -181,6 +182,15 @@ export function AgentCard({
           </span>
         )}
       </div>
+      {failureDetail && (
+        <p
+          className={cn('conversation-agent-failure-detail truncate text-[12px]', compact ? 'pl-8' : 'pl-[42px]')}
+          style={{ color: 'var(--conversation-danger)' }}
+          title={failureDetail}
+        >
+          {failureDetail}
+        </p>
+      )}
       {!compact && taskDescription && (
         <div className="conversation-agent-task-row flex items-start gap-1.5 pl-[42px]">
           <span className="text-sm leading-none mt-px shrink-0" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>

@@ -12,7 +12,6 @@ from models.agent import (
     AGENT_CARD_HEALTH_NO_SYNC,
     Agent,
     AgentStatus,
-    coerce_legacy_agent_card,
 )
 
 logger = get_logger(__name__)
@@ -102,7 +101,12 @@ class AgentHealthService:
         return agent if isinstance(agent, Agent) else Agent.model_validate(agent)
 
     async def check_agent_health(
-        self, agent: Agent, *, timeout: float | None = None
+        self,
+        agent_id: str,
+        agent_url: str,
+        agent_name: str | None,
+        *,
+        timeout: float | None = None,
     ) -> tuple[bool, CommonAgentCard | None]:
         """
         Check if an agent is reachable by asking the A2A adapter to probe its
@@ -114,13 +118,14 @@ class AgentHealthService:
         returned so callers can update the DB.
 
         Args:
-            agent: The agent to check
+            agent_id: The agent to check
+            agent_url: The registered agent URL to probe
+            agent_name: Display name used in log messages
             timeout: Optional override for HTTP timeout (defaults to self.timeout)
 
         Returns:
             Tuple of (is_healthy, fetched_agent_card_or_None)
         """
-        agent_url = agent.agent_card.url
         effective_timeout = timeout if timeout is not None else self.timeout
 
         try:
@@ -129,22 +134,20 @@ class AgentHealthService:
                 timeout=effective_timeout,
             )
             if result.is_healthy:
-                logger.debug(
-                    f"Agent {agent.agent_id} ({agent.agent_card.name}) is healthy"
-                )
+                logger.debug(f"Agent {agent_id} ({agent_name}) is healthy")
                 if result.card is None:
-                    logger.debug(f"Could not parse agent card for {agent.agent_id}")
+                    logger.debug(f"Could not parse agent card for {agent_id}")
             elif result.status_code is not None:
                 logger.warning(
-                    f"Agent {agent.agent_id} ({agent.agent_card.name}) "
+                    f"Agent {agent_id} ({agent_name}) "
                     f"returned status {result.status_code}"
                 )
             else:
                 logger.warning(
                     "agent_health_probe_unreachable",
                     extra={
-                        "agent_id": agent.agent_id,
-                        "agent_name": agent.agent_card.name,
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
                         "error_type": "adapter_error",
                     },
                 )
@@ -155,14 +158,17 @@ class AgentHealthService:
             logger.error(
                 "agent_health_check_failed",
                 extra={
-                    "agent_id": agent.agent_id,
+                    "agent_id": agent_id,
                     "error_type": type(exc).__name__,
                 },
             )
             return False, None
 
-    async def _update_agent_card_in_db(
-        self, agent: Agent, fetched_card: CommonAgentCard
+    async def sync_agent_card(
+        self,
+        agent_id: str,
+        stored_card: dict,
+        fetched_card: CommonAgentCard,
     ) -> None:
         """
         Persist the freshly fetched agent card to MongoDB using a partial update.
@@ -179,35 +185,27 @@ class AgentHealthService:
         # for the rationale on why only the registered URL is protected here.
 
         try:
-            card_dict = CommonAgentCard.model_validate(
-                coerce_legacy_agent_card(fetched_card)
-            ).model_dump(mode="json", by_alias=True)
-            stored_dict = agent.agent_card.model_dump(mode="json", by_alias=True)
+            card_dict = fetched_card.model_dump(mode="json", by_alias=True)
             partial_set = {
                 f"agent_card.{field}": card_dict[field]
                 for field in card_dict
                 if field not in AGENT_CARD_HEALTH_NO_SYNC
-                and card_dict[field] != stored_dict.get(field)
+                and card_dict[field] != stored_card.get(field)
             }
 
             if not partial_set:
                 logger.debug(
-                    f"Agent card unchanged for {agent.agent_id} ({fetched_card.name}), skipping update"
+                    f"Agent card unchanged for {agent_id} ({fetched_card.name}), skipping update"
                 )
                 return
 
-            await self._require_repository().update(
-                agent.agent_id,
-                partial_set,
-            )
-            logger.debug(
-                f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
-            )
+            await self._require_repository().update(agent_id, partial_set)
+            logger.debug(f"Agent card updated for {agent_id} ({fetched_card.name})")
         except Exception as exc:
             logger.warning(
                 "agent_card_update_failed",
                 extra={
-                    "agent_id": agent.agent_id,
+                    "agent_id": agent_id,
                     "error_type": type(exc).__name__,
                 },
             )
@@ -234,6 +232,22 @@ class AgentHealthService:
                 extra={"agent_id": agent_id, "error_type": type(exc).__name__},
             )
             return False
+
+    async def _check_stored_agent(
+        self, agent: Agent
+    ) -> tuple[bool, CommonAgentCard | None]:
+        return await self.check_agent_health(
+            agent.agent_id, agent.agent_card.url, agent.agent_card.name
+        )
+
+    async def _sync_stored_card(
+        self, agent: Agent, fetched_card: CommonAgentCard
+    ) -> None:
+        await self.sync_agent_card(
+            agent.agent_id,
+            agent.agent_card.model_dump(mode="json", by_alias=True),
+            fetched_card,
+        )
 
     def _get_retry_delay(self, failure_count: int) -> float:
         """Calculate retry delay with exponential backoff."""
@@ -262,7 +276,7 @@ class AgentHealthService:
     ) -> None:
         self._failure_counts[agent_id] = 0
         if fetched_card:
-            await self._update_agent_card_in_db(agent, fetched_card)
+            await self._sync_stored_card(agent, fetched_card)
         if agent.agent_status == AgentStatus.inactive:
             await self.update_agent_status(agent_id, AgentStatus.active)
             logger.info(
@@ -314,7 +328,7 @@ class AgentHealthService:
                 if agent is None:
                     break
 
-                is_healthy, fetched_card = await self.check_agent_health(agent)
+                is_healthy, fetched_card = await self._check_stored_agent(agent)
 
                 if is_healthy:
                     await self._handle_retry_success(agent_id, agent, fetched_card)
@@ -370,13 +384,13 @@ class AgentHealthService:
                     logger.debug(f"Skipping agent {agent_id} - retry task in progress")
                     continue
 
-                is_healthy, fetched_card = await self.check_agent_health(agent)
+                is_healthy, fetched_card = await self._check_stored_agent(agent)
 
                 if is_healthy:
                     # Reset failure count and mark as active if was inactive
                     self._failure_counts[agent_id] = 0
                     if fetched_card:
-                        await self._update_agent_card_in_db(agent, fetched_card)
+                        await self._sync_stored_card(agent, fetched_card)
                     if agent.agent_status == AgentStatus.inactive:
                         await self.update_agent_status(agent_id, AgentStatus.active)
                         logger.info(

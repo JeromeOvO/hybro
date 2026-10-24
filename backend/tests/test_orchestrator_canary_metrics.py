@@ -8,16 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from common.config.loader import Settings
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoObservationConflictStore,
-)
 from execution.adapters.canary_metrics import (
     collect_metrics,
     evaluate_canary_thresholds,
 )
 from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoObservationConflictStore,
+)
 from jobs.constants import ALL_JOB_NAMES, ORCHESTRATOR_CANARY
 from jobs.orchestrator_workers import (
     OrchestratorCanaryDeps,
@@ -103,7 +103,7 @@ def _run_doc(status: str, updated_at: datetime, intents: list[dict] | None = Non
 def _conflict(conflict_id: str, status: str) -> A2AObservationConflictRecord:
     return A2AObservationConflictRecord(
         conflict_id=conflict_id,
-        room_id="room-1",
+        conversation_id="room-1",
         room_epoch=1,
         source_identity=f"source-{conflict_id}",
         accepted_observation_id=f"obs-{conflict_id}",

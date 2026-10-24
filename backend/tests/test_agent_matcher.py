@@ -36,6 +36,7 @@ def _doc(
 
 def _agent(agent_id: str, name: str) -> Agent:
     return Agent(
+        is_public=True,
         agent_id=agent_id,
         provider_id="owner",
         agent_status=AgentStatus.active,

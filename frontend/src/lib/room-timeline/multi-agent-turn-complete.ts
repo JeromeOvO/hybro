@@ -38,7 +38,7 @@ function buildTurnSnapshot(
 ): TurnViewModel {
   return {
     id: '',
-    roomId: '',
+    conversationId: '',
     userMessageId: context.userMessageId ?? null,
     userContent: '',
     userAttachments: [],
@@ -66,25 +66,6 @@ function filterRealAgentResults(
   )
 }
 
-/** Backend stamped synthesis but skipped LLM work — do not hold the turn active. */
-export function isSynthesisKindWithoutActualSynthesis(
-  agentResults: AgentResultViewModel[],
-  context: OpenRoomRunContext,
-): boolean {
-  if (context.turnCompletionKind !== 'synthesis') return false
-
-  const turn = buildTurnSnapshot(agentResults, context)
-  if (hasActiveSynthesisGap(turn)) return false
-  if (hasSynthesisSignalInProcessingLogs(turn)) return false
-
-  const summary = agentResults.find(r => r.isSummaryAgent)
-  if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) {
-    return false
-  }
-
-  return true
-}
-
 /**
  * True while the room run is open, agents are done, and the primary surface is
  * still waiting for terminal processing_status / final answer resolution.
@@ -101,7 +82,6 @@ export function shouldHoldTurnActiveForOpenRoomRun(
   if (real.length < 2 || !allRealTerminal(real)) return false
   if (real.some(r => r.status === 'working')) return false
   if (isMixedTerminalMultiAgentTurn(real)) return false
-  if (isSynthesisKindWithoutActualSynthesis(agentResults, context)) return false
 
   const summary = agentResults.find(r => r.isSummaryAgent)
   if (
@@ -161,7 +141,6 @@ export function isDeterministicCompletionExpected(
   real: AgentResultViewModel[] = getStripSourceResults(turn),
   turnCompletionKind: TurnViewModel['turnCompletionKind'] = turn.turnCompletionKind,
 ): boolean {
-  if (turnCompletionKind === 'synthesis') return false
   if (turnCompletionKind === 'deterministic') return true
 
   if (isMixedTerminalMultiAgentTurn(real)) {
@@ -195,7 +174,6 @@ export function isDeterministicCompletionExpected(
   // Stamped or hydrated terminal turn with explicit non-synthesis completion.
   if (
     turn.turnTerminalStatus === 'completed'
-    && turn.turnCompletionKind !== 'synthesis'
     && real.length >= 2
     && allRealTerminal(real)
     && !hasActiveSynthesisGap(turn)
@@ -222,7 +200,7 @@ export function isDeterministicCompletionExpected(
  * True when the backend reports no active run and there is no evidence that LLM
  * synthesis is still in flight. Used for terminal stamping — broader than
  * isDeterministicCompletionExpected so supervisor no-synthesis turns can complete
- * when inquiry missed turn_completion_kind but the run is finished.
+ * once the run is finished.
  */
 export function isBackendRunConfirmedNonSynthesisCompletion(
   turn: TurnViewModel,
@@ -252,7 +230,6 @@ export function isBackendRunConfirmedNonSynthesisCompletion(
     return false
   }
 
-  if (turnCompletionKind === 'synthesis') return false
   if (real.length < 2 || !allRealTerminal(real)) return false
   if (turnHasSubstantiveLlmSynthesis(turn)) return false
   if (hasActiveSynthesisGap(turn)) return false
@@ -282,7 +259,7 @@ export function hasSynthesisSignalInProcessingLogs(turn: TurnViewModel): boolean
 
 export function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
   if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') return false
-  if (turn.turnTerminalStatus === 'completed' && turn.turnCompletionKind !== 'synthesis') return false
+  if (turn.turnTerminalStatus === 'completed') return false
 
   const real = getStripSourceResults(turn)
   if (
@@ -335,7 +312,7 @@ export function isPreSynthesisGap(
   if (real.length < 2) return false
   if (!allRealTerminal(real)) return false
   if (real.some(r => r.status === 'working')) return false
-  if (turn.turnTerminalStatus && turn.turnCompletionKind !== 'synthesis') return false
+  if (turn.turnTerminalStatus) return false
   if (turn.turnCompletionKind === 'deterministic') return false
   if (hasActiveSynthesisGap(turn)) return false
 
@@ -343,19 +320,8 @@ export function isPreSynthesisGap(
   if (summary && isDeterministicSummary(summary)) return false
   if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) return false
 
-  if (isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
-    userMessageId: turn.userMessageId,
-    turnTerminalStatus: turn.turnTerminalStatus,
-    turnCompletionKind: turn.turnCompletionKind,
-    processingStatusLogs: turn.processingStatusLogs,
-    isSupervisorTurn: turn.isSupervisorTurn,
-  })) {
-    return false
-  }
-
   const hasOrchestrationContext =
     turn.isSupervisorTurn
-    || turn.turnCompletionKind === 'synthesis'
     || hasLiveRunEvidence({
       userMessageId: turn.userMessageId,
       turnTerminalStatus: turn.turnTerminalStatus,
@@ -394,7 +360,7 @@ export function shouldShowSynthesizingPhase(
   if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') {
     return false
   }
-  if (turn.turnTerminalStatus === 'completed' && turn.turnCompletionKind !== 'synthesis') {
+  if (turn.turnTerminalStatus === 'completed') {
     return false
   }
 
@@ -408,17 +374,6 @@ export function shouldShowSynthesizingPhase(
   }
 
   if (hasActiveSynthesisGap(turn)) return true
-  if (turn.turnCompletionKind === 'synthesis' && !summary?.content?.trim()) {
-    if (!isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
-      userMessageId: turn.userMessageId,
-      turnTerminalStatus: turn.turnTerminalStatus,
-      turnCompletionKind: turn.turnCompletionKind,
-      processingStatusLogs: turn.processingStatusLogs,
-      isSupervisorTurn: turn.isSupervisorTurn,
-    })) {
-      return true
-    }
-  }
   if (isPreSynthesisGap(turn, real, openRoomRunContext)) return true
   return shouldShowSynthesizingForOpenRoomRun(turn.agentResults, liveContext)
 }

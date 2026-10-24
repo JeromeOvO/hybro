@@ -13,7 +13,6 @@ export interface NetworkAgent {
   version?: string
   source?: 'cloud' | 'local' | 'hub'
   roomCalls: number
-  roomCallSuccesses: number
 }
 
 export interface NetworkFormValues {

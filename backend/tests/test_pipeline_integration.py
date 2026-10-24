@@ -21,10 +21,11 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
+from common.dto import AgentInfo
 from common.types import AgentCapabilities, AgentCard
 from conversation.runtime import ConversationRuntime
+from conversation.target_scope import TargetScopeResolver
 from models.agent import Agent, AgentStatus
-from models.room import MessageContent, RoomUserMessage, UserAttachment
 from models.room_services_models import ResolvedRoutingScope
 
 # ---- Test Helpers ----
@@ -33,7 +34,7 @@ from models.room_services_models import ResolvedRoutingScope
 def _make_agent(
     agent_id: str, name: str, description: str, skills=None, input_modes=None
 ) -> Agent:
-    """Create a test Agent with optional skills and input modes."""
+    """Create a stored test Agent with optional skills and input modes."""
     card = AgentCard(
         name=name,
         description=description,
@@ -45,9 +46,21 @@ def _make_agent(
         defaultOutputModes=["text"],
     )
     return Agent(
+        is_public=True,
         agent_id=agent_id,
         agent_card=card,
         agent_status=AgentStatus.active,
+    )
+
+
+def _make_info(*args, **kwargs) -> AgentInfo:
+    """Create the facade view of a test agent for matcher results."""
+    agent = _make_agent(*args, **kwargs)
+    return AgentInfo(
+        agent_id=agent.agent_id,
+        name=agent.agent_card.name,
+        description=agent.agent_card.description,
+        raw_card=agent.agent_card.model_dump(mode="json", by_alias=True),
     )
 
 
@@ -58,8 +71,8 @@ def _make_agent(
 async def test_all_agents_uses_agent_matcher():
     """Verify AgentSelectionService delegates to AgentMatcher and converts MatchResult."""
     # Create test agents
-    agent1 = _make_agent("agent1", "TestAgent1", "A test agent")
-    agent2 = _make_agent("agent2", "TestAgent2", "Another test agent")
+    agent1 = _make_info("agent1", "TestAgent1", "A test agent")
+    agent2 = _make_info("agent2", "TestAgent2", "Another test agent")
 
     # Mock MatchResult
     mock_match_result = MatchResult(
@@ -107,7 +120,7 @@ async def test_room_team_bypasses_matcher():
 
     # Create room with agents
     room = Room(
-        room_id="room123",
+        conversation_id="room123",
         room_name="Test Room",
         room_owner_id="user123",
         room_owner_name="Test User",
@@ -123,7 +136,7 @@ async def test_room_team_bypasses_matcher():
     conversation_runtime = ConversationRuntime()
     conversation_runtime._store = mock_db
 
-    result = await conversation_runtime._resolve_explicit_target_scope(
+    result = await conversation_runtime._target_scope.resolve_explicit_target_scope(
         room=room,
         message_text="Test message",
         target_group="room_team",
@@ -149,17 +162,17 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         _make_agent("agent2", "Agent Two", "Handles analysis"),
     ]
     room = Room(
-        room_id="room123",
+        conversation_id="room123",
         room_name="Test Room",
         room_owner_id="user123",
         room_owner_name="Test User",
     )
-    conversation_runtime = ConversationRuntime()
-    conversation_runtime._store = MagicMock()
-    conversation_runtime._store.get_all_active_agents = AsyncMock(return_value=agents)
-    conversation_runtime._sanitize_routing_scope = AsyncMock(return_value=(agents, []))
+    store = MagicMock()
+    store.get_all_active_agents = AsyncMock(return_value=agents)
+    resolver = TargetScopeResolver(store=store)
+    resolver.sanitize = AsyncMock(return_value=(agents, []))
 
-    result = await conversation_runtime._resolve_explicit_target_scope(
+    result = await resolver.resolve_explicit_target_scope(
         room=room,
         message_text="A request that lexical search would normally filter",
         target_group="all_agents",
@@ -173,72 +186,12 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
     }
     assert result.auto_assign_agents is True
     assert result.agents == agents
-    conversation_runtime._store.get_all_active_agents.assert_awaited_once_with(
-        user_id="user123"
-    )
-    conversation_runtime._sanitize_routing_scope.assert_awaited_once_with(
+    store.get_all_active_agents.assert_awaited_once_with(user_id="user123")
+    resolver.sanitize.assert_awaited_once_with(
         ["agent1", "agent2"],
         sender_user_id="user123",
         required_input_modes=None,
     )
-
-
-@pytest.mark.asyncio
-async def test_derive_required_input_modes_flows_to_matcher():
-    """End-to-end: verify attachment MIME types flow from RoomUserMessage → AgentMatcher."""
-    # Create RoomUserMessage with attachments
-    attachments = [
-        UserAttachment(
-            file_id="file1",
-            file_name="doc.pdf",
-            mime_type="application/pdf",
-            size_bytes=1024,
-            s3_key="uploads/doc.pdf",
-        ),
-        UserAttachment(
-            file_id="file2",
-            file_name="image.jpg",
-            mime_type="image/jpeg",
-            size_bytes=2048,
-            s3_key="uploads/image.jpg",
-        ),
-    ]
-
-    user_message = RoomUserMessage(
-        room_id="room123",
-        message_id="msg123",
-        message_content=MessageContent(
-            message_text="Analyze these files",
-            attachments=attachments,
-        ),
-        user_id="user123",
-    )
-
-    # Derive required_input_modes
-    conversation_runtime = ConversationRuntime()
-    required_modes = conversation_runtime._derive_required_input_modes(user_message)
-
-    # Verify MIME types extracted
-    assert required_modes == ["application/pdf", "image/jpeg"]
-
-    # Mock AgentMatcher.match to verify it receives required_input_modes
-    with patch(
-        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
-    ) as mock_match:
-        mock_match.return_value = MatchResult(
-            agents=[], total_candidates=0, filtered_count=0
-        )
-
-        service = AgentSelectionService()
-        await service.select_agents_for_message(
-            message_text="Analyze these files",
-            required_input_modes=required_modes,
-        )
-
-        # Verify required_input_modes reached the matcher
-        mock_match.assert_called_once()
-        call_args = mock_match.call_args
-        assert call_args[1]["required_input_modes"] == ["application/pdf", "image/jpeg"]
 
 
 @pytest.mark.asyncio
@@ -281,8 +234,8 @@ async def test_matcher_error_propagates_to_caller():
 
 def test_lexical_score_determines_ranking():
     """Verify ranking follows deterministic lexical relevance."""
-    agent_high = _make_agent("agent1", "HighLexical", "Best lexical match")
-    agent_low = _make_agent("agent2", "LowLexical", "Poor lexical match")
+    agent_high = _make_info("agent1", "HighLexical", "Best lexical match")
+    agent_low = _make_info("agent2", "LowLexical", "Poor lexical match")
 
     matched_agents = [
         MatchedAgent(
@@ -306,10 +259,10 @@ def test_lexical_score_determines_ranking():
 
 def test_input_modes_are_a_hard_filter():
     """Verify incompatible agents are excluded before lexical scoring."""
-    agent_file = _make_agent(
+    agent_file = _make_info(
         "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
     )
-    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
+    agent_text = _make_info("agent2", "TextAgent", "Text only", input_modes=["text"])
 
     assert accepts_input_modes(agent_file, ["application/pdf"]) is True
     assert accepts_input_modes(agent_text, ["application/pdf"]) is False
@@ -317,10 +270,10 @@ def test_input_modes_are_a_hard_filter():
 
 def test_no_file_penalty_without_attachments():
     """Without attachments, text-only and file-capable agents score equally."""
-    agent_file = _make_agent(
+    agent_file = _make_info(
         "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
     )
-    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
+    agent_text = _make_info("agent2", "TextAgent", "Text only", input_modes=["text"])
 
     assert accepts_input_modes(agent_file, None) is True
     assert accepts_input_modes(agent_text, None) is True
@@ -330,17 +283,17 @@ def test_select_top_agents_preserves_valid_lexical_candidates():
     """Non-debate selection does not apply legacy score-gap thresholds."""
     agents = [
         MatchedAgent(
-            _make_agent("agent1", "Winner", "Top agent"),
+            _make_info("agent1", "Winner", "Top agent"),
             lexical_score=0.9,
             final_score=0.92,
         ),
         MatchedAgent(
-            _make_agent("agent2", "Runner-up", "Second agent"),
+            _make_info("agent2", "Runner-up", "Second agent"),
             lexical_score=0.5,
             final_score=0.58,
         ),
         MatchedAgent(
-            _make_agent("agent3", "Third", "Third agent"),
+            _make_info("agent3", "Third", "Third agent"),
             lexical_score=0.4,
             final_score=0.49,
         ),

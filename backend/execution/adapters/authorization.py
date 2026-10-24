@@ -42,27 +42,30 @@ class MembershipAuthorizationRefresh:
         *,
         binding: AgentToolBindingRecord,
         requesting_subject_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         resource_refs: list[str],
     ) -> AuthorizationOutcome:
         del resource_refs
-        if binding.room_id != room_id or binding.room_epoch != room_epoch:
+        if (
+            binding.conversation_id != conversation_id
+            or binding.room_epoch != room_epoch
+        ):
             return "denied"
         if _digest(requesting_subject_id) != binding.requesting_subject_digest:
             return "denied"
         # Per-turn explicit scopes already authorized the agent when the
         # candidate catalog was assembled (visibility-filtered listing). Room
         # membership only gates scopes that are derived from the room/group
-        # roster (room_member / saved_group_member / unspecified legacy).
-        if getattr(binding, "authorization_kind", None) not in {
+        # roster (room_member / saved_group_member).
+        if binding.authorization_kind not in {
             "all_active_agents",
             "mention",
             "explicit_selection",
         }:
             try:
                 member = await self._room_ownership.verify_room_agent_membership(
-                    room_id, binding.agent_id
+                    conversation_id, binding.agent_id
                 )
             except (ConnectionError, TimeoutError):
                 return "transient_failure"
@@ -75,7 +78,7 @@ class MembershipAuthorizationRefresh:
         if info is None or str(getattr(info, "status", "") or "") != "active":
             return "denied"
         if not (
-            getattr(info, "is_public", True)
+            info.is_public
             or getattr(info, "provider_id", None) == requesting_subject_id
         ):
             return "denied"

@@ -331,7 +331,7 @@ class ModelStreamAssembler:
         )
 
     def build(self, *, message_id: str, created_at: datetime) -> AssistantMessage:
-        """Compatibility helper for callers that expect a successful assistant."""
+        """Return the assistant message; raise if the stream ended otherwise."""
 
         outcome = self.build_outcome(message_id=message_id, created_at=created_at)
         if outcome.assistant is None:

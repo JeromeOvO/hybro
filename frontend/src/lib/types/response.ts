@@ -95,47 +95,8 @@ export type Role = "agent" | "user";
 
 export type AgentStatus = "active" | "inactive" | "deleted";
 
-export interface Agent {
-  agent_id: string;
-  provider_id: string;
-  agent_card: AgentCard;
-  // public_url?: string | null;
-  agent_status?: AgentStatus;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
-  /** Maximum requests per user per hour (null = unlimited) */
-  rate_limit_per_user_per_hour?: number | null;
-  /** Maximum requests for entire system per hour (null = unlimited) */
-  rate_limit_system_per_hour?: number | null;
-  /** Visibility: true = public (everyone can see/use), false = private (owner only) */
-  is_public?: boolean;
-  /** Agent source: registered Remote, directly discovered Local, or Hub-relayed */
-  source?: "cloud" | "local" | "hub";
-  /** Hub ID if this is a hub-sourced agent */
-  hub_id?: string;
-  /** User ID of the hub owner */
-  hub_owner_id?: string;
-  /** Whether the hub providing this agent is currently online */
-  is_hub_online?: boolean;
-  /** Agent ID on the local hub (maps to the hub's internal registry) */
-  local_agent_id?: string;
-  /** Display name resolved from provider_id when agent_card.provider is absent. */
-  provider_name?: string | null;
-}
+export type { Agent, AgentRouteResponse } from './agent';
 
-export interface AgentCenterResponse {
-  agent_url?: string | null;
-  agent_id?: string | null;
-  provider_id?: string | null;
-  agent_card?: AgentCard | null;
-  agent?: Agent | null;
-  agents?: Agent[] | null;
-  success: boolean;
-  error?: string | null;
-  status_code?: number;
-}
 export interface APIKeyItemResponse {
   key_id: string;
   name: string;
@@ -220,7 +181,7 @@ export interface MetaTask {
 }
 export interface OrchestrationResponse {
   task_id?: string | null;
-  room_id?: string | null;
+  conversation_id?: string | null;
   meta_task_ids?: string[] | null;
   room_agent_message_list?: RoomAgentMessage[] | null;
   agent_id?: string | null;
@@ -229,7 +190,7 @@ export interface OrchestrationResponse {
   status_code?: number;
 }
 export interface RoomAgentMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;
@@ -246,7 +207,7 @@ export interface MessageContent {
   [k: string]: unknown;
 }
 export interface Room {
-  room_id?: string;
+  conversation_id?: string;
   room_name: string;
   room_owner_id: string;
   room_owner_name: string;
@@ -254,8 +215,6 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
-  /** @deprecated Use source_group_id from canonical provenance fields. */
-  applied_from_group?: string | null;
   extend_info?: unknown;
 
   // ── Canonical provenance fields ────────────────────────────────────────
@@ -265,7 +224,7 @@ export interface Room {
   source_group_name?: string | null;
 }
 export interface RoomCenterAgentMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
@@ -277,7 +236,7 @@ export interface RoomCenterAgentMessageResponse {
   status_code?: number;
 }
 export interface RoomCenterRoomMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_list?: RoomMessage[] | null;
   has_more?: boolean | null;
   next_cursor?: string | null;
@@ -289,7 +248,7 @@ export interface RoomCenterRoomMessageResponse {
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;
@@ -310,7 +269,7 @@ export interface RoomMessage {
   extend_info?: unknown;
 }
 export interface RoomCenterRoomSettingResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   room_agent_set?: string[] | null;
   resolved_agents?: RoomAgentRefWire[] | null;
   room_default_status?: "ok" | "degraded" | "empty" | "all_unavailable" | null;
@@ -328,9 +287,8 @@ export interface ActiveRunRefWire {
   updated_at?: string | null;
 }
 export interface RoomCenterActiveRunsResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   active_runs?: ActiveRunRefWire[] | null;
-  turn_completion_kind?: string | null;
   success: boolean;
   error?: string | null;
   status_code?: number;
@@ -345,7 +303,7 @@ export interface ScopeResolutionErrorWire {
   message: string;
 }
 export interface RoomCenterUserMessageResponse {
-  room_id?: string | null;
+  conversation_id?: string | null;
   message_id?: string | null;
   dispatch_root_message_id?: string | null;
   user_id?: string | null;
@@ -358,7 +316,7 @@ export interface RoomCenterUserMessageResponse {
   status_code?: number;
 }
 export interface RoomUserMessage {
-  room_id: string;
+  conversation_id: string;
   message_id: string;
   client_request_id?: string | null;
   message_created_at?: string;

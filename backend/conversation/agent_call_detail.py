@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Annotated, Any, Literal
 
@@ -51,9 +50,7 @@ class CanonicalAgentCallDetail(BaseModel):
     run_id: str
     public_call_id: str
     status: str
-    # Rolling-deploy compatibility for clients predating typed ``parts``.
-    output: str
-    parts: list[CanonicalAgentCallPart] = Field(default_factory=list)
+    parts: list[CanonicalAgentCallPart]
     artifacts: list[CanonicalArtifactDescriptor] = Field(default_factory=list)
 
 
@@ -71,7 +68,7 @@ class CanonicalAgentCallDetailService:
     async def _artifact_descriptor(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         artifact_ref: str,
     ) -> CanonicalArtifactDescriptor:
         match = _ROOM_FILE_REF_RE.fullmatch(artifact_ref)
@@ -80,7 +77,7 @@ class CanonicalAgentCallDetailService:
             return CanonicalArtifactDescriptor(artifact_ref=artifact_ref)
         try:
             metadata = await self._artifact_metadata_reader.get_for_room_file(
-                room_id,
+                conversation_id,
                 file_id,
             )
         except Exception:
@@ -104,15 +101,33 @@ class CanonicalAgentCallDetailService:
             ),
         )
 
+    async def agent_call_exists(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        public_call_id: str,
+    ) -> bool:
+        """Whether this room's run holds the opaque public call; output not read."""
+
+        run = await self._run_store.load(run_id)
+        if run is None or run.conversation_id != conversation_id:
+            return False
+        return any(
+            item.opaque_public_call_id == public_call_id
+            for batch in run.tool_batches
+            for item in batch.entries
+        )
+
     async def get(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         run_id: str,
         public_call_id: str,
     ) -> CanonicalAgentCallDetail | None:
         run = await self._run_store.load(run_id)
-        if run is None or run.room_id != room_id or run.lifecycle_family != "canonical":
+        if run is None or run.conversation_id != conversation_id:
             return None
         entry = next(
             (
@@ -126,7 +141,6 @@ class CanonicalAgentCallDetailService:
         if entry is None or entry.buffered_terminal_result is None:
             return None
         result = entry.buffered_terminal_result
-        output_parts: list[str] = []
         typed_parts: list[CanonicalAgentCallPart] = []
         for part in result.content:
             kind = getattr(part, "kind", None)
@@ -134,18 +148,13 @@ class CanonicalAgentCallDetailService:
                 text = getattr(part, "text", None)
                 if isinstance(text, str):
                     typed_parts.append(CanonicalTextPart(text=text))
-                    if text:
-                        output_parts.append(text)
             elif kind == "data":
                 data = getattr(part, "data", None)
                 if isinstance(data, (dict, list)):
                     typed_parts.append(CanonicalDataPart(data=data))
-                    output_parts.append(
-                        json.dumps(data, ensure_ascii=False, default=str)
-                    )
         artifacts = [
             await self._artifact_descriptor(
-                room_id=room_id,
+                conversation_id=conversation_id,
                 artifact_ref=artifact_ref,
             )
             for artifact_ref in result.artifact_refs
@@ -154,7 +163,6 @@ class CanonicalAgentCallDetailService:
             run_id=run.run_id,
             public_call_id=public_call_id,
             status=result.status,
-            output="\n".join(output_parts),
             parts=typed_parts,
             artifacts=artifacts,
         )

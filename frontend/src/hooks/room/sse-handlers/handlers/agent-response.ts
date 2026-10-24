@@ -30,7 +30,7 @@ function maybeScheduleTurnTerminalRecovery(
   if (isSummaryAgentResponse(agentId, messageId)) return
 
   scheduleTurnTerminalBackendTruthCheck(
-    ctx.roomId,
+    ctx.conversationId,
     ctx.lifecycle,
     hint,
     ctx.getToken,
@@ -84,10 +84,10 @@ export function handleAgentResponsePartial(
   const streaming = useStreamingStore.getState()
   if (!store.entities[message_id]) {
     const agentId = sseMessage.data.agent_id
-    const userMessageId = resolveUserMessageId(ctx.roomId, clientReqId)
+    const userMessageId = resolveUserMessageId(ctx.conversationId, clientReqId)
     store.upsertMessage({
       id: message_id,
-      roomId: ctx.roomId,
+      conversationId: ctx.conversationId,
       messageType: 'agent',
       content: '',
       senderName: agentId || 'Agent',
@@ -106,12 +106,12 @@ export function handleAgentResponsePartial(
 
   streaming.append(
     message_id,
-    ctx.roomId,
+    ctx.conversationId,
     textPartialToArtifact(message_id, content_delta),
     hasPartialArtifact,
     {
       clientRequestId: clientReqId ?? undefined,
-      userMessageId: resolveUserMessageId(ctx.roomId, clientReqId),
+      userMessageId: resolveUserMessageId(ctx.conversationId, clientReqId),
     },
   )
 }
@@ -126,7 +126,7 @@ export async function handleAgentResponse(
   const store = useMessageStore.getState()
   const streaming = useStreamingStore.getState()
   const messageId = sseMessage.data.message_id
-  const { roomId } = ctx
+  const { conversationId } = ctx
   const existing = store.entities[messageId]
   const incomingArtifacts = partsToReplacementArtifacts(
     sseMessage.data.parts as Record<string, unknown>[] | undefined,
@@ -148,7 +148,7 @@ export async function handleAgentResponse(
       if (canFinalizeExisting && needsStatusUpdate) {
         store.upsertMessage({
           id: messageId,
-          roomId,
+          conversationId,
           messageType: 'agent',
           content: existing.content,
           senderName: existing.senderName,
@@ -165,7 +165,7 @@ export async function handleAgentResponse(
       }
       streaming.clear(messageId)
       if (!canonical) {
-        const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+        const stamped = stampLiveTurnTerminalIfInferable(ctx.conversationId, ctx.lifecycle, {
           clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
           relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
         })
@@ -197,7 +197,7 @@ export async function handleAgentResponse(
 
   store.upsertMessage({
     id: messageId,
-    roomId,
+    conversationId,
     messageType: 'agent',
     content,
     senderName: agentName,
@@ -216,7 +216,7 @@ export async function handleAgentResponse(
   streaming.clear(messageId)
 
   if (!canonical) {
-    const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+    const stamped = stampLiveTurnTerminalIfInferable(ctx.conversationId, ctx.lifecycle, {
       clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
       relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
     })

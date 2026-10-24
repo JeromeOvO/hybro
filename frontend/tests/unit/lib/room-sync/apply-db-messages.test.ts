@@ -11,10 +11,10 @@ describe('applyDbMessages', () => {
     useStreamingStore.setState({ buffers: {} })
   })
 
-  it('returns null when store roomId does not match', () => {
+  it('returns null when store conversationId does not match', () => {
     useMessageStore.getState().setRoom('room-a')
     const result = applyDbMessages('room-b', [
-      createUserMessage({ id: 'u1', roomId: 'room-b' }),
+      createUserMessage({ id: 'u1', conversationId: 'room-b' }),
     ])
     expect(result).toBeNull()
   })
@@ -22,7 +22,7 @@ describe('applyDbMessages', () => {
   it('upserts messages and returns applied ids', () => {
     useMessageStore.getState().setRoom('room-1')
     const result = applyDbMessages('room-1', [
-      createUserMessage({ id: 'u1', roomId: 'room-1', content: 'hello' }),
+      createUserMessage({ id: 'u1', conversationId: 'room-1', content: 'hello' }),
     ])
     expect(result?.appliedCount).toBe(1)
     expect(useMessageStore.getState().entities['u1']?.content).toBe('hello')
@@ -33,7 +33,7 @@ describe('applyDbMessages', () => {
     store.setRoom('room-1')
     store.upsertMessage({
       id: 'u1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'hello',
       senderName: 'User',
@@ -48,10 +48,10 @@ describe('applyDbMessages', () => {
     }, 'optimistic')
 
     const result = applyDbMessages('room-1', [
-      createUserMessage({ id: 'u1', roomId: 'room-1', content: 'hello' }),
+      createUserMessage({ id: 'u1', conversationId: 'room-1', content: 'hello' }),
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'done',
         senderName: 'Agent',
@@ -72,7 +72,7 @@ describe('applyDbMessages', () => {
     store.setRoom('room-1')
     store.upsertMessage({
       id: 'u1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'user',
       content: 'hello',
       senderName: 'User',
@@ -87,10 +87,10 @@ describe('applyDbMessages', () => {
     }, 'optimistic')
 
     const result = applyDbMessages('room-1', [
-      createUserMessage({ id: 'u1', roomId: 'room-1', content: 'hello' }),
+      createUserMessage({ id: 'u1', conversationId: 'room-1', content: 'hello' }),
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'done',
         senderName: 'Agent 1',
@@ -100,7 +100,7 @@ describe('applyDbMessages', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: '',
         senderName: 'Agent 2',

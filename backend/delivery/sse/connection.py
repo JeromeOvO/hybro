@@ -11,7 +11,7 @@ class SSEConnection:
     def __init__(
         self,
         *,
-        room_id: str,
+        conversation_id: str,
         connection_id: str,
         heartbeat_interval: float,
         queue_maxsize: int = 100,
@@ -20,7 +20,7 @@ class SSEConnection:
         snapshot_provider: Callable[[str], Awaitable[dict[str, Any] | None]]
         | None = None,
     ) -> None:
-        self.room_id = room_id
+        self.conversation_id = conversation_id
         self.connection_id = connection_id
         self.heartbeat_interval = heartbeat_interval
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=queue_maxsize)
@@ -76,7 +76,7 @@ class SSEConnection:
         frame = {
             "type": message_type,
             "timestamp": self._now().isoformat(),
-            "room_id": self.room_id,
+            "conversation_id": self.conversation_id,
             "data": data,
         }
         return await self.send_frame(frame)
@@ -91,7 +91,7 @@ class SSEConnection:
             frame = {
                 "type": "heartbeat",
                 "timestamp": self._now().isoformat(),
-                "room_id": self.room_id,
+                "conversation_id": self.conversation_id,
                 "data": await self._heartbeat_data(),
             }
         await self._maybe_enqueue_resync_snapshot()
@@ -108,7 +108,7 @@ class SSEConnection:
             return {}
         try:
             room_seq = await asyncio.wait_for(
-                self._room_seq_reader(self.room_id), timeout=0.5
+                self._room_seq_reader(self.conversation_id), timeout=0.5
             )
         except Exception:  # reader best-effort
             return {}
@@ -125,7 +125,7 @@ class SSEConnection:
         self._resync_backoff_until = now + 2.0
         try:
             data = await asyncio.wait_for(
-                self._snapshot_provider(self.room_id), timeout=2.0
+                self._snapshot_provider(self.conversation_id), timeout=2.0
             )
         except Exception:  # client self-heals via gap detection
             return
@@ -134,7 +134,7 @@ class SSEConnection:
         frame = {
             "type": SNAPSHOT_FRAME_TYPE,
             "timestamp": self._now().isoformat(),
-            "room_id": self.room_id,
+            "conversation_id": self.conversation_id,
             "data": data,
         }
         try:

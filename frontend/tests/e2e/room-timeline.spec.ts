@@ -3,16 +3,17 @@ import { expect, test } from '@playwright/test'
 
 test.describe('Room Timeline', () => {
   test.beforeEach(async ({ page }, testInfo) => {
-    const roomId = `room-timeline-${testInfo.workerIndex}-${testInfo.retry}`
+    const conversationId = `room-timeline-${testInfo.workerIndex}-${testInfo.retry}`
     const now = new Date().toISOString()
 
-    await page.route('**/roomCenter/createNewRoom', async (route) => {
+    await page.route('**/api/v1/rooms', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback()
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room: { room_id: roomId },
+          room: { conversation_id: conversationId },
         }),
       })
     })
@@ -30,8 +31,9 @@ test.describe('Room Timeline', () => {
         body: JSON.stringify({ success: true, groups: [] }),
       })
     )
-    await page.route('**/api/v1/roomCenter/inquiryRoomSetting', (route) =>
-      route.fulfill({
+    await page.route('**/api/v1/rooms/*', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
@@ -39,7 +41,7 @@ test.describe('Room Timeline', () => {
           resolved_agents: [],
           active_runs: [],
           room: {
-            room_id: roomId,
+            conversation_id: conversationId,
             room_name: 'Timeline E2E Room',
             room_owner_id: 'user_local_developer',
             room_owner_name: 'Developer Local',
@@ -52,17 +54,46 @@ test.describe('Room Timeline', () => {
           },
         }),
       })
-    )
-    await page.route('**/api/v1/roomCenter/inquiryRoomMessagesByRoomId', (route) =>
-      route.fulfill({
+    })
+    await page.route('**/api/v1/rooms/*/messages*', async (route) => {
+      if (route.request().method() === 'POST') {
+        const payload = route.request().postDataJSON() as {
+          client_request_id?: string
+          user_input?: string
+        }
+        const content = payload.user_input ?? 'Timeline E2E message'
+        const messageId = `message-${Date.now()}`
+
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            conversation_id: conversationId,
+            message_id: messageId,
+            message: {
+              conversation_id: conversationId,
+              message_id: messageId,
+              message_type: 'user',
+              user_id: 'user_local_developer',
+              client_request_id: payload.client_request_id,
+              message_created_at: now,
+              message_content: { message_text: content },
+              extend_info: null,
+            },
+          }),
+        })
+        return
+      }
+      await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
-          room_id: roomId,
+          conversation_id: conversationId,
           message_list: [
             {
-              room_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-user',
               message_type: 'user',
               user_id: 'user_local_developer',
@@ -74,7 +105,7 @@ test.describe('Room Timeline', () => {
               },
             },
             {
-              room_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-agent-one',
               message_type: 'agent',
               agent_id: 'agent-one',
@@ -91,7 +122,7 @@ test.describe('Room Timeline', () => {
               },
             },
             {
-              room_id: roomId,
+              conversation_id: conversationId,
               message_id: 'seed-agent-two',
               message_type: 'agent',
               agent_id: 'agent-two',
@@ -110,12 +141,12 @@ test.describe('Room Timeline', () => {
           ],
         }),
       })
-    )
-    await page.route('**/api/v1/roomCenter/inquiryActiveRuns', (route) =>
+    })
+    await page.route('**/api/v1/rooms/*/active-runs', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ success: true, room_id: roomId, active_runs: [] }),
+        body: JSON.stringify({ success: true, conversation_id: conversationId, active_runs: [] }),
       })
     )
     await page.route('**/api/v1/rooms/*/hitl/pending', (route) =>
@@ -125,34 +156,6 @@ test.describe('Room Timeline', () => {
         body: JSON.stringify({ requests: [] }),
       })
     )
-    await page.route('**/api/v1/roomCenter/sendMessage', async (route) => {
-      const payload = route.request().postDataJSON() as {
-        client_request_id?: string
-        user_input?: string
-      }
-      const content = payload.user_input ?? 'Timeline E2E message'
-      const messageId = `message-${Date.now()}`
-
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          room_id: roomId,
-          message_id: messageId,
-          message: {
-            room_id: roomId,
-            message_id: messageId,
-            message_type: 'user',
-            user_id: 'user_local_developer',
-            client_request_id: payload.client_request_id,
-            message_created_at: now,
-            message_content: { message_text: content },
-            extend_info: null,
-          },
-        }),
-      })
-    })
   })
 
   test('send message creates a turn', async ({ page }) => {

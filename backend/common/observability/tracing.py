@@ -2,18 +2,9 @@ import asyncio
 import contextvars
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager, nullcontext
-from typing import Any, ContextManager, Protocol, runtime_checkable
+from typing import Any, ContextManager
 
 from common.observability.logging import bind_log_context, get_log_context
-
-
-@runtime_checkable
-class TracingProvider(Protocol):
-    def start_span(
-        self,
-        name: str,
-        attributes: dict[str, str] | None = None,
-    ) -> ContextManager[None]: ...
 
 
 class NoopTracingProvider:
@@ -46,7 +37,6 @@ def trace_id_context(trace_id: str | None) -> Iterator[None]:
 
 __all__ = [
     "NoopTracingProvider",
-    "TracingProvider",
     "get_current_trace_id",
     "trace_id_context",
     "traced_create_task",

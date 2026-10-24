@@ -15,7 +15,7 @@ export interface HydrateRoomAgentResolver {
 }
 
 export interface HydrateRoomOptions extends HydrateRoomAgentResolver {
-  roomId: string
+  conversationId: string
   phase: HydrateRoomPhase
   getToken?: () => Promise<string | null>
   userId?: string

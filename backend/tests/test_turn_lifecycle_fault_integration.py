@@ -40,7 +40,7 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
     )
     room_events = InMemoryRoomEventStore()
     publisher = make_publisher(transport=FakeTransport(), room_events=room_events)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish(notification):
@@ -53,7 +53,7 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
 
     await publish(
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id=f"public:{active.run_id}:run_started",
             run_id=active.run_id,
             seq=0,
@@ -70,7 +70,7 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
     if preexisting_turn_start:
         await publish(
             RunEventNotification(
-                room_id="room-1",
+                conversation_id="room-1",
                 event_id=f"public:{active.run_id}:turn-crash:turn_start:1",
                 run_id=active.run_id,
                 seq=1,
@@ -80,10 +80,12 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
             )
         )
 
-    async def read_events(room_id, run_id):
+    async def read_events(conversation_id, run_id):
         return [
             row
-            for row in await room_events.read_range(room_id, include_skipped=True)
+            for row in await room_events.read_range(
+                conversation_id, include_skipped=True
+            )
             if row.get("run_id") == run_id
         ]
 
@@ -97,16 +99,15 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
                 sequence=run.state_version,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
             )
         )
         if projected is not None:
             await publish(
                 RunEventNotification(
-                    room_id=projected.room_id,
+                    conversation_id=projected.conversation_id,
                     event_id=projected.event_id,
                     run_id=projected.run_id,
                     seq=projected.seq,
@@ -151,7 +152,7 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
     assert run is not None
     room_events = InMemoryRoomEventStore()
     publisher = make_publisher(transport=FakeTransport(), room_events=room_events)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish(notification):
@@ -164,7 +165,7 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
 
     await publish(
         RunEventNotification(
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             event_id=f"public:{run.run_id}:run_started",
             run_id=run.run_id,
             seq=0,
@@ -195,17 +196,16 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
                 sequence=current.state_version,
                 timestamp=NOW,
                 payload=payload,
-                room_id=current.room_id,
+                conversation_id=current.conversation_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family=current.lifecycle_family,
             )
         )
         if projected is None:
             return
         await publish(
             RunEventNotification(
-                room_id=projected.room_id,
+                conversation_id=projected.conversation_id,
                 event_id=projected.event_id,
                 run_id=projected.run_id,
                 seq=projected.seq,
@@ -215,10 +215,12 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
             )
         )
 
-    async def read_events(room_id, target_run_id):
+    async def read_events(conversation_id, target_run_id):
         return [
             row
-            for row in await room_events.read_range(room_id, include_skipped=True)
+            for row in await room_events.read_range(
+                conversation_id, include_skipped=True
+            )
             if row.get("run_id") == target_run_id
         ]
 
@@ -240,7 +242,7 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
     assert result.outcome == "final_answer"
     assert result.run.active_internal_turn_id is None
 
-    rows = await room_events.read_range(run.room_id, include_skipped=True)
+    rows = await room_events.read_range(run.conversation_id, include_skipped=True)
     run_payloads = [
         row["payload_public"]
         for row in rows
@@ -267,9 +269,9 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
         == 1
     )
     snapshot = await SnapshotService(store=room_events).snapshot(
-        run.room_id, force=True
+        run.conversation_id, force=True
     )
-    assert snapshot["room_seq"] == await room_events.latest_seq(run.room_id)
+    assert snapshot["room_seq"] == await room_events.latest_seq(run.conversation_id)
 
 
 def test_restart_parent_recovery_uses_latest_lifecycle_or_hitl_control():
@@ -291,7 +293,7 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
         transport=FakeTransport(),
         room_events=room_events,
     )
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish_notification(notification):
@@ -305,7 +307,7 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
 
     await publish_notification(
         RunEventNotification(
-            room_id="room-1",
+            conversation_id="room-1",
             event_id=f"public:{run_id}:run_started",
             run_id=run_id,
             seq=0,
@@ -333,17 +335,16 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
                 sequence=run.state_version,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
             )
         )
         if projected is None:
             return
         await publish_notification(
             RunEventNotification(
-                room_id=projected.room_id,
+                conversation_id=projected.conversation_id,
                 event_id=projected.event_id,
                 run_id=projected.run_id,
                 seq=projected.seq,
@@ -359,10 +360,12 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
     with pytest.raises(OSError, match="message_end"):
         await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
 
-    async def read_events(room_id, expected_run_id):
+    async def read_events(conversation_id, expected_run_id):
         return [
             row
-            for row in await room_events.read_range(room_id, include_skipped=True)
+            for row in await room_events.read_range(
+                conversation_id, include_skipped=True
+            )
             if row.get("run_id") == expected_run_id
         ]
 
@@ -377,7 +380,7 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
     )
 
     final_event = AgentMessageFinal(
-        room_id=result.run.room_id,
+        conversation_id=result.run.conversation_id,
         message_id=final.message_id,
         agent_id="system:hybro",
         content={
@@ -403,7 +406,7 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
     )
 
     settled = RunEventNotification(
-        room_id=result.run.room_id,
+        conversation_id=result.run.conversation_id,
         event_id=f"public:{run_id}:run_settled",
         run_id=run_id,
         seq=result.run.state_version,

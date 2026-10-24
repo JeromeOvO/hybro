@@ -219,21 +219,26 @@ SERVICE_KEYS = frozenset(
     {
         "clerk_secret_key",
         "clerk_webhook_secret",
-        "mongodb_password",
         "mongodb_url",
         "redis_url",
         "default_agent_registrar_token",
         "default_agent_llm_token",
-        "webhook_signing_key",
     }
 )
+
+
+# Retired service keys that existing auth.json files may still carry. They are
+# accepted on read, never offered by `config secret` or migration, and dropped
+# the next time ensure_service_credentials rewrites the file. Remove this set in
+# the next major release.
+RETIRED_SERVICE_KEYS = frozenset({"mongodb_password", "webhook_signing_key"})
 
 
 def _auth_object(data: bytes | None) -> dict[str, object]:
     value = _json_object(data) if data is not None else {}
     services = value.get("services", {})
     if not isinstance(services, dict) or any(
-        key not in SERVICE_KEYS or not isinstance(secret, str)
+        key not in SERVICE_KEYS | RETIRED_SERVICE_KEYS or not isinstance(secret, str)
         for key, secret in services.items()
     ):
         raise RuntimeConfigurationError("Invalid auth.json service credentials.")
@@ -373,8 +378,10 @@ class RuntimeConfigStore:
             credential = resolve_credential(
                 config, parse_credential(auth_data), environment
             ).credential
+            # Compare field data only: which retired keys a parse dropped is not
+            # a selection change.
             if (
-                config != expected
+                config.model_dump() != expected.model_dump()
                 or not isinstance(credential, OAuthCredential)
                 or credential.account_id != account
             ):
@@ -488,18 +495,22 @@ class RuntimeConfigStore:
         with self._locked():
             data = self._read("auth.json")
             parse_credential(data) if data is not None else None
-            return dict(_auth_object(data).get("services", {}))
+            services = _auth_object(data).get("services", {})
+            return {k: v for k, v in services.items() if k in SERVICE_KEYS}
 
     def ensure_service_credentials(self) -> dict[str, str]:
         with self._locked():
             data = self._read("auth.json")
             credential = parse_credential(data) if data is not None else None
             value = _auth_object(data)
-            services = dict(value.get("services", {}))
+            services = {
+                k: v
+                for k, v in value.get("services", {}).items()
+                if k not in RETIRED_SERVICE_KEYS
+            }
             for key in (
                 "default_agent_registrar_token",
                 "default_agent_llm_token",
-                "webhook_signing_key",
             ):
                 if not services.get(key):
                     services[key] = secrets.token_hex(32)
@@ -523,6 +534,12 @@ class RuntimeConfigStore:
             if previous is None:
                 raise RuntimeConfigurationError("Missing config.json; run hybro setup.")
             document = _json_object(previous)
+            from common.config.loader import REMOVED_FIELDS, strip_removed_fields
+
+            if path[0] == "backend" and len(path) == 2 and path[1] in REMOVED_FIELDS:
+                raise RuntimeConfigurationError(
+                    f"backend.{path[1]} was removed and is no longer a setting."
+                )
             target = document
             for part in path[:-1]:
                 child = target.setdefault(part, {})
@@ -532,6 +549,10 @@ class RuntimeConfigStore:
                     )
                 target = child
             target[path[-1]] = value
+            # A retired key is dropped on read, so it is not written back either.
+            backend = document.get("backend")
+            if isinstance(backend, dict):
+                document["backend"], _ = strip_removed_fields(backend)
             encoded = (json.dumps(document, indent=2, allow_nan=False) + "\n").encode()
             parse_config(encoded)
             self._replace("config.json", encoded)

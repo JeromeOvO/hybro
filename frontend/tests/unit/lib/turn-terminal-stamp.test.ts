@@ -31,7 +31,7 @@ function makeAgent(overrides: Partial<AgentResultViewModel> = {}): AgentResultVi
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
-    roomId: 'room-1',
+    conversationId: 'room-1',
     userMessageId: 'u1',
     userContent: 'hello',
     userAttachments: [],
@@ -203,7 +203,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
@@ -212,7 +212,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'A',
         senderName: 'Agent A',
@@ -224,7 +224,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'B',
         senderName: 'Agent B',
@@ -236,7 +236,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'summary-u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: '2 agents responded. Expand below to read each answer.',
         senderName: 'HYBRO AI',
@@ -267,7 +267,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
@@ -276,7 +276,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'A',
         senderName: 'Agent A',
@@ -288,7 +288,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'B',
         senderName: 'Agent B',
@@ -319,7 +319,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
@@ -328,7 +328,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'Error',
         senderName: 'Agent A',
@@ -340,7 +340,7 @@ describe('stampTurnTerminalFromBackendTruth', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'Error',
         senderName: 'Agent B',
@@ -376,7 +376,6 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
     vi.mocked(inquiryActiveRuns).mockResolvedValue({
       success: true,
       active_runs: [],
-      turn_completion_kind: 'deterministic',
     })
 
     const lifecycle = createProcessingLifecycle(() => {})
@@ -384,17 +383,16 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
         timestamp: '2026-01-01T00:00:00.000Z',
         clientRequestId: 'cr-1',
-        processingStatusLogs: [{ id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' }],
       },
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'A',
         senderName: 'Agent A',
@@ -406,7 +404,7 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'B',
         senderName: 'Agent B',
@@ -439,7 +437,7 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
     useMessageStore.getState().upsertMany([
       {
         id: 'u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'user',
         content: 'hello',
         senderName: 'User',
@@ -448,7 +446,7 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
       },
       {
         id: 'a1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'A',
         senderName: 'Agent A',
@@ -460,7 +458,7 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
       },
       {
         id: 'a2',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: 'B',
         senderName: 'Agent B',
@@ -472,7 +470,7 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
       },
       {
         id: 'summary-u1',
-        roomId: 'room-1',
+        conversationId: 'room-1',
         messageType: 'agent',
         content: '2 agents responded. Expand below to read each answer.',
         senderName: 'HYBRO AI',

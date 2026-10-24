@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -83,6 +84,12 @@ class FakeCollection:
             return True
         return False
 
+    async def delete_many(self, query: dict) -> int:
+        kept = [doc for doc in self.docs if not _matches(doc, query)]
+        deleted = len(self.docs) - len(kept)
+        self.docs = kept
+        return deleted
+
     async def update_many(self, query: dict, update: dict) -> int:
         self.update_many_calls.append((deepcopy(query), deepcopy(update)))
         count = 0
@@ -141,20 +148,17 @@ async def test_get_by_ids_and_provider_keep_dict_outputs():
 
 
 @pytest.mark.asyncio
-async def test_get_public_includes_missing_is_public_with_limit():
+async def test_get_public_requires_explicit_is_public_with_limit():
     repo, collection = _repo(
         [
+            {"agent_id": "missing"},
             {"agent_id": "public", "is_public": True},
-            {"agent_id": "legacy"},
             {"agent_id": "private", "is_public": False},
         ]
     )
 
     assert await repo.get_public(limit=1) == [{"agent_id": "public", "is_public": True}]
-    assert collection.find_calls[-1] == (
-        {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
-        {"limit": 1},
-    )
+    assert collection.find_calls[-1] == ({"is_public": True}, {"limit": 1})
 
 
 @pytest.mark.asyncio
@@ -162,7 +166,7 @@ async def test_list_visible_filters_public_owned_and_active_agents():
     repo, _ = _repo(
         [
             {"agent_id": "public-active", "is_public": True, "agent_status": "active"},
-            {"agent_id": "legacy-active", "agent_status": "active"},
+            {"agent_id": "missing-flag-active", "agent_status": "active"},
             {
                 "agent_id": "owned-private",
                 "is_public": False,
@@ -182,13 +186,9 @@ async def test_list_visible_filters_public_owned_and_active_agents():
     unauthenticated = await repo.list_visible(active_only=True)
     authenticated = await repo.list_visible(user_id="u1", active_only=True)
 
-    assert [doc["agent_id"] for doc in unauthenticated] == [
-        "public-active",
-        "legacy-active",
-    ]
+    assert [doc["agent_id"] for doc in unauthenticated] == ["public-active"]
     assert [doc["agent_id"] for doc in authenticated] == [
         "public-active",
-        "legacy-active",
         "owned-private",
     ]
 
@@ -233,7 +233,7 @@ async def test_list_visible_honors_explicit_finite_limit():
 
 
 @pytest.mark.asyncio
-async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
+async def test_find_by_normalized_url_reads_only_the_indexed_field():
     repo, collection = _repo(
         [
             {
@@ -250,15 +250,15 @@ async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
     )
 
     exact = await repo.find_by_normalized_url("https://example.com")
-    legacy = await repo.find_by_normalized_url("http://localhost", provider_id="u1")
+    missing = await repo.find_by_normalized_url("http://localhost", provider_id="u1")
 
     assert exact["agent_id"] == "exact"
-    assert legacy["agent_id"] == "legacy"
-    assert collection.find_one_calls[0] == {"normalized_url": "https://example.com"}
-    assert collection.find_calls[-1][0] == {
-        "normalized_url": {"$exists": False},
-        "provider_id": "u1",
-    }
+    assert missing is None
+    assert collection.find_one_calls == [
+        {"normalized_url": "https://example.com"},
+        {"normalized_url": "http://localhost", "provider_id": "u1"},
+    ]
+    assert collection.find_calls == []
 
 
 @pytest.mark.asyncio
@@ -294,29 +294,6 @@ async def test_public_url_exists_update_delete_and_health():
 
 
 @pytest.mark.asyncio
-async def test_find_by_normalized_url_limits_legacy_fallback_scan():
-    repo, collection = _repo(
-        [
-            {
-                "agent_id": "legacy",
-                "provider_id": "u1",
-                "agent_card": {"url": "https://legacy.example/.well-known/agent.json"},
-            }
-        ]
-    )
-
-    found = await repo.find_by_normalized_url(
-        "https://legacy.example", provider_id="u1"
-    )
-
-    assert found["agent_id"] == "legacy"
-    assert collection.find_calls[-1] == (
-        {"normalized_url": {"$exists": False}, "provider_id": "u1"},
-        {"limit": 500},
-    )
-
-
-@pytest.mark.asyncio
 def _matches(doc: dict, query: dict) -> bool:
     return all(_matches_field(doc, key, expected) for key, expected in query.items())
 
@@ -327,23 +304,29 @@ def _matches_field(doc: dict, key: str, expected: Any) -> bool:
     if key == "$and":
         return all(_matches(doc, branch) for branch in expected)
     actual = _get_path(doc, key)
-    exists = _path_exists(doc, key)
     if isinstance(expected, dict):
-        for op, value in expected.items():
-            if op == "$in" and actual not in value:
-                return False
-            if op == "$nin" and actual in value:
-                return False
-            if op == "$ne" and actual == value:
-                return False
-            if op == "$exists" and exists is not bool(value):
-                return False
-            if op == "$regex" and value.replace("\\.", ".").strip(".*") not in str(
-                actual or ""
-            ):
-                return False
-        return True
+        exists = _path_exists(doc, key)
+        return all(
+            _matches_operator(actual, exists, op, value)
+            for op, value in expected.items()
+        )
     return actual == expected
+
+
+def _matches_operator(actual: Any, exists: bool, op: str, value: Any) -> bool:
+    if op == "$in":
+        return actual in value
+    if op == "$nin":
+        return actual not in value
+    if op == "$ne":
+        return actual != value
+    if op == "$lt":
+        return actual is not None and actual < value
+    if op == "$exists":
+        return exists is bool(value)
+    if op == "$regex":
+        return value.replace("\\.", ".").strip(".*") in str(actual or "")
+    return True
 
 
 def _get_path(doc: dict, path: str) -> Any:
@@ -401,3 +384,45 @@ def _duplicates_normalized_url(doc: dict, duplicate_normalized_urls: set[str]) -
 
 class DuplicateKeyError(Exception):
     pass
+
+
+@pytest.mark.asyncio
+async def test_mark_agents_inactive_records_when_the_record_went_inactive():
+    repo, collection = _repo(
+        [{"agent_id": "a1", "source": "local", "agent_status": "active"}]
+    )
+
+    assert await repo.mark_agents_inactive(["a1"], source="local") == 1
+
+    assert collection.docs[0]["agent_status"] == "inactive"
+    assert isinstance(collection.docs[0]["inactive_since"], datetime)
+
+
+@pytest.mark.asyncio
+async def test_delete_inactive_ownerless_keeps_owned_recent_and_active_records():
+    cutoff = datetime(2026, 10, 16, tzinfo=UTC)
+    old = cutoff - timedelta(days=1)
+    recent = cutoff + timedelta(days=1)
+    base = {"source": "local", "provider_id": None, "agent_status": "inactive"}
+    repo, collection = _repo(
+        [
+            {**base, "agent_id": "stale", "inactive_since": old},
+            {**base, "agent_id": "legacy-stale", "updated_at": old},
+            {**base, "agent_id": "recent", "inactive_since": recent},
+            {**base, "agent_id": "owned", "provider_id": "u1", "inactive_since": old},
+            {**base, "agent_id": "active", "agent_status": "active", "updated_at": old},
+            {**base, "agent_id": "cloud", "source": "cloud", "inactive_since": old},
+        ]
+    )
+
+    deleted = await repo.delete_inactive_ownerless(
+        source="local", inactive_before=cutoff
+    )
+
+    assert deleted == 2
+    assert [doc["agent_id"] for doc in collection.docs] == [
+        "recent",
+        "owned",
+        "active",
+        "cloud",
+    ]

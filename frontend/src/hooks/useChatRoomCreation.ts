@@ -31,8 +31,6 @@ interface UseChatRoomCreationProps {
 
 interface CreateRoomOptions {
   selectedAgents?: Agent[]
-  /** @deprecated Use membership instead. */
-  appliedFromGroup?: string
   useSupervisor?: boolean
   roomName?: string
   dispatch?: MessageDispatchInput
@@ -91,7 +89,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
   ) => {
     const { 
       selectedAgents = [], 
-      appliedFromGroup,
       useSupervisor = true,
       roomName: customRoomName,
       dispatch: explicitDispatch,
@@ -111,18 +108,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
     try {
       setCreating(true)
-
-      // Build room agent set if agents are selected
-      let roomAgentSet: { [k: string]: string } = {}
-      
-      if (selectedAgents.length > 0) {
-        roomAgentSet = Object.fromEntries(
-          selectedAgents.map((agent) => [
-            agent.agent_id,
-            agent.agent_card.name,
-          ])
-        )
-      }
 
       // Derive membership: Room Settings config (selectedAgents) takes priority,
       // then saved group selection, then empty snapshot.
@@ -172,25 +157,22 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
       const response = await createNewRoom(
         roomName,
-        userId,
         userName,
         getToken,
-        roomAgentSet,
         extendInfo,
-        appliedFromGroup,
         membership,
       )
 
       if (response.success && response.room) {
-        const roomId = response.room.room_id
-        if (!roomId) {
-          throw new Error('Room created but no room_id returned')
+        const conversationId = response.room.conversation_id
+        if (!conversationId) {
+          throw new Error('Room created but no conversation_id returned')
         }
 
         const queryClient = getActiveQueryClient()
         if (queryClient) {
           await optimisticallyUpsertCreatedRoom(queryClient, userId, {
-            room_id: roomId,
+            conversation_id: conversationId,
             title: roomName,
             last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
             is_pinned: false,
@@ -202,7 +184,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         // Store the initial message and target scope for the room page. Manual
         // agent snapshots use room_default routing; the selector shows the
         // seeded agent/team name via room membership provenance.
-        useRoomUiStore.getState().setPendingRoomData(roomId, {
+        useRoomUiStore.getState().setPendingRoomData(conversationId, {
           initialMessage: userMessage,
           mode: useSupervisor ? 'supervisor' : 'direct',
           agentScope: dispatchToAgentScope(dispatch),
@@ -210,7 +192,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
           attachments: options.attachments,
         })
         
-        return roomId
+        return conversationId
       } else {
         throw new Error(response.error || 'Failed to create room')
       }
@@ -228,10 +210,10 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     userMessage: string, 
     options: CreateRoomOptions = {}
   ) => {
-    const roomId = await createRoomWithMessage(userMessage, options)
+    const conversationId = await createRoomWithMessage(userMessage, options)
     
-    if (roomId) {
-      router.push(`/room/${roomId}`)
+    if (conversationId) {
+      router.push(`/room/${conversationId}`)
       return true
     }
     
@@ -275,35 +257,27 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
     setCreating(true)
     try {
-      const roomAgentSet: Record<string, string> = {}
-      for (const agent of resolvedAgents) {
-        roomAgentSet[agent.agent_id] = agent.agent_card.name
-      }
-
       const response = await createNewRoom(
         template.title,
-        userId,
         userName,
         getToken,
-        roomAgentSet,
         { use_supervisor: true },
-        undefined,
         {
           membership_seed_input: 'manual' as const,
           room_agent_ids: resolvedAgents.map((a) => a.agent_id),
         },
       )
 
-      if (!response.success || !response.room?.room_id) {
+      if (!response.success || !response.room?.conversation_id) {
         toast.error('Failed to create room')
         return false
       }
 
-      const roomId = response.room.room_id
+      const conversationId = response.room.conversation_id
       const queryClient = getActiveQueryClient()
       if (queryClient) {
         await optimisticallyUpsertCreatedRoom(queryClient, userId, {
-          room_id: roomId,
+          conversation_id: conversationId,
           title: template.title,
           last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
           is_pinned: false,
@@ -312,7 +286,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         })
       }
 
-      useRoomUiStore.getState().setPendingRoomData(roomId, {
+      useRoomUiStore.getState().setPendingRoomData(conversationId, {
         initialMessage: template.prefillMessage,
         handoffMode: 'prefill',
       })
@@ -323,7 +297,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         })
       }
 
-      router.push(`/room/${roomId}`)
+      router.push(`/room/${conversationId}`)
       return true
     } catch (error) {
       console.error('Failed to create room from template:', error)

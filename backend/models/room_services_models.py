@@ -14,11 +14,9 @@ class ResolvedRoutingScope:
 
 @dataclass
 class ParseResult:
-    """Result of ``parse_user_message``.
+    """Result of the orchestration preflight `MessagePreflight.prepare_orchestration_envelope`.
 
-    Replaces the previous ``bool`` return so the caller can distinguish
-    cancellation from failure without ``parse_user_message`` sending SSE
-    events directly (Issue 20).
+    ``canceled`` lets the caller distinguish cancellation from failure.
     """
 
     success: bool

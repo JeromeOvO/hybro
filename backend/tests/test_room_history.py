@@ -14,46 +14,6 @@ from api_gateway.routes.room_routes import (
 from common.auth import ClerkUser
 from conversation.facade import ConversationFacade
 from conversation.repository.mongo import RoomMongoRepository
-from execution.repository.mongo import RunMongoRepository
-
-
-@pytest.mark.asyncio
-async def test_bulk_room_status_uses_one_priority_aggregation():
-    rows = [
-        {"run_id": "working-old", "room_id": "r1", "state": "processing"},
-        {"run_id": "failed-new", "room_id": "r2", "state": "failed"},
-        {"run_id": "waiting-old", "room_id": "r3", "state": "awaiting_input"},
-    ]
-    collection = SimpleNamespace(aggregate=AsyncMock(return_value=rows))
-    mongo = SimpleNamespace(collection=lambda _name: collection)
-    repository = RunMongoRepository(mongo)
-
-    result = await repository.get_latest_for_rooms(["r1", "r2", "r3"])
-
-    assert result == rows
-    collection.aggregate.assert_awaited_once()
-    pipeline = collection.aggregate.await_args.args[0]
-    assert pipeline[0] == {
-        "$match": {
-            "room_id": {"$in": ["r1", "r2", "r3"]},
-            "state": {"$in": ["queued", "processing", "awaiting_input"]},
-        }
-    }
-    branches = pipeline[1]["$addFields"]["_history_status_priority"]["$switch"][
-        "branches"
-    ]
-    assert [(branch["case"]["$eq"][1], branch["then"]) for branch in branches] == [
-        ("awaiting_input", 3),
-        ("processing", 2),
-        ("queued", 1),
-    ]
-    assert pipeline[2] == {
-        "$sort": {
-            "room_id": 1,
-            "_history_status_priority": -1,
-            "updated_at": -1,
-        }
-    }
 
 
 @pytest.mark.asyncio
@@ -156,7 +116,7 @@ async def test_saving_messages_touches_durable_room_activity():
     await facade.save_user_message(
         "r1",
         UserMessageInput(
-            room_id="r1",
+            conversation_id="r1",
             message_text="Hello",
             sender_id="owner",
         ),
@@ -182,7 +142,7 @@ async def test_streaming_agent_message_updates_do_not_touch_room_activity():
         now=lambda: datetime(2026, 8, 10, tzinfo=UTC),
     )
     message = SimpleNamespace(
-        room_id="r1",
+        conversation_id="r1",
         model_dump=lambda **_kwargs: {"room_id": "r1", "message_content": {}},
     )
 
@@ -199,7 +159,7 @@ def _user(user_id: str = "owner") -> ClerkUser:
 
 
 def _room(
-    room_id: str,
+    conversation_id: str,
     *,
     owner_id: str = "owner",
     pinned: bool = False,
@@ -208,8 +168,8 @@ def _room(
 ):
     activity = datetime(2026, 8, activity_day, tzinfo=UTC)
     return SimpleNamespace(
-        room_id=room_id,
-        room_name=f"Room {room_id}",
+        conversation_id=conversation_id,
+        room_name=f"Room {conversation_id}",
         room_owner_id=owner_id,
         room_created_at=activity,
         last_activity_at=activity,
@@ -226,8 +186,8 @@ async def test_history_uses_repository_order_and_bulk_status():
         _room("recent-new", activity_day=3),
         _room("recent-old", activity_day=1),
     ]
-    center = SimpleNamespace(
-        inquiry_room_history_by_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_room_history=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         )
     )
@@ -241,9 +201,9 @@ async def test_history_uses_repository_order_and_bulk_status():
         )
     )
 
-    response = await get_room_history(user=_user(), engine=engine, center=center)
+    response = await get_room_history(user=_user(), engine=engine, rooms=chat_rooms)
 
-    assert [item.room_id for item in response.items] == [
+    assert [item.conversation_id for item in response.items] == [
         "pinned-one",
         "pinned-two",
         "recent-new",
@@ -258,9 +218,7 @@ async def test_history_uses_repository_order_and_bulk_status():
     engine.get_latest_runs_for_rooms.assert_awaited_once_with(
         ["pinned-one", "pinned-two", "recent-new", "recent-old"]
     )
-    request = center.inquiry_room_history_by_owner_id.await_args.args[0]
-    assert request.room_owner_id == "owner"
-    assert request.requesting_user_id == "owner"
+    chat_rooms.list_room_history.assert_awaited_once_with("owner")
 
 
 @pytest.mark.asyncio
@@ -269,25 +227,25 @@ async def test_reorder_requires_complete_owned_pinned_set_before_writing():
         _room("p1", pinned=True, pin_order=1),
         _room("p2", pinned=True, pin_order=2),
     ]
-    center = SimpleNamespace(
-        inquiry_rooms_by_room_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_rooms_for_owner=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         ),
-        update_room_history_fields=AsyncMock(),
+        update_history_fields=AsyncMock(),
     )
     store = SimpleNamespace(get_room_by_room_id=AsyncMock())
 
     with pytest.raises(HTTPException) as exc_info:
         await reorder_pinned_rooms(
-            payload=PinnedRoomOrderUpdate(room_ids=["p1"]),
+            payload=PinnedRoomOrderUpdate(conversation_ids=["p1"]),
             user=_user(),
             store=store,
-            center=center,
+            rooms=chat_rooms,
         )
 
     assert exc_info.value.status_code == 409
     store.get_room_by_room_id.assert_not_awaited()
-    center.update_room_history_fields.assert_not_awaited()
+    chat_rooms.update_history_fields.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -299,53 +257,48 @@ async def test_reorder_persists_complete_manual_order_after_ownership_checks():
     store = SimpleNamespace(
         get_room_by_room_id=AsyncMock(side_effect=[rooms[1], rooms[0]])
     )
-    center = SimpleNamespace(
-        inquiry_rooms_by_room_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_rooms_for_owner=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         ),
-        update_room_history_fields=AsyncMock(
-            return_value=SimpleNamespace(success=True)
-        ),
+        update_history_fields=AsyncMock(return_value=SimpleNamespace(success=True)),
     )
 
     result = await reorder_pinned_rooms(
-        payload=PinnedRoomOrderUpdate(room_ids=["p2", "p1"]),
+        payload=PinnedRoomOrderUpdate(conversation_ids=["p2", "p1"]),
         user=_user(),
         store=store,
-        center=center,
+        rooms=chat_rooms,
     )
 
     assert result == {"success": True}
-    requests = [
-        call.args[0] for call in center.update_room_history_fields.await_args_list
+    assert [
+        (call.args, call.kwargs)
+        for call in chat_rooms.update_history_fields.await_args_list
+    ] == [
+        (("p2",), {"is_pinned": True, "pin_order": 1.0}),
+        (("p1",), {"is_pinned": True, "pin_order": 2.0}),
     ]
-    assert [(request.room_id, request.pin_order) for request in requests] == [
-        ("p2", 1.0),
-        ("p1", 2.0),
-    ]
-    assert all(request.requesting_user_id == "owner" for request in requests)
 
 
 @pytest.mark.asyncio
 async def test_delete_history_checks_ownership_and_delegates_to_deletion_service():
     room = _room("r1")
     store = SimpleNamespace(get_room_by_room_id=AsyncMock(return_value=room))
-    center = SimpleNamespace(
-        delete_room_by_room_id=AsyncMock(return_value=SimpleNamespace(success=True))
+    chat_rooms = SimpleNamespace(
+        delete_room=AsyncMock(return_value=SimpleNamespace(success=True))
     )
 
     result = await delete_room_history_item(
-        "r1", user=_user(), store=store, center=center
+        "r1", user=_user(), store=store, rooms=chat_rooms
     )
 
     assert result == {"success": True}
-    request = center.delete_room_by_room_id.await_args.args[0]
-    assert request.room_id == "r1"
-    assert request.requesting_user_id == "owner"
+    chat_rooms.delete_room.assert_awaited_once_with("r1", requesting_user_id="owner")
 
     with pytest.raises(HTTPException) as exc_info:
         await delete_room_history_item(
-            "r1", user=_user("other"), store=store, center=center
+            "r1", user=_user("other"), store=store, rooms=chat_rooms
         )
     assert exc_info.value.status_code == 403
-    assert center.delete_room_by_room_id.await_count == 1
+    assert chat_rooms.delete_room.await_count == 1

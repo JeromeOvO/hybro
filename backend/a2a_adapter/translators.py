@@ -132,7 +132,7 @@ def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
     # consumer that rebuilds an internal card from `raw_card` would then fall
     # back to deriving one from an interface — the same wrong-base problem this
     # function exists to avoid. Carry the resolved base in `raw_card` so every
-    # reader sees it, matching how legacy cards already state their own url.
+    # reader sees it.
     if base_url and not raw_card.get("url"):
         raw_card["url"] = base_url
     capabilities_data = _read(card, "capabilities") or {}
@@ -159,7 +159,7 @@ def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
             output_modes or [],
         ),
         raw_card=raw_card,
-        interfaces=_card_interfaces(card, agent_url),
+        interfaces=_card_interfaces(card),
     )
 
 
@@ -183,24 +183,19 @@ def _card_base_url(card: Any, agent_url: str) -> str:
     of those as the base makes the card unreachable at
     ``<base>/.well-known/agent-card.json``.
 
-    Call endpoints are carried separately in ``interfaces``; a legacy card that
-    states its own ``url`` still wins, since that was the base by definition.
+    Call endpoints are carried separately in ``interfaces``.
     """
     return _first_non_empty(
-        _read(card, "url"),
         agent_url,
         _interface_url(_read(card, "supported_interfaces", "supportedInterfaces")),
-        _interface_url(_read(card, "additional_interfaces", "additionalInterfaces")),
     )
 
 
-def _card_interfaces(card: Any, agent_url: str) -> list[AgentCardInterface]:
-    """Project the card's callable bindings without guessing endpoints.
+def _card_interfaces(card: Any) -> list[AgentCardInterface]:
+    """Project the card's ``supportedInterfaces`` without guessing endpoints.
 
-    A 1.0 card advertises ``supportedInterfaces``; an older card advertises a
-    top-level ``url`` plus optional ``preferredTransport`` and
-    ``additionalInterfaces``. Both are read here so consumers select a binding
-    from an explicit list instead of re-deriving one from raw protocol fields.
+    Consumers select a binding from this explicit list instead of re-deriving
+    one from raw protocol fields.
     """
     declared = _as_sequence(_read(card, "supported_interfaces", "supportedInterfaces"))
     interfaces: list[AgentCardInterface] = []
@@ -214,36 +209,6 @@ def _card_interfaces(card: Any, agent_url: str) -> list[AgentCardInterface]:
                 protocol_binding=_read(item, "protocol_binding", "protocolBinding"),
                 protocol_version=_read(item, "protocol_version", "protocolVersion"),
                 tenant=_read(item, "tenant"),
-            )
-        )
-    if interfaces:
-        return interfaces
-
-    for item in _as_sequence(
-        _read(card, "additional_interfaces", "additionalInterfaces")
-    ):
-        url = _read(item, "url")
-        if not url:
-            continue
-        interfaces.append(
-            AgentCardInterface(
-                url=str(url),
-                protocol_binding=_read(item, "transport", "protocol_binding"),
-                protocol_version=_read(item, "protocol_version", "protocolVersion"),
-                tenant=_read(item, "tenant"),
-            )
-        )
-
-    primary_url = _read(card, "url") or agent_url
-    if primary_url:
-        interfaces.append(
-            AgentCardInterface(
-                url=str(primary_url),
-                protocol_binding=_read(
-                    card, "preferred_transport", "preferredTransport"
-                ),
-                protocol_version=_read(card, "protocol_version", "protocolVersion"),
-                tenant=_read(card, "tenant"),
             )
         )
     return interfaces
@@ -318,8 +283,8 @@ def facade_result_to_model(response: dict[str, Any]) -> Message | Task:
     The facade yields one 1.0 ``StreamResponse`` frame per call, tagged with the
     member that was present (``task`` / ``message``) or, for streaming calls,
     the event kind (``status_update`` / ``artifact_update``). Frame parsing is
-    shared with webhook ingestion so both paths agree on artifact semantics,
-    status messages, and HITL metadata.
+    shared with direct-stream parsing in ``webhook_payloads`` so both agree on
+    artifact semantics, status messages, and HITL metadata.
     """
     kind = response.get("kind")
     result = response.get("result") or {}

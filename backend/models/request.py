@@ -2,13 +2,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
-from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
-from models.agent import Agent, coerce_legacy_agent_card
+from common.types import Message, MessageRole, Part, Task, TextPart
 from models.room import (
-    Room,
     RoomAgentMessage,
     RoomMessage,
     RoomUserMessage,
@@ -120,84 +118,14 @@ class InspectionCenterRequest(BaseModel):
     agent_url: str
 
 
-class OrchestrationRequest(BaseModel):
-    task_id: str | None = None
-    room_id: str | None = None
-    room_user_message_id: str | None = None
-    room_agent_message_id: str | None = None
-    room_related_message_id: str | None = None
-    user_id: str | None = None
-    is_recovery: bool = False
-    reuse_processing_claim: bool = False
-    client_request_id: str | None = None
-    # Live routing inputs carried from the validated API request. When
-    # present they are authoritative for Run creation; the persisted-message
-    # reconstruction in the routing seam remains the recovery/re-entry
-    # fallback when these are absent.
-    mode: str | None = None
-    agent_scope: dict[str, Any] | None = None
-
-
 class DebatationCenterRequest(BaseModel):
     task_id: str
-
-
-class AgentCenterRequest(BaseModel):
-    agent_id: str | None = None
-    agent_url: str | None = None
-    provider_id: str | None = None
-    user_id: str | None = None  # For visibility filtering (optional auth)
-    query: dict[str, Any] | None = None
-    limit: int = 0
-    agent_card: AgentCard | None = None
-    call_increment: int | None = 0
-    call_success_increment: int | None = 0
-    like_increment: int | None = 0
-    dislike_increment: int | None = 0
-    query_text: str | None = None
-    agent: Agent | None = None
-    agent_count: int | None = 0
-
-    @field_validator("agent_card", mode="before")
-    @classmethod
-    def _coerce_agent_card(cls, value: Any) -> Any:
-        return coerce_legacy_agent_card(value)
 
 
 class ChatRequest(BaseModel):
     user_name: str
     user_input: str
     session_id: str | None = None
-
-
-class RoomCenterRoomSettingRequest(BaseModel):
-    room_id: str | None = None
-    room_name: str | None = None
-    room_owner_id: str | None = None
-    room_owner_name: str | None = None
-    room_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
-    room: Room | None = None
-    requesting_user_id: str | None = None
-
-    # Legacy fields — accepted during rollout; canonical fields take precedence.
-    room_agent_set: dict[str, str] | None = None
-    applied_from_group: str | None = None
-
-    # Canonical membership write input (mutually exclusive)
-    membership_seed_input: str | None = (
-        None  # "manual" | "saved_group" | "all_current_agents"
-    )
-    room_agent_ids: list[str] | None = None
-    seed_group_id: str | None = None
-    seed_all_current_agents: bool | None = None
-
-    # Active-runs query: optional trigger message for turn_completion_kind lookup
-    trigger_message_id: str | None = None
-
-    # Chat history presentation metadata
-    is_pinned: bool | None = None
-    pin_order: float | None = None
 
 
 class UserAttachmentRequest(BaseModel):
@@ -210,7 +138,7 @@ class UserAttachmentRequest(BaseModel):
 
 
 class RoomCenterUserMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     related_message_id: str | None = None
     user_id: str | None = None
@@ -229,7 +157,7 @@ class RoomCenterUserMessageRequest(BaseModel):
 
 
 class RoomCenterAgentMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     message_id: str | None = None
     related_message_id: str | None = None
     agent_id: str | None = None
@@ -249,7 +177,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
 
 
 class RoomCenterRoomMessageRequest(BaseModel):
-    room_id: str | None = None
+    conversation_id: str | None = None
     limit: Any | None = None
     cursor: Any | None = None
     message_id: str | None = None

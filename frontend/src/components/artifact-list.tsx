@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { ArtifactData } from '@/stores/message-store/types'
 import { ArtifactRenderer } from './artifact-renderer'
+import { withDistinctFileNames } from '@/lib/artifacts/distinct-file-names'
 
 interface ArtifactListProps {
   artifacts: ArtifactData[]
@@ -20,7 +21,7 @@ function hasContent(artifact: ArtifactData): boolean {
 
 export function ArtifactList({ artifacts }: ArtifactListProps) {
   const [expanded, setExpanded] = useState(true)
-  const nonEmpty = artifacts.filter(hasContent)
+  const nonEmpty = withDistinctFileNames(artifacts.filter(hasContent))
 
   if (nonEmpty.length === 0) return null
 

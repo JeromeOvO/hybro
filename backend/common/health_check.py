@@ -24,17 +24,11 @@ class RuntimeHealthCheck:
         eventing_bus = getattr(request.app.state, "eventing_bus", None)
         if eventing_bus is not None:
             await eventing_bus.refresh_health()
-        cancellation_runtime = getattr(request.app.state, "cancellation_runtime", None)
-        if cancellation_runtime is not None:
-            await cancellation_runtime.refresh_health()
         redis_runtime = getattr(request.app.state, "redis_runtime", None)
         redis_service = getattr(redis_runtime, "command_client", None)
         result = self._compute_health_status(
             delivery_pubsub_connected=bool(
-                delivery_facade
-                and delivery_facade.delivery_pubsub_connected
-                and cancellation_runtime
-                and cancellation_runtime.redis_connected
+                delivery_facade and delivery_facade.delivery_pubsub_connected
             ),
             eventing_connected=(
                 not bool(self._redis_url)
@@ -45,17 +39,8 @@ class RuntimeHealthCheck:
             ),
             redis_runtime_connected=bool(redis_service and redis_service.is_connected),
             redis_url=self._redis_url,
-            change_stream_connected=bool(
-                cancellation_runtime and cancellation_runtime.change_stream_connected
-            ),
             agent_search_index_ready=bool(
                 getattr(request.app.state, "agent_search_index_ready", False)
-            ),
-            memory_search_index_ready=bool(
-                getattr(request.app.state, "memory_search_index_ready", False)
-            ),
-            search_indexes_ready=bool(
-                getattr(request.app.state, "search_indexes_ready", False)
             ),
         )
         return JSONResponse(content=result["body"], status_code=result["status_code"])

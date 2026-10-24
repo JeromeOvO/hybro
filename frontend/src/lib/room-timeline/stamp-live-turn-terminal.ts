@@ -11,7 +11,7 @@ import { useMessageStore } from '@/stores/message-store'
  * infer turnTerminalStatus from agent results and clear the live processing lifecycle.
  */
 export function stampLiveTurnTerminalIfInferable(
-  roomId: string,
+  conversationId: string,
   lifecycle: ProcessingLifecycle,
   hint: {
     clientRequestId?: string | null
@@ -19,23 +19,23 @@ export function stampLiveTurnTerminalIfInferable(
   },
 ): boolean {
   const store = useMessageStore.getState()
-  if (store.roomId !== roomId) return false
+  if (store.conversationId !== conversationId) return false
 
-  const user = findProcessingStatusUserEntity(roomId, {
+  const user = findProcessingStatusUserEntity(conversationId, {
     messageId: hint.relatedMessageId,
     clientRequestId: hint.clientRequestId,
     preferClientRequestId: true,
   })
   if (!user || user.turnTerminalStatus) return false
 
-  const roomOrderedIds = store.orderedIds.filter(id => store.entities[id]?.roomId === roomId)
+  const roomOrderedIds = store.orderedIds.filter(id => store.entities[id]?.conversationId === conversationId)
   const turn = buildTurns(store.entities, roomOrderedIds, []).find(t => t.userMessageId === user.id)
   if (!turn) return false
 
   const real = getStripSourceResults(turn)
   if (!isMultiAgentTurnReadyForDeterministicDone(turn, real)) {
-    return stampTurnTerminalFromBackendTruth(roomId, lifecycle, hint, null)
+    return stampTurnTerminalFromBackendTruth(conversationId, lifecycle, hint, null)
   }
 
-  return stampTurnTerminalFromBackendTruth(roomId, lifecycle, hint, false)
+  return stampTurnTerminalFromBackendTruth(conversationId, lifecycle, hint, false)
 }

@@ -19,5 +19,4 @@ class UnboundRoomRuntimeDependency:
         self._raise()
 
 
-UNBOUND_CANCELLATION_CONTROL = UnboundRoomRuntimeDependency("cancellation control")
 UNBOUND_RUNTIME_STORE = UnboundRoomRuntimeDependency("runtime store")

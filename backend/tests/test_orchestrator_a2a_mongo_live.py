@@ -8,13 +8,13 @@ from datetime import timedelta
 import pytest
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
+from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
+from execution.orchestrator.persistence import ORCHESTRATOR_RUN_INDEXES
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
     MongoObservationConflictStore,
     MongoRoomEpochStore,
 )
-from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
-from execution.orchestrator.persistence import ORCHESTRATOR_RUN_INDEXES
 
 from ._orchestrator_helpers import NOW, make_run
 
@@ -149,7 +149,7 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
         assert (
             await collection.count_documents(
                 {
-                    "room_id": race_base.room_id,
+                    "room_id": race_base.conversation_id,
                     "client_request_id": race_base.client_request_id,
                 }
             )
@@ -182,7 +182,7 @@ async def test_live_mongo_concurrent_exact_replays_are_classified():
         conflict_store = MongoObservationConflictStore(conflicts)
         conflict = A2AObservationConflictRecord(
             conflict_id="conflict-1",
-            room_id="room-1",
+            conversation_id="room-1",
             room_epoch=1,
             source_identity="source-1",
             accepted_observation_id="observation-1",

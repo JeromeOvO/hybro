@@ -9,26 +9,29 @@ A released install runs the published images pinned to its own version, so
 
 No command opens the Models/Services TUI when a terminal is available.
 Non-interactive use without a command prints this help.
-The TUI is centered and uses the frontend's cyan selection color. Its blue nested
-cubes expand/contract through each other at a fixed angle, without rotation.
-The logo loops while menus wait for input; Space pauses/resumes animation.
-Compact terminals omit the logo to preserve controls. No animation runs during commands.
+Space pauses or resumes the logo animation.
 The Services page offers Start, Stop, Reload configuration, View logs and MCP connection.
 Start services includes MCP. Exiting the TUI leaves services running.
+After Verify and save, the next Start services recreates the containers so the
+saved settings apply (services read configuration only at startup). From a
+source checkout, Start services and Reload configuration also rebuild images.
 MCP connection shows status, URL and Streamable HTTP transport, with Start MCP,
 Stop MCP, View MCP logs and Refresh status actions.
 Above Start services, each long-running service shows green active or red inactive.
 One-time setup jobs are omitted. The row wraps on narrow terminals.
 Status refreshes on entry and after actions; no background polling.
 Reload configuration confirms before recreating containers.
+The first Services visit in a session checks once (about 4 s at most) for a
+newer release and, if there is one, names it next to Upgrade hybro. A source
+checkout and an offline machine show no tip.
 View logs selects one container or All; Ctrl-C returns to the container picker.
 Advanced lifecycle commands remain available below.
 
 Configuration:
     setup
         Select Provider/authentication, authenticate, choose models, verify text,
-        and save config.json/auth.json. Requires uv and an interactive terminal
-        for browser OAuth or hidden API-key input. One text verification request
+        and save config.json/auth.json. Requires an interactive terminal for
+        browser OAuth or hidden API-key input (and uv from a source checkout). One text verification request
         uses API billing or subscription quota; images are never probed.
         OpenAI supports API Key or ChatGPT OAuth; DeepSeek and Anthropic use keys.
         OAuth does not enable image generation.

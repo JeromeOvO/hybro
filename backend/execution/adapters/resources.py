@@ -27,7 +27,7 @@ class RoomFileReader(Protocol):
     async def get_bytes(self, file_id: str, *, max_bytes: int) -> bytes | None: ...
 
     async def get_for_room_file(
-        self, room_id: str, file_id: str
+        self, conversation_id: str, file_id: str
     ) -> dict[str, Any] | None: ...
 
 
@@ -90,22 +90,24 @@ class RoomFilesResourceMaterializer:
             verify_room_file_ownership=self.verify_room_file_ownership,
         )
 
-    async def verify_room_file_ownership(self, room_id: str, file_id: str) -> None:
-        if not await self._room_files.get_for_room_file(room_id, file_id):
+    async def verify_room_file_ownership(
+        self, conversation_id: str, file_id: str
+    ) -> None:
+        if not await self._room_files.get_for_room_file(conversation_id, file_id):
             raise ResourceSelectionError("artifact is not owned by the room")
 
     async def materialize(
         self,
         manifest: FrozenCallResourceManifest,
         *,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         allowed_input_modes: list[str],
         deadline_at: Any,
     ) -> list[MaterializedResourcePart]:
         return await self._bounded.materialize(
             manifest,
-            room_id=room_id,
+            conversation_id=conversation_id,
             room_epoch=room_epoch,
             allowed_input_modes=allowed_input_modes,
             deadline_at=deadline_at,
@@ -125,12 +127,15 @@ class RoomFilesResourceMaterializer:
         )
 
     async def describe_artifact(
-        self, ref_id: str, *, room_id: str, room_epoch: int
+        self, ref_id: str, *, conversation_id: str, room_epoch: int
     ) -> PreparedResourceRef | None:
         inline = await self._read_inline_artifact(ref_id)
         if inline is not None:
             record, artifact, _part = inline
-            if record.room_id != room_id or record.room_epoch != room_epoch:
+            if (
+                record.conversation_id != conversation_id
+                or record.room_epoch != room_epoch
+            ):
                 raise ResourceSelectionError("inline artifact Room ownership changed")
             return PreparedResourceRef(
                 ref_id=ref_id,
@@ -141,7 +146,7 @@ class RoomFilesResourceMaterializer:
                 content_digest=artifact.content_digest,
             )
         file_id = _file_id_from_artifact_ref(ref_id)
-        metadata = await self._room_files.get_for_room_file(room_id, file_id)
+        metadata = await self._room_files.get_for_room_file(conversation_id, file_id)
         if metadata is None:
             return None
         digest = str(metadata.get("sha256") or "")
@@ -177,7 +182,7 @@ class RoomFilesResourceMaterializer:
             if ref.kind == "artifact"
             else ref.ref_id
         )
-        if not await self._room_files.get_for_room_file(ref.room_id, file_id):
+        if not await self._room_files.get_for_room_file(ref.conversation_id, file_id):
             raise ResourceSelectionError(
                 f"resource {ref.ref_id!r} is not owned by the room"
             )
@@ -227,7 +232,10 @@ class RoomFilesResourceMaterializer:
         inline: tuple[A2AObservationInboxRecord, InlineDataArtifact, DataPart],
     ) -> MaterializedResourcePart:
         record, artifact, part = inline
-        if record.room_id != ref.room_id or record.room_epoch != ref.room_epoch:
+        if (
+            record.conversation_id != ref.conversation_id
+            or record.room_epoch != ref.room_epoch
+        ):
             raise ResourceSelectionError("inline artifact Room ownership changed")
         if ref.content_digest and ref.content_digest != artifact.content_digest:
             raise ResourceSelectionError("inline artifact digest changed")

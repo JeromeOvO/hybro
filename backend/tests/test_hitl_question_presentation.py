@@ -17,14 +17,14 @@ from pydantic import ValidationError
 
 from a2a_adapter.orchestrator_direct_client import _continuation_text
 from api_gateway.routes.hitl_routes import _pending_hitl_public_payload
+from approval.exceptions import HITLConflictError
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer, HITLQuestionSpec
 from delivery.translator import to_sse_frame
-from execution.hitl.exceptions import HITLConflictError
 from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_request_events,
 )
-from execution.orchestrator_routing import DualRuntimeRouter, _map_legacy_answers
+from execution.orchestrator_routing import DualRuntimeRouter, _map_interaction_answers
 
 from ._orchestrator_a2a_helpers import ledger_record
 
@@ -230,7 +230,7 @@ async def test_application_port_accepts_skipped_optional_questions():
 
 
 def test_ui_text_maps_to_choices_or_other():
-    mapped = _map_legacy_answers(
+    mapped = _map_interaction_answers(
         structured_spec(),
         [
             {"request_id": "destination", "user_input": "Lisbon"},
@@ -255,7 +255,7 @@ def test_ui_text_maps_to_choices_or_other():
 
 
 def test_ui_text_matching_a_choice_selects_it():
-    [mapped] = _map_legacy_answers(
+    [mapped] = _map_interaction_answers(
         structured_spec(), [{"request_id": "destination", "user_input": "Kyoto"}]
     )
     assert mapped.answer.choice == "Kyoto"
@@ -264,7 +264,7 @@ def test_ui_text_matching_a_choice_selects_it():
 
 def test_ui_must_still_answer_required_questions():
     with pytest.raises(HITLConflictError, match="changed before submission"):
-        _map_legacy_answers(
+        _map_interaction_answers(
             structured_spec(), [{"request_id": "budget", "user_input": "1500"}]
         )
 
@@ -287,7 +287,6 @@ def test_agent_receives_other_answers_as_text():
 
 def canonical_run() -> SimpleNamespace:
     return SimpleNamespace(
-        lifecycle_family="canonical",
         request=SimpleNamespace(user_message_id="user-1"),
         client_request_id="cr-1",
         tool_batches=[
@@ -412,7 +411,7 @@ def approval_spec(**question: object) -> A2AInteractionSpec:
     ("ui_text", "decision"), [("Approve", "approve"), ("Reject", "deny")]
 )
 def test_ui_approve_and_reject_answer_a_policy_decision(ui_text, decision):
-    [mapped] = _map_legacy_answers(
+    [mapped] = _map_interaction_answers(
         approval_spec(), [{"request_id": "share", "user_input": ui_text}]
     )
     assert mapped.answer.kind == "policy_decision"
@@ -422,7 +421,7 @@ def test_ui_approve_and_reject_answer_a_policy_decision(ui_text, decision):
 
 def test_unrecognized_policy_decision_text_is_a_conflict():
     with pytest.raises(HITLConflictError, match="Approve or Reject"):
-        _map_legacy_answers(
+        _map_interaction_answers(
             approval_spec(), [{"request_id": "share", "user_input": "maybe"}]
         )
 
@@ -445,7 +444,9 @@ def test_ui_confirm_and_decline_answer_a_confirmation(ui_text, confirmed):
             ],
         }
     )
-    [mapped] = _map_legacy_answers(spec, [{"request_id": "go", "user_input": ui_text}])
+    [mapped] = _map_interaction_answers(
+        spec, [{"request_id": "go", "user_input": ui_text}]
+    )
     assert mapped.answer.confirmed is confirmed
 
 
@@ -531,3 +532,26 @@ def test_readable_answers_never_expose_references(question, value, text):
         {"question_id": "q", "prompt": "?", **question}
     )
     assert public_answer_text(spec, answer("q", value).answer, secret_values=()) == text
+
+
+def test_model_answer_text_keeps_choice_values_and_hides_references():
+    from execution.orchestrator.a2a_runtime.hitl_prompt import model_answer_text
+
+    assert (
+        model_answer_text(
+            answer("q", {"kind": "multi_choice", "choices": ["a"], "other": "b"}).answer
+        )
+        == "a, b"
+    )
+    assert (
+        model_answer_text(
+            answer(
+                "q",
+                {
+                    "kind": "authorization_result",
+                    "authorization_reference": "authref:a1",
+                },
+            ).answer
+        )
+        == "Signed in"
+    )

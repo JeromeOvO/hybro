@@ -15,13 +15,6 @@ from common.types import Message as InternalMessage
 from common.types import Task, TaskState, TaskStatus, TextPart
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
 from models.request import AgentTaskRequest, TaskRequest
 from models.room import (
     CoordinatorAgentId,
@@ -101,11 +94,10 @@ class TestRoomModel:
             room_owner_name="Test User",
         )
 
-        assert room.room_id is not None
+        assert room.conversation_id is not None
         assert room.room_name == "Test Room"
         assert room.room_owner_id == "user-123"
         assert room.room_agent_set == {}
-        assert room.processing_message_id is None
 
     def test_creates_room_with_agents(self):
         """Should create room with agent set."""
@@ -130,7 +122,7 @@ class TestRoomModel:
 
         data = room.model_dump()
 
-        assert "room_id" in data
+        assert "conversation_id" in data
         assert "room_name" in data
         assert data["room_name"] == "Test Room"
 
@@ -141,20 +133,20 @@ class TestRoomUserMessageModel:
     def test_creates_user_message(self):
         """Should create user message with correct type."""
         message = RoomUserMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             user_id="user-789",
             message_content=MessageContent(message_text="Hello"),
         )
 
         assert message.message_type == "user"
-        assert message.room_id == "room-123"
+        assert message.conversation_id == "room-123"
         assert message.message_content.message_text == "Hello"
 
     def test_user_message_with_extend_info(self):
         """Should support extend_info field."""
         message = RoomUserMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             message_content=MessageContent(message_text="Hello"),
             extend_info={"custom_field": "custom_value"},
@@ -169,7 +161,7 @@ class TestRoomAgentMessageModel:
     def test_creates_agent_message(self):
         """Should create agent message with correct type."""
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(message_text="Response"),
@@ -187,7 +179,7 @@ class TestRoomAgentMessageModel:
         )
 
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(
@@ -204,7 +196,7 @@ class TestRoomAgentMessageModel:
     def test_agent_message_step_tracking(self):
         """Should support step tracking fields."""
         message = RoomAgentMessage(
-            room_id="room-123",
+            conversation_id="room-123",
             message_id="msg-456",
             agent_id="agent-789",
             message_content=MessageContent(message_text="Step 1"),
@@ -237,6 +229,7 @@ class TestAgentModel:
     def test_creates_agent_with_defaults(self, sample_agent_card):
         """Should create agent with default values."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
         )
@@ -249,6 +242,7 @@ class TestAgentModel:
     def test_agent_status_serialization(self, sample_agent_card):
         """Should serialize agent status to string."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
             agent_status=AgentStatus.inactive,
@@ -260,6 +254,7 @@ class TestAgentModel:
     def test_agent_rate_limits(self, sample_agent_card):
         """Should support rate limit configuration."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
             rate_limit_per_user_per_hour=100,
@@ -281,96 +276,6 @@ class TestAgentStatus:
 
 
 # =============================================================================
-# Memory Model Tests
-# =============================================================================
-
-
-class TestConversationTurnModel:
-    """Tests for ConversationTurn model."""
-
-    def test_creates_user_turn(self):
-        """Should create user conversation turn."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.USER,
-            content="Hello",
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.FULL,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.role == TurnRole.USER
-        assert turn.content == "Hello"
-
-    def test_creates_agent_turn(self):
-        """Should create agent conversation turn."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.AGENT,
-            agent_id="agent-123",
-            agent_name="TestAgent",
-            content="Response",
-            content_type=ContentType.AGENT_RESPONSE,
-            representation=TurnRepresentation.FULL,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.role == TurnRole.AGENT
-        assert turn.agent_id == "agent-123"
-        assert turn.agent_name == "TestAgent"
-
-    def test_compact_turn_representation(self):
-        """Should support compact representation."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.USER,
-            content=None,  # Content stored externally
-            representation=TurnRepresentation.COMPACT,
-            brief_summary="User asked about weather",
-            estimated_tokens_full=100,
-            estimated_tokens_compact=20,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.representation == TurnRepresentation.COMPACT
-        assert turn.brief_summary is not None
-
-
-class TestRoomMemoryModel:
-    """Tests for RoomMemory model."""
-
-    def test_creates_room_memory(self):
-        """Should create room memory."""
-        memory = RoomMemory(
-            room_id="room-123",
-            memory_id=str(uuid4()),
-        )
-
-        assert memory.room_id == "room-123"
-        assert memory.total_compactions == 0
-
-    def test_room_memory_with_conversation_history(self):
-        """Should support conversation history."""
-        turns = [
-            ConversationTurn(
-                turn_id=str(uuid4()),
-                role=TurnRole.USER,
-                content="Hello",
-                timestamp=datetime.now(),
-            ),
-        ]
-
-        memory = RoomMemory(
-            room_id="room-123",
-            memory_id=str(uuid4()),
-            conversation_history=turns,
-        )
-
-        history = memory.get_conversation_history()
-        assert len(history) == 1
-
-
-# =============================================================================
 # HITL Model Tests
 # =============================================================================
 
@@ -381,7 +286,7 @@ def _hitl_identity(source: str) -> dict:
         "interaction_id": "interaction-1",
         "question_index": 0,
         "question_count": 1,
-        "application_route": ("a2a_resume" if source == "agent" else "supervisor_run"),
+        "application_route": "supervisor_run",
         "public_source": source,
         "evidence_origin": source,
     }
@@ -393,7 +298,7 @@ class TestHITLRequestModel:
     def test_creates_hitl_request(self):
         """Should create HITL request with defaults."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Please clarify",
@@ -406,7 +311,7 @@ class TestHITLRequestModel:
     def test_hitl_request_with_choices(self):
         """Should support choice prompt type."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Choose an option",
@@ -420,7 +325,7 @@ class TestHITLRequestModel:
     def test_hitl_request_agent_source(self):
         """Should support agent as source."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("agent"),
             prompt="Need more information",
@@ -434,7 +339,7 @@ class TestHITLRequestModel:
     def test_hitl_request_serialization(self):
         """Should serialize to JSON-compatible dict."""
         request = HITLRequest(
-            room_id="room-123",
+            conversation_id="room-123",
             user_message_id="msg-456",
             **_hitl_identity("supervisor"),
             prompt="Test prompt",
@@ -452,7 +357,7 @@ class TestHITLStatus:
     def test_hitl_status_values(self):
         """Should have expected status values."""
         assert HITLStatus.PENDING.value == "pending"
-        assert HITLStatus.PROCESSING.value == "processing"
+        assert "PROCESSING" not in HITLStatus.__members__
         assert HITLStatus.RESPONDED.value == "responded"
         assert HITLStatus.EXPIRED.value == "expired"
         assert HITLStatus.CANCELED.value == "canceled"

@@ -5,9 +5,13 @@ from typing import Any
 
 from common.protocols import MongoCollection, MongoDAL
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
+from common.utils.mongo_indexes import create_index
+from common.utils.room_state import delete_room_rows
 
 logger = get_logger(__name__)
+
+# Memory search was removed; its text index is no longer read.
+OBSOLETE_CONTENT_INDEXES = ("turn_notes_text",)
 
 
 class MemoryMongoRepository:
@@ -19,19 +23,32 @@ class MemoryMongoRepository:
     ) -> None:
         self._memories = mongo.collection(collection_name)
 
-    async def get_room_memory(self, room_id: str) -> dict | None:
-        return await self._memories.find_one({"room_id": room_id})
+    async def delete_room_state(self, conversation_id: str) -> bool:
+        return await delete_room_rows((self._memories,), conversation_id)
 
-    async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
+    async def ensure_indexes(self) -> None:
+        await create_index(
+            self._memories,
+            "room_memories",
+            [("room_id", 1)],
+            name="room_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
+        return await self._memories.find_one({"room_id": conversation_id})
+
+    async def upsert_room_memory(self, conversation_id: str, memory: dict) -> None:
         memory = _canonicalize_memory_document(memory)
         set_fields = _sanitize_update(memory)
         insert_doc = dict(memory)
-        insert_doc["room_id"] = room_id
+        insert_doc["room_id"] = conversation_id
         set_on_insert = {
             key: value for key, value in insert_doc.items() if key not in set_fields
         }
         await self._memories.update_one(
-            {"room_id": room_id},
+            {"room_id": conversation_id},
             {
                 "$set": set_fields,
                 "$setOnInsert": set_on_insert,
@@ -39,8 +56,8 @@ class MemoryMongoRepository:
             upsert=True,
         )
 
-    async def delete_room_memory(self, room_id: str) -> bool:
-        return await self._memories.delete_one({"room_id": room_id})
+    async def delete_room_memory(self, conversation_id: str) -> bool:
+        return await self._memories.delete_one({"room_id": conversation_id})
 
     async def create_room_memory(self, memory: dict) -> str:
         memory_id = memory.get("memory_id")
@@ -49,42 +66,22 @@ class MemoryMongoRepository:
         await self._memories.insert_one(_canonicalize_memory_document(memory))
         return str(memory_id)
 
-    async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
+    async def ensure_room_memory(self, conversation_id: str, defaults: dict) -> dict:
         defaults = _canonicalize_memory_document(defaults)
-        defaults["room_id"] = room_id
+        defaults["room_id"] = conversation_id
         doc = await self._memories.find_one_and_update(
-            {"room_id": room_id},
+            {"room_id": conversation_id},
             {"$setOnInsert": defaults},
             upsert=True,
             return_document=True,
         )
         if doc is None:
-            doc = await self.get_room_memory(room_id)
+            doc = await self.get_room_memory(conversation_id)
         return doc or defaults
-
-    async def push_and_trim_conversation_turn(
-        self,
-        room_id: str,
-        turn: dict,
-        *,
-        max_turns: int,
-        summary_stub: str,
-        max_summary_chars: int,
-    ) -> tuple[bool, bool]:
-        if max_turns <= 0:
-            return False, False
-        max_summary_chars = max(max_summary_chars, 10)
-        doc = await self._push_turn(
-            room_id, turn, max_turns, summary_stub, max_summary_chars
-        )
-        matched = doc is not None
-        # The append pipeline always changes a matched room by adding the new turn.
-        # That keeps the legacy modified/matched tuple semantics equivalent here.
-        return matched, matched
 
     async def push_and_trim_conversation_turn_if_absent(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         *,
         turn_id: str,
@@ -96,61 +93,43 @@ class MemoryMongoRepository:
             return False, False, False
         max_summary_chars = max(max_summary_chars, 10)
         query = {
-            "room_id": room_id,
+            "room_id": conversation_id,
             "conversation_history.turn_id": {"$ne": turn_id},
         }
         doc = await self._push_turn(
-            room_id, turn, max_turns, summary_stub, max_summary_chars, query=query
+            conversation_id,
+            turn,
+            max_turns,
+            summary_stub,
+            max_summary_chars,
+            query=query,
         )
         if doc is not None:
             return True, True, False
-        existing = await self.get_room_memory(room_id)
+        existing = await self.get_room_memory(conversation_id)
         if not existing:
             return False, False, False
         if _history_contains_turn(existing, turn_id):
             return False, True, True
         retry = await self._push_turn(
-            room_id, turn, max_turns, summary_stub, max_summary_chars, query=query
+            conversation_id,
+            turn,
+            max_turns,
+            summary_stub,
+            max_summary_chars,
+            query=query,
         )
         if retry is not None:
             return True, True, False
-        existing = await self.get_room_memory(room_id)
+        existing = await self.get_room_memory(conversation_id)
         if not existing:
             return False, False, False
         if _history_contains_turn(existing, turn_id):
             return False, True, True
         raise RuntimeError(f"Could not determine projection state for turn {turn_id}")
 
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return await self._memories.update_one(
-            {"room_id": room_id, "conversation_history.turn_id": turn_id},
-            {"$set": {"conversation_history.$[turn].turn_notes": turn_notes}},
-            array_filters=[{"turn.turn_id": turn_id}],
-        )
-
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
-        return await self._memories.find_one(
-            {"room_id": room_id},
-            projection={"room_summary": 1, "room_facts": 1, "room_id": 1},
-        )
-
-    async def update_room_summary_atomic(
-        self,
-        room_id: str,
-        room_summary: dict,
-        *,
-        new_facts: list[dict] | None = None,
-        max_facts: int = 50,
-    ) -> bool:
-        update: dict[str, Any] = {"$set": {"room_summary": room_summary}}
-        if new_facts:
-            update["$push"] = {"room_facts": {"$each": new_facts, "$slice": -max_facts}}
-        return await self._memories.update_one({"room_id": room_id}, update)
-
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         if not compacted_turns:
             return True
@@ -164,7 +143,7 @@ class MemoryMongoRepository:
         try:
             return await self._memories.update_one(
                 {
-                    "room_id": room_id,
+                    "room_id": conversation_id,
                     "conversation_history": full_turn_match,
                 },
                 _compact_turns_pipeline(compacted_turns),
@@ -175,7 +154,7 @@ class MemoryMongoRepository:
             logger.exception(
                 "Failed to compact turns atomically",
                 extra={
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "turn_count": len(compacted_turns),
                     "error_type": exc.__class__.__name__,
                 },
@@ -208,7 +187,7 @@ class MemoryMongoRepository:
 
     async def _push_turn(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         max_turns: int,
         summary_stub: str,
@@ -216,7 +195,7 @@ class MemoryMongoRepository:
         *,
         query: dict | None = None,
     ) -> dict | None:
-        query = query or {"room_id": room_id}
+        query = query or {"room_id": conversation_id}
         update = _push_turn_update(turn, max_turns, max_summary_chars)
         return await self._memories.find_one_and_update(
             query,
@@ -233,16 +212,65 @@ class ContentStorageMongoRepository:
         *,
         mongo: MongoDAL,
         collection_name: str = "conversation_content",
-        index_registry: Any | None = None,
     ) -> None:
         self._content: MongoCollection = mongo.collection(collection_name)
-        self._index_registry = index_registry
+
+    async def delete_room_state(self, conversation_id: str) -> bool:
+        return await delete_room_rows((self._content,), conversation_id)
+
+    async def ensure_indexes(self) -> None:
+        await self._drop_obsolete_indexes()
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("room_id", 1), ("turn_id", 1)],
+            name="room_turn_unique",
+            unique=True,
+            critical=True,
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("document_id", 1)],
+            name="document_id_unique",
+            unique=True,
+            partialFilterExpression={"document_id": {"$exists": True}},
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("room_id", 1), ("stored_at", -1)],
+            name="room_stored_at",
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("expires_at", 1)],
+            name="content_ttl",
+            expireAfterSeconds=0,
+            sparse=True,
+        )
+
+    async def _drop_obsolete_indexes(self) -> None:
+        """Drop indexes whose readers were removed; failure never blocks startup."""
+        existing = await self._content.index_information()
+        for name in OBSOLETE_CONTENT_INDEXES:
+            if name not in existing:
+                continue
+            try:
+                await self._content.drop_index(name)
+            except Exception as exc:
+                logger.warning(
+                    "Obsolete index removal failed for conversation_content.%s",
+                    name,
+                    extra={"error_type": type(exc).__name__},
+                )
 
     async def upsert_full_content(
         self,
         *,
         document_id: str,
-        room_id: str,
+        conversation_id: str,
         turn_id: str,
         content: str,
         content_type: str,
@@ -250,11 +278,10 @@ class ContentStorageMongoRepository:
         stored_at: datetime,
         turn_timestamp: datetime | str | None = None,
         expires_at: datetime | None = None,
-        turn_notes: dict | None = None,
     ) -> str:
         fields = {
             "document_id": document_id,
-            "room_id": room_id,
+            "room_id": conversation_id,
             "turn_id": turn_id,
             "content": content,
             "content_type": content_type,
@@ -262,10 +289,9 @@ class ContentStorageMongoRepository:
             "stored_at": stored_at,
             "turn_timestamp": turn_timestamp,
             "expires_at": expires_at,
-            "turn_notes": turn_notes,
         }
         doc = await self._content.find_one_and_update(
-            {"room_id": room_id, "turn_id": turn_id},
+            {"room_id": conversation_id, "turn_id": turn_id},
             {"$set": fields},
             upsert=True,
             return_document=True,
@@ -274,136 +300,22 @@ class ContentStorageMongoRepository:
             return doc["document_id"]
         return document_id
 
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
-        doc = await self._content.find_one({"document_id": document_id})
-        if doc is not None:
-            return doc
-        return await self._content.find_one_by_stable_or_native_id(
-            "document_id", document_id
+    async def get_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> dict | None:
+        return await self._content.find_one(
+            {"room_id": conversation_id, "turn_id": turn_id}
         )
 
-    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
-        return await self._content.find_one({"room_id": room_id, "turn_id": turn_id})
-
-    async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
-        return await self._content.delete_one({"room_id": room_id, "turn_id": turn_id})
-
-    async def delete_content_by_room_id(self, room_id: str) -> int:
-        return await self._content.delete_many({"room_id": room_id})
-
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        pipeline = [
-            {"$match": {"room_id": room_id}},
-            {
-                "$group": {
-                    "_id": "$content_type",
-                    "count": {"$sum": 1},
-                    "total_size": {"$sum": {"$strLenBytes": "$content"}},
-                }
-            },
-        ]
-        rows = await self._content.aggregate(pipeline)
-        stats = {
-            "room_id": room_id,
-            "by_type": {},
-            "total_documents": 0,
-            "total_size_bytes": 0,
-        }
-        for row in rows:
-            content_type = row.get("_id")
-            count = row.get("count", 0)
-            size = row.get("total_size", 0)
-            stats["by_type"][content_type] = {"count": count, "size_bytes": size}
-            stats["total_documents"] += count
-            stats["total_size_bytes"] += size
-        return stats
-
-    async def text_search(
-        self,
-        room_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]:
-        return await self._content.find(
-            {
-                "room_id": room_id,
-                "$text": {"$search": query},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "score": {"$meta": "textScore"},
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content_type": 1,
-                "stored_at": 1,
-                "turn_timestamp": 1,
-                "expires_at": 1,
-            },
-            sort=[
-                ("score", {"$meta": "textScore"}),
-                ("turn_timestamp", -1),
-                ("stored_at", -1),
-                ("turn_id", 1),
-            ],
-            limit=limit,
-            skip=skip,
+    async def delete_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> bool:
+        return await self._content.delete_one(
+            {"room_id": conversation_id, "turn_id": turn_id}
         )
 
-    async def scan_text_search(
-        self, room_id: str, query: str, limit: int
-    ) -> list[dict]:
-        """Read a bounded set of lightweight keyword candidates.
-
-        Full content remains excluded and is hydrated separately in bounded
-        batches by the search service.
-        """
-        return await self._content.find(
-            {
-                "room_id": room_id,
-                "$text": {"$search": query},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "score": {"$meta": "textScore"},
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content_type": 1,
-                "stored_at": 1,
-                "turn_timestamp": 1,
-                "expires_at": 1,
-            },
-            sort=[
-                ("score", {"$meta": "textScore"}),
-                ("turn_timestamp", -1),
-                ("stored_at", -1),
-                ("turn_id", 1),
-            ],
-            limit=max(1, int(limit)),
-        )
-
-    async def hydrate_turn_content(
-        self, room_id: str, turn_ids: list[str]
-    ) -> list[dict]:
-        if not turn_ids:
-            return []
-        return await self._content.find(
-            {
-                "room_id": room_id,
-                "turn_id": {"$in": turn_ids},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content": 1,
-                "content_type": 1,
-                "turn_timestamp": 1,
-                "stored_at": 1,
-                "expires_at": 1,
-            },
-            limit=len(turn_ids),
-        )
+    async def delete_content_by_room_id(self, conversation_id: str) -> int:
+        return await self._content.delete_many({"room_id": conversation_id})
 
 
 def _canonicalize_memory_document(memory: dict) -> dict:
@@ -421,16 +333,6 @@ def _sanitize_update(updates: dict) -> dict:
     immutable = {"_id", "room_id", "memory_id"}
     canonical = _canonicalize_memory_document(updates)
     return {key: value for key, value in canonical.items() if key not in immutable}
-
-
-def _unexpired_content_query() -> dict:
-    return {
-        "$or": [
-            {"expires_at": {"$exists": False}},
-            {"expires_at": None},
-            {"expires_at": {"$gt": utcnow()}},
-        ]
-    }
 
 
 def _history_contains_turn(doc: dict, turn_id: str) -> bool:

@@ -3,13 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
+from approval.repository import HITLLifecycleStore, HITLRequestStore
 from common.a2a_constants import TERMINAL_STATES
-from dal.runtime_store import RuntimeRepositoryStore
-from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+from conversation.repository import ConversationMessageStore
 
 
 class FakeMongo:
@@ -103,72 +102,47 @@ def _result(modified_count: int):
     return SimpleNamespace(modified_count=modified_count)
 
 
+class _Stores:
+    """Message calls go to the conversation store, HITL calls to the approval stores."""
+
+    def __init__(self, mongo: FakeMongo) -> None:
+        message_store = ConversationMessageStore(
+            room_agent_messages=mongo.collection("room_agent_messages"),
+            room_user_messages=mongo.collection("room_user_messages"),
+            message_repository=object(),
+        )
+        self._targets = (
+            message_store,
+            HITLRequestStore(
+                hitl_requests=mongo.collection("hitl_requests"),
+                message_writer=message_store,
+            ),
+            HITLLifecycleStore(
+                interactions=mongo.collection("hitl_interactions"),
+                resume_commands=mongo.collection("hitl_resume_commands"),
+                hitl_requests=mongo.collection("hitl_requests"),
+            ),
+        )
+
+    def __getattr__(self, name: str):
+        for target in self._targets:
+            if hasattr(target, name):
+                return getattr(target, name)
+        raise AttributeError(name)
+
+
 def _store(
     collection: RecordingCollection | None = None,
     *,
     hitl_collection: RecordingCollection | None = None,
-) -> RuntimeRepositoryStore:
-    return RuntimeRepositoryStore(
-        mongo=FakeMongo(
+) -> _Stores:
+    return _Stores(
+        FakeMongo(
             {
                 "room_agent_messages": collection or RecordingCollection(),
                 "hitl_requests": hitl_collection or RecordingCollection(),
             }
-        ),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-
-@pytest.mark.asyncio
-async def test_message_store_persists_task_metadata_on_task_state_update():
-    repository = SimpleNamespace(
-        update_agent_message_if_not_terminal=AsyncMock(return_value=True)
-    )
-    store = MessageRuntimeStorePart(
-        room_agent_messages=object(),
-        room_user_messages=object(),
-        message_repository=repository,
-    )
-
-    updated, _ = await store.update_task_state_on_message(
-        "message-1",
-        "completed",
-        message_text="done",
-        artifacts=[],
-        task_metadata={"end_turn": True},
-    )
-
-    assert updated is True
-    updates = repository.update_agent_message_if_not_terminal.await_args.args[1]
-    assert updates["message_content.message_task.metadata"] == {"end_turn": True}
-
-
-@pytest.mark.asyncio
-async def test_repository_store_forwards_task_metadata_on_task_state_update():
-    delegate = SimpleNamespace(
-        update_task_state_on_message=AsyncMock(return_value=(True, "done"))
-    )
-    store = object.__new__(RuntimeRepositoryStore)
-    store._message_part = delegate
-
-    result = await store.update_task_state_on_message(
-        "message-1",
-        "completed",
-        message_text="done",
-        task_metadata={"end_turn": True},
-    )
-
-    assert result == (True, "done")
-    delegate.update_task_state_on_message.assert_awaited_once_with(
-        "message-1",
-        "completed",
-        message_text="done",
-        artifacts=None,
-        task_id=None,
-        context_id=None,
-        task_metadata={"end_turn": True},
+        )
     )
 
 
@@ -218,63 +192,6 @@ async def test_terminal_finalization_without_recovery_id_never_matches():
         recovery_id=None,
     )
     assert collection.find_one_calls == []
-
-
-@pytest.mark.asyncio
-async def test_check_task_limits_honors_compatibility_store_overrides():
-    class CountingMessageRepository:
-        async def count_agent_messages(self, query: dict) -> int:
-            return 1
-
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=CountingMessageRepository(),
-        agent_repository=object(),
-    )
-    store.MAX_TASKS_PER_USER = 1
-    store.MAX_TASKS_PER_ROOM = 1
-
-    with pytest.raises(ValueError, match="User has too many pending tasks"):
-        await store.check_task_limits("user-1", "room-1", ["working"])
-
-
-def test_webhook_token_helpers_do_not_require_repository_attributes():
-    store = object.__new__(RuntimeRepositoryStore)
-
-    token = store.generate_webhook_token()
-
-    assert isinstance(token, str)
-    assert len(token) > 0
-
-
-def test_webhook_token_helpers_live_in_shared_module():
-    from dal.runtime_store.parts import webhook_tokens
-
-    assert callable(webhook_tokens.generate_webhook_token)
-    assert callable(webhook_tokens.hash_webhook_token)
-    assert callable(webhook_tokens.verify_webhook_token)
-
-
-@pytest.mark.asyncio
-async def test_check_task_limits_passes_facade_limits_without_mutating_part():
-    class CountingMessageRepository:
-        async def count_agent_messages(self, query: dict) -> int:
-            return 1
-
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=CountingMessageRepository(),
-        agent_repository=object(),
-    )
-    store.MAX_TASKS_PER_USER = 2
-    store.MAX_TASKS_PER_ROOM = 2
-
-    await store.check_task_limits("user-1", "room-1", ["working"])
-
-    assert "MAX_TASKS_PER_USER" not in store.tasks.__dict__
-    assert "MAX_TASKS_PER_ROOM" not in store.tasks.__dict__
 
 
 class TestRepositoryStoreAccumulateArtifact:
@@ -472,24 +389,12 @@ class TestRepositoryStoreHITL:
         )
 
     @pytest.mark.asyncio
-    async def test_stale_processing_iterator_and_indexes_use_hitl_collection(self):
-        docs = [{"request_id": "h1"}]
-        hitl_requests = RecordingCollection([docs])
+    async def test_indexes_use_hitl_collection(self):
+        hitl_requests = RecordingCollection([])
         store = _store(hitl_collection=hitl_requests)
 
-        result = [
-            doc
-            async for doc in store.iter_stale_processing_hitl_requests("cutoff-time")
-        ]
-        await store.ensure_hitl_indexes()
+        await store.ensure_indexes()
 
-        assert result == docs
-        assert hitl_requests.find_calls == [
-            (
-                {"status": "processing", "responded_at": {"$lt": "cutoff-time"}},
-                {},
-            )
-        ]
         assert hitl_requests.create_index_calls == [
             ([("request_id", 1)], {"unique": True}),
             ([("room_id", 1), ("status", 1)], {}),

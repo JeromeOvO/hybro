@@ -2,21 +2,21 @@ import type { RawTimelineEvent } from './types'
 
 let eventStore: Map<string, RawTimelineEvent[]> = new Map()
 
-export function appendEvent(roomId: string, event: RawTimelineEvent): void {
-  const existing = eventStore.get(roomId)
+export function appendEvent(conversationId: string, event: RawTimelineEvent): void {
+  const existing = eventStore.get(conversationId)
   if (existing) {
     existing.push(event)
   } else {
-    eventStore.set(roomId, [event])
+    eventStore.set(conversationId, [event])
   }
 }
 
-export function getEvents(roomId: string): readonly RawTimelineEvent[] {
-  return eventStore.get(roomId) ?? []
+export function getEvents(conversationId: string): readonly RawTimelineEvent[] {
+  return eventStore.get(conversationId) ?? []
 }
 
-export function clearRoom(roomId: string): void {
-  eventStore.delete(roomId)
+export function clearRoom(conversationId: string): void {
+  eventStore.delete(conversationId)
 }
 
 export function resetEventStore(): void {

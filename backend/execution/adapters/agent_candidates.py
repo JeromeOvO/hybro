@@ -87,12 +87,12 @@ class AgentServiceCandidateSource:
         self,
         *,
         run_id: str,
-        room_id: str,
+        conversation_id: str,
         room_epoch: int,
         requesting_subject_id: str,
         candidate_agent_ids: list[str],
     ) -> list[AgentToolCandidate]:
-        del run_id, room_id, room_epoch
+        del run_id, conversation_id, room_epoch
         excluded = (
             await self._exclusion_reader.get_excluded_agent_ids()
             if self._exclusion_reader is not None
@@ -107,7 +107,7 @@ class AgentServiceCandidateSource:
             raw_card = dict(getattr(info, "raw_card", None) or {})
             active = str(getattr(info, "status", "") or "") == "active"
             authorized = bool(
-                getattr(info, "is_public", True)
+                info.is_public
                 or getattr(info, "provider_id", None) == requesting_subject_id
             )
             transport_kind = "direct"
@@ -176,7 +176,7 @@ class AgentServiceCandidateSource:
                 )
 
             # Skill-bearing cards expose only their explicit skill tools. A
-            # skill-less legacy card (including one with no usable entries)
+            # skill-less card (including one with no usable entries)
             # retains a single whole-Agent fallback.
             if not usable_skills:
                 identity = (info.agent_id, None)

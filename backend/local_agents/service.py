@@ -147,6 +147,9 @@ class LocalAgentService:
                 inactive_ids.append(agent_id)
 
         deactivated = await self._writer.mark_local_agents_inactive(inactive_ids)
+        pruned = await self._writer.prune_inactive_local_agents()
+        if pruned:
+            logger.info("local_agent_records_pruned count=%s", pruned)
         return LocalAgentDiscoveryResult(
             trigger=effective_trigger,
             open_ports=len(open_ports),

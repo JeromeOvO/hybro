@@ -104,6 +104,36 @@ def make_legacy_card(
     )
 
 
+def make_v03_card_json(
+    *,
+    url: str = "https://legacy-agent.example.com/a2a",
+    preferred_transport: str = JSONRPC_BINDING,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Return an agent card exactly as an A2A 0.3 agent serves it on the wire."""
+    data: dict[str, Any] = {
+        "protocolVersion": "0.3.0",
+        "name": "Legacy Agent",
+        "description": "An A2A 0.3 agent",
+        "url": url,
+        "preferredTransport": preferred_transport,
+        "version": "0.0.1",
+        "capabilities": {"streaming": True, "pushNotifications": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [
+            {
+                "id": "echo",
+                "name": "Echo",
+                "description": "Echoes input",
+                "tags": ["echo"],
+            }
+        ],
+    }
+    data.update(overrides)
+    return data
+
+
 def text_part(text: str) -> Part:
     part = Part()
     part.text = text
@@ -126,6 +156,7 @@ __all__ = [
     "make_agent_card",
     "make_legacy_card",
     "make_skill",
+    "make_v03_card_json",
     "text_part",
     "user_message",
 ]

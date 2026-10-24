@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useRoomUiStore } from "@/stores/room-ui-store"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import { createAgent } from "../../fixtures"
 import type { Agent } from "@/lib/types/agent"
 import { Palmtree } from "lucide-react"
 
@@ -21,21 +22,7 @@ vi.mock("sonner", () => ({
 }))
 
 function makeAgent(id: string, name: string): Agent {
-  return {
-    agent_id: id,
-    agent_card: {
-      name,
-      description: "",
-      url: `https://example.com/${id}`,
-      version: "1.0.0",
-      provider: { organization: "test", url: "https://test.com" },
-      capabilities: {},
-      protocolVersion: "1.0.0",
-      skills: [],
-      defaultInputModes: ["text"],
-      defaultOutputModes: ["text"],
-    },
-  }
+  return createAgent({ agent_id: id, name })
 }
 
 const catalog: Agent[] = [
@@ -64,7 +51,7 @@ describe("useChatRoomCreation.createFromTemplate", () => {
     useRoomUiStore.setState({ pendingRoomData: {} })
     mockCreateNewRoom.mockResolvedValue({
       success: true,
-      room: { room_id: "new-room-123" },
+      room: { conversation_id: "new-room-123" },
     })
   })
 
@@ -107,14 +94,9 @@ describe("useChatRoomCreation.createFromTemplate", () => {
     expect(mockCreateNewRoom).toHaveBeenCalledOnce()
     const args = mockCreateNewRoom.mock.calls[0]
     expect(args[0]).toBe("Travel Planner")
-    expect(args[1]).toBe("user-1")
-    expect(args[2]).toBe("Test User")
+    expect(args[1]).toBe("Test User")
+    expect(args[3]).toEqual({ use_supervisor: true })
     expect(args[4]).toEqual({
-      "weather-1": "Weather Agent",
-      "travel-1": "Travel Planner Agent",
-    })
-    expect(args[5]).toEqual({ use_supervisor: true })
-    expect(args[7]).toEqual({
       membership_seed_input: "manual",
       room_agent_ids: ["weather-1", "travel-1"],
     })

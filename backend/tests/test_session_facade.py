@@ -163,7 +163,7 @@ class FakeRooms:
         self.created.append(request)
         agent_ids = list(request.membership_seed.agent_ids or [])
         room = RoomInfo(
-            room_id=next(self._ids),
+            conversation_id=next(self._ids),
             room_name=request.room_name,
             owner_id=request.owner_id,
             owner_name=request.owner_name,
@@ -171,39 +171,39 @@ class FakeRooms:
             agent_set={a: self.names[a] for a in agent_ids},
             owner_product=request.owner_product,
         )
-        self.rooms[room.room_id] = room
+        self.rooms[room.conversation_id] = room
         return room
 
-    async def delete_room(self, room_id: str, owner_id: str) -> bool:
-        self.deleted.append((room_id, owner_id))
-        return self.rooms.pop(room_id, None) is not None
+    async def delete_room(self, conversation_id: str, owner_id: str) -> bool:
+        self.deleted.append((conversation_id, owner_id))
+        return self.rooms.pop(conversation_id, None) is not None
 
-    async def update_room(self, room_id: str, updates: dict) -> RoomInfo | None:
+    async def update_room(self, conversation_id: str, updates: dict) -> RoomInfo | None:
         raise AssertionError("not used")
 
     async def update_membership(
-        self, room_id: str, request: MembershipUpdateRequest
+        self, conversation_id: str, request: MembershipUpdateRequest
     ) -> RoomInfo:
-        self.membership_updates.append((room_id, request))
-        room = self.rooms[room_id]
+        self.membership_updates.append((conversation_id, request))
+        room = self.rooms[conversation_id]
         agent_set = dict(room.agent_set)
         for agent_id in request.add_agent_ids or []:
             agent_set[agent_id] = self.names[agent_id]
         room = room.model_copy(
             update={"agent_set": agent_set, "agent_ids": list(agent_set)}
         )
-        self.rooms[room_id] = room
+        self.rooms[conversation_id] = room
         return room
 
-    async def get_room(self, room_id: str) -> RoomInfo | None:
-        return self.rooms.get(room_id)
+    async def get_room(self, conversation_id: str) -> RoomInfo | None:
+        return self.rooms.get(conversation_id)
 
-    async def get_room_agents(self, room_id: str) -> list[str]:
-        room = self.rooms.get(room_id)
+    async def get_room_agents(self, conversation_id: str) -> list[str]:
+        room = self.rooms.get(conversation_id)
         return list(room.agent_ids) if room else []
 
-    async def get_room_owner(self, room_id: str) -> str | None:
-        room = self.rooms.get(room_id)
+    async def get_room_owner(self, conversation_id: str) -> str | None:
+        room = self.rooms.get(conversation_id)
         return room.owner_id if room else None
 
 
@@ -219,8 +219,10 @@ class FakeMessages:
     async def get_messages_by_ids(self, message_ids: list[str]):
         return [self.by_id[m] for m in message_ids if m in self.by_id]
 
-    async def get_messages_for_room(self, room_id, limit=100, before=None):
-        return [m for m in self.by_id.values() if m.room_id == room_id][:limit]
+    async def get_messages_for_room(self, conversation_id, limit=100, before=None):
+        return [m for m in self.by_id.values() if m.conversation_id == conversation_id][
+            :limit
+        ]
 
     async def get_message_thread(self, parent_message_id: str):
         return []
@@ -256,7 +258,7 @@ class FakeEngine:
         else:
             self._message_counter += 1
             ack = ExecutionAck(
-                room_id=request.room_id,
+                conversation_id=request.conversation_id,
                 message_id=f"msg-{self._message_counter}",
                 success=True,
                 should_start_orchestration=True,
@@ -272,36 +274,36 @@ class FakeEngine:
     def schedule_orchestration(self, request, ack) -> None:
         self.scheduled.append((request, ack))
         self.pending_events = [
-            (request.room_id, request.client_request_id, kind, payload)
+            (request.conversation_id, request.client_request_id, kind, payload)
             for kind, payload in self.on_schedule
         ]
 
     async def flush(self) -> None:
-        for room_id, correlation, kind, payload in getattr(self, "pending_events", []):
+        for conversation_id, correlation, kind, payload in getattr(
+            self, "pending_events", []
+        ):
             await append_event(
-                self.events, room_id, kind, payload, correlation, self.run_id
+                self.events, conversation_id, kind, payload, correlation, self.run_id
             )
         self.pending_events = []
 
-    async def cancel(self, room_id, message_id, *, requested_by_user_id):
-        self.canceled.append((room_id, message_id, requested_by_user_id))
+    async def cancel(self, conversation_id, message_id, *, requested_by_user_id):
+        self.canceled.append((conversation_id, message_id, requested_by_user_id))
         if self.cancel_error is not None:
             raise self.cancel_error
         return True
 
-    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
-        return [run for run in self.runs if run.room_id == room_id]
-
-    async def get_run(self, run_id):
-        return None
+    async def get_runs_for_room(self, conversation_id: str) -> list[RunInfo]:
+        return [run for run in self.runs if run.conversation_id == conversation_id]
 
     async def get_latest_runs_for_rooms(self, room_ids):
-        return {run.room_id: run for run in self.runs if run.room_id in room_ids}
+        return {
+            run.conversation_id: run
+            for run in self.runs
+            if run.conversation_id in room_ids
+        }
 
     async def cancel_inflight_tasks(self) -> int:
-        return 0
-
-    async def heal_diverged_runs(self, limit: int = 500) -> int:
         return 0
 
 
@@ -311,11 +313,13 @@ class FakeApprovals:
     canceled: list[tuple[str, str, int]] = field(default_factory=list)
     cancel_error: Exception | None = None
 
-    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
-        return [p for p in self.pending if p.room_id == room_id]
+    async def get_pending_hitl(self, conversation_id: str) -> list[HITLRequest]:
+        return [p for p in self.pending if p.conversation_id == conversation_id]
 
-    async def cancel_hitl_interaction(self, room_id, interaction_id, expected_version):
-        self.canceled.append((room_id, interaction_id, expected_version))
+    async def cancel_hitl_interaction(
+        self, conversation_id, interaction_id, expected_version
+    ):
+        self.canceled.append((conversation_id, interaction_id, expected_version))
         if self.cancel_error is not None:
             raise self.cancel_error
         return expected_version + 1
@@ -357,7 +361,7 @@ class VirtualClock:
 
 async def append_event(
     events: InMemoryRoomEventStore,
-    room_id: str,
+    conversation_id: str,
     kind: str,
     payload: dict[str, Any],
     correlation_id: str | None,
@@ -377,7 +381,7 @@ async def append_event(
         }
         kind = "run_event"
     await events.append(
-        room_id=room_id, kind=kind, payload_public=payload_public, ts=ts
+        conversation_id=conversation_id, kind=kind, payload_public=payload_public, ts=ts
     )
 
 
@@ -473,9 +477,9 @@ def make_harness(
     )
 
 
-def final_message(message_id: str, room_id: str, text: str) -> RoomMessageInfo:
+def final_message(message_id: str, conversation_id: str, text: str) -> RoomMessageInfo:
     return RoomMessageInfo(
-        room_id=room_id,
+        conversation_id=conversation_id,
         message_id=message_id,
         message_type="agent",
         content={"message_text": text},
@@ -523,12 +527,12 @@ async def test_execution_request_is_passthrough_with_one_agent_mention():
 
     request = h.engine.executed[0]
     assert request.mode == "passthrough"
-    assert request.room_id == "conv-1"
+    assert request.conversation_id == "conv-1"
     assert request.sender_id == OWNER.user_id
     assert request.sender_name == "Buyer agent"
     assert request.client_request_id == "cr-1"
     assert request.message == {
-        "room_id": "conv-1",
+        "conversation_id": "conv-1",
         "message_id": "",
         "message_type": "user",
         "message_content": {"message_text": "Plan a weekend in Lyon"},
@@ -592,7 +596,7 @@ async def test_reuse_by_handle_adds_second_agent_to_same_container():
 
     assert second.session_id == first.session_id
     assert len(h.rooms.created) == 1
-    assert h.engine.executed[1].room_id == "conv-1"
+    assert h.engine.executed[1].conversation_id == "conv-1"
     assert h.rooms.rooms["conv-1"].agent_ids == [AGENT, OTHER_AGENT]
     assert h.store.records["sess-1"].last_accepted_agent_id == OTHER_AGENT
 
@@ -634,7 +638,7 @@ async def test_retry_completes_a_reservation_left_without_container():
 async def test_concurrent_create_keeps_one_container_and_deletes_the_loser():
     h = make_harness(on_schedule=[STARTED, settled("completed", final_message_id="f1")])
     h.rooms.rooms["conv-winner"] = RoomInfo(
-        room_id="conv-winner",
+        conversation_id="conv-winner",
         room_name="winner",
         owner_id=OWNER.user_id,
         owner_product="session",
@@ -645,7 +649,7 @@ async def test_concurrent_create_keeps_one_container_and_deletes_the_loser():
 
     assert h.store.records["sess-1"].conversation_id == "conv-winner"
     assert h.rooms.deleted == [("conv-1", OWNER.user_id)]
-    assert h.engine.executed[0].room_id == "conv-winner"
+    assert h.engine.executed[0].conversation_id == "conv-winner"
 
 
 @pytest.mark.asyncio
@@ -758,7 +762,7 @@ async def test_first_send_requires_client_label():
 
 def _run(state, *, trigger="msg-1", room="conv-1") -> RunInfo:
     return RunInfo(
-        run_id="run-1", room_id=room, state=state, trigger_message_id=trigger
+        run_id="run-1", conversation_id=room, state=state, trigger_message_id=trigger
     )
 
 
@@ -826,7 +830,7 @@ def test_pinned_execute_conflict_strings_match_the_engine():
 
     root = Path(__file__).resolve().parents[1]
     facade_source = (root / "execution/facade.py").read_text()
-    runtime_source = (root / "conversation/runtime.py").read_text()
+    runtime_source = (root / "conversation/message_sending.py").read_text()
     assert WAITING_FOR_INPUT in facade_source
     assert ALREADY_PROCESSING in facade_source
     assert '"The client_request_id was already used for a different request"' in (
@@ -1000,7 +1004,7 @@ async def test_other_cancellation_maps_to_failed():
 
 def _replay_ack() -> ExecutionAck:
     return ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id="msg-1",
         success=True,
         should_start_orchestration=False,
@@ -1096,7 +1100,7 @@ async def test_owner_record_reports_paused_agent_from_trigger_message():
     h.engine.runs = [_run(RunState.AWAITING_INPUT, trigger="msg-1")]
     h.messages.add(
         RoomMessageInfo(
-            room_id="conv-1",
+            conversation_id="conv-1",
             message_id="msg-1",
             message_type="user",
             content={"message_text": "x"},
@@ -1164,7 +1168,7 @@ async def test_list_and_record_are_owner_views_with_conversation_id():
 def _pending(version: int = 3) -> HITLRequest:
     return HITLRequest(
         request_id="req-1",
-        room_id="conv-1",
+        conversation_id="conv-1",
         user_message_id="msg-1",
         source="agent",
         prompt="Which hotel may I book?",
@@ -1426,7 +1430,7 @@ async def test_reply_times_are_utc():
 
 def user_message(message_id: str, text: str) -> RoomMessageInfo:
     return RoomMessageInfo(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id=message_id,
         message_type="user",
         content={"message_text": text},
@@ -1460,7 +1464,7 @@ async def test_history_lists_each_request_with_its_reply_oldest_first():
     )
     # The owner's question and answer are in the log but never reach the client.
     await h.events.append(
-        room_id="conv-1",
+        conversation_id="conv-1",
         kind="hitl_request",
         payload_public={"request_id": "q1", "prompt": "Which hotel budget?"},
     )
@@ -1503,14 +1507,14 @@ async def test_concurrent_sends_of_one_request_list_it_once():
     first = await h.send()
     h.engine.acks = [
         ExecutionAck(
-            room_id="conv-1",
+            conversation_id="conv-1",
             message_id="msg-2",
             success=True,
             should_start_orchestration=True,
             preflight_outcome="ready",
         ),
         ExecutionAck(
-            room_id="conv-1",
+            conversation_id="conv-1",
             message_id="msg-2",
             success=True,
             should_start_orchestration=False,
@@ -1545,14 +1549,14 @@ async def test_the_creating_send_schedules_its_run_even_when_it_loses_the_record
     h = make_harness(on_schedule=[started("msg-1")])
     first = await h.send()
     start = ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id="msg-2",
         success=True,
         should_start_orchestration=True,
         preflight_outcome="ready",
     )
     replay = ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id="msg-2",
         success=True,
         should_start_orchestration=False,
@@ -1573,10 +1577,12 @@ async def test_the_creating_send_schedules_its_run_even_when_it_loses_the_record
 
     real_latest_seq = h.facade._waiter.latest_seq
 
-    async def latest_seq(room_id: str) -> int:
+    async def latest_seq(conversation_id: str) -> int:
         # A room event lands between the two sends' reads.
-        seq = await real_latest_seq(room_id)
-        await h.events.append(room_id=room_id, kind="noise", payload_public={})
+        seq = await real_latest_seq(conversation_id)
+        await h.events.append(
+            conversation_id=conversation_id, kind="noise", payload_public={}
+        )
         return seq
 
     real_earlier = h.facade._earlier_receipt
@@ -1644,7 +1650,7 @@ async def test_a_losing_duplicate_send_reports_the_recorded_request():
     # engine call returns after the run settled and the start grace passed.
     h.clock.now = 30.0
     h.engine.ack = ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id="msg-2",
         success=True,
         should_start_orchestration=False,
@@ -1677,7 +1683,7 @@ async def test_a_losing_duplicate_send_is_not_reported_busy():
     # reaches the busy check.
     h.engine.runs = [_run(RunState.PROCESSING, trigger="msg-2")]
     h.engine.ack = ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id="msg-2",
         success=True,
         should_start_orchestration=False,
@@ -1696,7 +1702,7 @@ async def test_reusing_an_earlier_request_id_for_other_text_conflicts():
     h = make_harness()
     first = await _two_completed_requests(h)
     h.engine.ack = ExecutionAck(
-        room_id="conv-1",
+        conversation_id="conv-1",
         message_id=None,
         success=False,
         error=FINGERPRINT_CONFLICT,

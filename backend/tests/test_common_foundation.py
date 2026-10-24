@@ -16,7 +16,6 @@ from common.dto import (
     AgentMessagePartial,
     ArtifactUpdateEvent,
     CancellationEvent,
-    DeliveryEnvelope,
     DeliveryEvent,
     DeliveryEventBase,
     ErrorEvent,
@@ -43,18 +42,18 @@ def test_frozen_dto_is_immutable():
 
 def test_frozen_dto_container_fields_are_immutable():
     agent = AgentInfo(agent_id="a1", capabilities=["search"])
-    delivery = DeliveryEnvelope(room_id="r1", event_type="message", payload={"x": 1})
+    delivery = AgentInfo(agent_id="a2", raw_card={"x": 1})
 
     with pytest.raises(TypeError):
         agent.capabilities += ("write",)
 
     with pytest.raises(TypeError):
-        delivery.payload["x"] = 2
+        delivery.raw_card["x"] = 2
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert '"capabilities":["search"]' in agent.model_dump_json()
-        assert '"payload":{"x":1}' in delivery.model_dump_json()
+        assert '"raw_card":{"x":1}' in delivery.model_dump_json()
 
 
 def test_common_foundation_subpackages_are_packaged():
@@ -126,39 +125,6 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
     assert not violations, (
         "Common utility dependency seams are broad globals:\n" + "\n".join(violations)
     )
-
-
-def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
-    from common.client.card_resolver import A2ACardResolver
-    from common.types import A2AClientJSONError
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "name": "Incomplete",
-                "url": "https://agent.example",
-                "version": "1.0.0",
-                "capabilities": {},
-                "skills": [],
-            }
-
-    class Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def get(self, url):
-            return Response()
-
-    monkeypatch.setattr("httpx.Client", Client)
-
-    with pytest.raises(A2AClientJSONError, match="description"):
-        A2ACardResolver("https://agent.example").get_agent_card()
 
 
 def test_common_types_expose_sdk_free_task_parts():
@@ -319,44 +285,32 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
 
 
 def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
-    envelope = DeliveryEnvelope(
-        room_id="room-1",
-        event_type="processing_status",
-        payload={},
-        trace_id="trace-1",
-    )
     base = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="processing",
         trace_id="trace-2",
     )
     run_event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="evt-1",
         run_id="run-1",
         seq=1,
-        run_event_type="agent_started",
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
         correlation_id="cr-1",
-    )
-    omitted = RunEventNotification(
-        room_id="room-1",
-        event_id="evt-2",
-        run_id="run-1",
-        seq=2,
-        run_event_type="agent_finished",
+        trace_id="trace-3",
     )
 
-    assert envelope.trace_id == "trace-1"
     assert base.trace_id == "trace-2"
     assert run_event.correlation_id == "cr-1"
-    assert omitted.correlation_id is None
+    assert run_event.trace_id == "trace-3"
 
 
-def test_room_info_preserves_legacy_membership_status_default():
-    room = RoomInfo(room_id="r1", room_name="Room", owner_id="u1")
+def test_room_info_defaults_to_manual_membership_status():
+    room = RoomInfo(conversation_id="r1", room_name="Room", owner_id="u1")
 
-    assert room.membership_origin_status == "active"
+    assert room.membership_origin_status == "manual"
 
 
 def test_protocols_are_runtime_checkable():
@@ -412,9 +366,9 @@ def test_event_exports_are_distinct():
 
 def test_delivery_event_schemas_match_design_doc():
     expected_fields = {
-        DeliveryEventBase: {"room_id", "timestamp", "trace_id"},
+        DeliveryEventBase: {"conversation_id", "timestamp", "trace_id"},
         ProcessingStatusEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -428,7 +382,7 @@ def test_delivery_event_schemas_match_design_doc():
             "delivery_id",
         },
         RunEventNotification: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -441,7 +395,7 @@ def test_delivery_event_schemas_match_design_doc():
             "correlation_id",
         },
         AgentMessagePartial: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -450,7 +404,7 @@ def test_delivery_event_schemas_match_design_doc():
             "content_delta",
         },
         AgentMessageFinal: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -460,7 +414,7 @@ def test_delivery_event_schemas_match_design_doc():
             "delivery_id",
         },
         CancellationEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -468,7 +422,7 @@ def test_delivery_event_schemas_match_design_doc():
             "reason",
         },
         HITLRequestEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "timestamp",
             "trace_id",
@@ -498,7 +452,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         HITLResolvedEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "timestamp",
             "trace_id",
@@ -521,7 +475,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         TaskSubmittedEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "opaque_public_call_id",
             "timestamp",
@@ -540,7 +494,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         TaskUpdateEvent: {
-            "room_id",
+            "conversation_id",
             "run_id",
             "opaque_public_call_id",
             "timestamp",
@@ -565,7 +519,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         ArtifactUpdateEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -577,7 +531,7 @@ def test_delivery_event_schemas_match_design_doc():
             "client_request_id",
         },
         ErrorEvent: {
-            "room_id",
+            "conversation_id",
             "timestamp",
             "trace_id",
             "event_type",
@@ -598,31 +552,37 @@ def test_delivery_event_schemas_match_design_doc():
         assert set(dto.model_fields) == fields
 
     expected_required_fields = {
-        DeliveryEventBase: {"room_id"},
-        ProcessingStatusEvent: {"room_id", "message_id", "status"},
+        DeliveryEventBase: {"conversation_id"},
+        ProcessingStatusEvent: {"conversation_id", "message_id", "status"},
         RunEventNotification: {
-            "room_id",
+            "conversation_id",
             "event_id",
             "run_id",
             "seq",
             "run_event_type",
+            "payload",
         },
-        AgentMessagePartial: {"room_id", "message_id", "agent_id", "content_delta"},
-        AgentMessageFinal: {"room_id", "message_id", "agent_id"},
-        CancellationEvent: {"room_id", "message_id"},
+        AgentMessagePartial: {
+            "conversation_id",
+            "message_id",
+            "agent_id",
+            "content_delta",
+        },
+        AgentMessageFinal: {"conversation_id", "message_id", "agent_id"},
+        CancellationEvent: {"conversation_id", "message_id"},
         HITLRequestEvent: {
-            "room_id",
+            "conversation_id",
             "request_id",
             "prompt",
             "prompt_type",
             "source",
             "message_id",
         },
-        HITLResolvedEvent: {"room_id", "request_id", "message_id", "source"},
-        TaskSubmittedEvent: {"room_id", "message_id", "task_id", "agent_name"},
-        TaskUpdateEvent: {"room_id", "message_id", "status"},
-        ArtifactUpdateEvent: {"room_id", "message_id", "agent_id", "artifact"},
-        ErrorEvent: {"room_id", "error"},
+        HITLResolvedEvent: {"conversation_id", "request_id", "message_id", "source"},
+        TaskSubmittedEvent: {"conversation_id", "message_id", "task_id", "agent_name"},
+        TaskUpdateEvent: {"conversation_id", "message_id", "status"},
+        ArtifactUpdateEvent: {"conversation_id", "message_id", "agent_id", "artifact"},
+        ErrorEvent: {"conversation_id", "error"},
     }
 
     for dto, fields in expected_required_fields.items():
@@ -666,34 +626,8 @@ def test_protocol_methods_match_design_doc():
             "is_directly_callable",
         },
         protocols.AgentMatcher: {"match_agents"},
-        protocols.AgentMessageMatcher: {"match_for_message"},
         protocols.AgentNetworkTargetResolver: {"resolve_target"},
         protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
-        protocols.AgentManagement: {
-            "register_agent",
-            "delete_agent",
-            "update_agent",
-            "list_agents",
-            "list_public_agents",
-        },
-        protocols.AgentRegistryWriter: {
-            "upsert_local_agent",
-            "list_local_agent_ids",
-            "mark_local_agents_inactive",
-        },
-        protocols.RoomRegistry: {"get_room", "get_room_agents", "get_room_owner"},
-        protocols.RoomManagement: {
-            "create_room",
-            "delete_room",
-            "update_room",
-            "update_membership",
-        },
-        protocols.RoomMessageStore: {
-            "save_user_message",
-            "save_agent_message",
-            "update_agent_message_status",
-            "get_message",
-        },
         protocols.RoomHistoryReader: {
             "get_messages_for_room",
             "get_messages_by_ids",
@@ -703,31 +637,14 @@ def test_protocol_methods_match_design_doc():
             "get_room_owner",
             "verify_room_agent_membership",
         },
-        protocols.ContextAssemblyPort: {
-            "assemble_supervisor_context_from_memory",
-            "assemble_agent_execution_context_from_memory",
-        },
-        protocols.MemorySearchPort: {"search_memory"},
-        protocols.ProjectionPort: {
-            "project_message_for_event",
-            "run_compaction",
-        },
-        protocols.CompactionPort: {
-            "should_compact",
-            "compact_if_needed",
-            "compact_room_memory",
-        },
-        protocols.RoomMemoryCleanupPort: {"delete_room_memory"},
         protocols.ExecutionEngine: {
             "execute",
             "start_orchestration",
             "schedule_orchestration",
             "cancel",
-            "get_run",
             "get_runs_for_room",
             "get_latest_runs_for_rooms",
             "cancel_inflight_tasks",
-            "heal_diverged_runs",
         },
         protocols.HITLManager: {
             "resolve_hitl_batch",
@@ -737,190 +654,17 @@ def test_protocol_methods_match_design_doc():
         protocols.RoomRouteReader: {"get_room_by_room_id"},
         protocols.SSEStateReader: {"get_room_user_message_by_message_id"},
         protocols.EventPublisher: {"emit"},
-        protocols.SSETransport: {
-            "connect",
-            "disconnect",
-            "broadcast_frame_to_room",
-            "set_draining",
-        },
         protocols.SSEConnectionLike: {"get_message"},
         protocols.SSERouteTransport: {
             "add_connection",
             "remove_connection",
             "get_room_status",
         },
-        protocols.WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         protocols.RoomDistributedLock: {"acquire", "renew", "release"},
-        protocols.RoomMembershipSeedSource: {
-            "get_saved_group",
-            "list_current_agents",
-        },
-        protocols.AttachmentCleanupPort: {"delete_for_room"},
-        protocols.AttachmentMetadataReader: {"get_for_room_file"},
-        protocols.AttachmentContentReader: {"get_bytes"},
-        protocols.EmbeddingServiceProtocol: {"get_embedding"},
-        protocols.RequiredEmbeddingServiceProtocol: {"get_embedding"},
-        protocols.ModelSelectableEmbeddingServiceProtocol: {"get_embedding"},
         protocols.LLMTextGateway: {"generate"},
         protocols.LLMStructuredGateway: {"generate_structured"},
         protocols.LLMEmbeddingGateway: {"embed", "embed_batch"},
         protocols.LLMStreamGateway: {"generate_stream"},
-        protocols.LLMStreamingProvider: {"generate_stream"},
-        protocols.LLMProviderAdapter: {
-            "embed",
-            "embed_batch",
-            "generate",
-            "generate_structured",
-        },
-        protocols.QuoteRepository: {
-            "delete_by_id",
-            "delete_for_room",
-            "get_by_id",
-            "insert",
-        },
-        protocols.RuntimeAgentRoomStore: {
-            "add_agent_group",
-            "delete_agent_group",
-            "get_agent_by_agent_id",
-            "get_agent_group_by_id",
-            "get_agent_groups_by_owner",
-            "get_agent_name_by_agent_id",
-            "get_agents_with_conditions",
-            "get_all_active_agents",
-            "get_room_by_room_id",
-            "get_rooms_by_room_owner_id",
-            "increment_agent_call_count",
-            "update_agent_group",
-            "update_room_by_room_id",
-        },
-        protocols.RuntimeHITLLifecycleStore: {
-            "attach_interaction_request",
-            "claim_interaction_application",
-            "claim_run_answer_projection",
-            "claim_resume_command",
-            "create_resume_command",
-            "ensure_hitl_lifecycle_indexes",
-            "get_interaction",
-            "get_interaction_for_request_strict",
-            "get_interaction_strict",
-            "get_resume_command_for_interaction_strict",
-            "get_resume_command_strict",
-            "iter_active_interactions",
-            "iter_due_interactions",
-            "iter_due_resume_commands",
-            "iter_materializing_interactions",
-            "iter_stale_applications",
-            "iter_unreconciled_terminal_interactions",
-            "iter_unreconciled_terminal_requests",
-            "mark_interaction_application_state",
-            "mark_interaction_terminal_reconciled",
-            "mark_resume_command_aggregate_applied",
-            "mark_resume_command_state",
-            "mark_run_answer_projection",
-            "materialize_interaction",
-            "record_interaction_answer",
-            "reclaim_stale_resume_command",
-            "renew_interaction_application",
-            "renew_resume_command",
-            "renew_run_answer_projection",
-            "resume_uncertain_interaction",
-            "terminalize_interaction",
-        },
-        protocols.RuntimeHITLStore: {
-            "cas_update_hitl_request",
-            "cas_update_hitl_request_strict",
-            "claim_hitl_open_projection",
-            "claim_hitl_request",
-            "count_hitl_requests_for_message",
-            "complete_hitl_open_projection",
-            "create_or_reuse_pending_hitl_request",
-            "create_hitl_request",
-            "ensure_hitl_indexes",
-            "fenced_update_hitl_request",
-            "find_pending_hitl_request_for_agent_message",
-            "get_hitl_request",
-            "get_pending_hitl_requests",
-            "get_pending_hitl_requests_strict",
-            "get_pending_hitl_requests_for_message",
-            "get_pending_hitl_requests_for_message_strict",
-            "iter_stale_processing_hitl_requests",
-            "persist_hitl_request_id_on_message",
-            "persist_pending_hitl_on_agent_message",
-            "persist_hitl_interaction_metadata",
-            "persist_hitl_user_answer",
-            "release_hitl_open_projection",
-            "update_agent_message_task_state",
-            "update_hitl_request",
-        },
-        protocols.RuntimeMemoryStore: {
-            "get_room_memory_by_room_id",
-            "update_turn_notes",
-        },
-        protocols.RuntimeMessageStore: {
-            "accumulate_artifact_on_message",
-            "add_room_agent_message",
-            "add_room_user_message",
-            "cancel_agent_messages_by_ids",
-            "cancel_descendants",
-            "project_descendant_terminal_state",
-            "claim_or_reclaim_user_message",
-            "claim_user_message_for_processing",
-            "delete_room_agent_message_by_message_id",
-            "get_room_agent_message_by_message_id",
-            "get_room_agent_messages_by_related_message_id",
-            "get_room_agent_messages_by_related_message_id_strict",
-            "get_room_agent_messages_by_room_id",
-            "get_room_user_message_by_message_id",
-            "get_room_user_message_by_message_id_strict",
-            "get_room_user_messages_by_room_id",
-            "get_stale_claimed_orchestration_messages",
-            "refresh_processing_claim",
-            "reset_last_notified_state",
-            "set_system_task_terminal_state",
-            "set_turn_completion_kind",
-            "turn_exists",
-            "unclaim_user_message",
-            "update_last_notified_state",
-            "update_orchestration_projection_if_status",
-            "update_room_agent_message_by_message_id",
-            "update_room_agent_message_with_new_message_content_by_message_id",
-            "update_room_user_message_by_message_id",
-            "update_task_state_on_message",
-            "update_task_state_on_message_if_not_terminal",
-            "upsert_room_agent_message",
-        },
-        protocols.RuntimeTaskLifecycleStore: {
-            "check_task_limits",
-            "enable_task_tracking_on_message",
-            "find_stale_non_terminal_runs",
-            "generate_webhook_token",
-            "get_active_runs_by_room_id",
-            "get_and_clear_continuation_on_message",
-            "get_and_clear_continuation_on_user_message",
-            "get_expired_task_messages",
-            "get_non_tracked_stale_task_messages",
-            "get_orphaned_agent_messages",
-            "get_pending_continuation_on_message",
-            "get_pending_task_messages_for_user",
-            "get_room_ids_with_non_terminal_runs",
-            "get_stale_task_messages",
-            "get_task_messages_for_room",
-            "hash_webhook_token",
-            "is_message_cancelled",
-            "is_message_cancelled_strict",
-            "resolve_client_request_id_for_agent_message",
-            "resolve_client_request_id_for_message_id",
-            "save_continuation_on_message",
-            "save_continuation_on_user_message",
-            "touch_task_message",
-            "update_task_on_message",
-            "update_webhook_token_hash_on_message",
-            "verify_webhook_token",
-            "verify_webhook_token_for_task",
-            "verify_webhook_token_on_message",
-        },
-        protocols.AgentCallCounter: {"increment_agent_call_count"},
-        protocols.MessageCancellationReader: {"is_message_cancelled"},
         protocols.FileStorage: {
             "upload",
             "get_url",
@@ -931,24 +675,18 @@ def test_protocol_methods_match_design_doc():
             "stream",
         },
         protocols.PreparedFileStream: {"aclose"},
-        protocols.AgentTransport: {"send_message", "stream_message"},
         protocols.AgentCardResolver: {
             "resolve_card",
             "supports_push_notifications",
             "supports_streaming",
         },
-        protocols.LLMProvider: {
-            "generate",
-            "generate_structured",
-            "embed",
-            "embed_batch",
+        protocols.MongoDAL: {
+            "collection",
+            "connect",
+            "close",
+            "ping",
+            "supports_transactions",
         },
-        protocols.ModelRegistry: {
-            "get_model",
-            "supports_capability",
-            "list_models",
-        },
-        protocols.MongoDAL: {"collection", "connect", "close", "ping"},
         protocols.MongoCollection: {
             "find_one",
             "find",
@@ -968,7 +706,6 @@ def test_protocol_methods_match_design_doc():
             "drop_index",
             "bulk_write",
             "distinct",
-            "find_one_by_stable_or_native_id",
             "watch",
         },
         protocols.RedisKV: {
@@ -984,29 +721,7 @@ def test_protocol_methods_match_design_doc():
             "close",
         },
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
-        protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
-        protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
-        protocols.IndexRegistry: {"register", "ensure_all"},
-        protocols.AgentRepository: {
-            "get_by_id",
-            "get_by_ids",
-            "get_by_provider",
-            "get_by_source",
-            "get_public",
-            "list_active_agents",
-            "upsert",
-            "delete",
-            "update_health",
-            "mark_agents_inactive",
-            "increment_agent_call_count",
-            "find_by_normalized_url",
-            "list_visible",
-            "update",
-            "public_url_exists",
-            "activate_agents",
-            "text_search",
-        },
         protocols.RoomRepository: {
             "get_by_id",
             "get_by_owner",
@@ -1017,85 +732,6 @@ def test_protocol_methods_match_design_doc():
             "touch_activity",
             "set_membership",
             "delete",
-        },
-        protocols.MessageRepository: {
-            "save_user_message",
-            "get_user_message_by_idempotency_key",
-            "insert_user_message_idempotently",
-            "save_agent_message",
-            "update_user_message",
-            "update_agent_message",
-            "update_agent_message_if_not_terminal",
-            "count_agent_messages",
-            "get_user_message_by_id",
-            "get_agent_message_by_id",
-            "is_message_cancelled",
-            "get_by_id",
-            "get_by_ids",
-            "get_for_room",
-            "get_timeline_page",
-            "get_thread",
-            "update_status",
-            "delete_for_room",
-            "get_user_messages_for_room",
-            "get_agent_messages_for_room",
-            "get_agent_messages_by_related_message_id",
-            "get_agent_task_messages_for_user",
-            "get_task_messages_for_room",
-            "get_pending_task_messages_for_user",
-        },
-        protocols.RunRepository: {
-            "find",
-            "find_one",
-            "create",
-            "get_by_id",
-            "get_for_room",
-            "get_latest_for_rooms",
-            "insert_one",
-            "update_one",
-            "update_state",
-            "get_diverged",
-        },
-        protocols.RunEventRepository: {
-            "find",
-            "find_one",
-            "find_one_and_update",
-            "insert_one",
-            "update_one",
-            "append",
-            "get_for_run",
-            "get_latest",
-        },
-        protocols.HITLRepository: {
-            "create",
-            "get_by_id",
-            "get_pending_for_room",
-            "resolve",
-        },
-        protocols.MemoryRepository: {
-            "get_room_memory",
-            "upsert_room_memory",
-            "delete_room_memory",
-            "create_room_memory",
-            "ensure_room_memory",
-            "push_and_trim_conversation_turn",
-            "push_and_trim_conversation_turn_if_absent",
-            "update_turn_notes",
-            "get_room_summary_projection",
-            "update_room_summary_atomic",
-            "compact_turns_bulk",
-            "list_room_ids_with_memory",
-        },
-        protocols.ContentStorageRepository: {
-            "upsert_full_content",
-            "get_content_by_document_id",
-            "get_content_by_turn_id",
-            "delete_content_by_turn_id",
-            "delete_content_by_room_id",
-            "get_content_stats_for_room",
-            "text_search",
-            "scan_text_search",
-            "hydrate_turn_content",
         },
     }
 
@@ -1141,10 +777,6 @@ def test_protocol_methods_match_design_doc():
         ["self", "user_id", "active_only", "query", "limit", "exhaust"],
     )
     _assert_params(
-        protocols.AgentRepository.list_visible,
-        ["self", "user_id", "active_only", "agent_ids", "query", "limit", "exhaust"],
-    )
-    _assert_params(
         protocols.AgentMatcher.match_agents,
         [
             "self",
@@ -1156,44 +788,23 @@ def test_protocol_methods_match_design_doc():
         ],
     )
     _assert_params(
-        protocols.AgentMessageMatcher.match_for_message,
-        [
-            "self",
-            "query",
-            "limit",
-            "filter_ids",
-            "requesting_user_id",
-            "required_input_modes",
-        ],
-    )
-    _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
-    _assert_params(
         protocols.ExecutionEngine.cancel,
-        ["self", "room_id", "message_id", "requested_by_user_id"],
+        ["self", "conversation_id", "message_id", "requested_by_user_id"],
     )
     _assert_params(protocols.SSEConnectionLike.get_message, ["self", "timeout"])
     _assert_params(
         protocols.SSERouteTransport.add_connection,
-        ["self", "room_id"],
+        ["self", "conversation_id"],
     )
     _assert_params(
         protocols.SSERouteTransport.remove_connection,
-        ["self", "room_id", "connection_id"],
+        ["self", "conversation_id", "connection_id"],
     )
     _assert_params(
         protocols.SSERouteTransport.get_room_status,
-        ["self", "room_id"],
-    )
-    _assert_params(
-        protocols.WebhookReceiver.authenticate_webhook,
-        ["self", "message_id", "token"],
-    )
-    _assert_params(
-        protocols.WebhookReceiver.handle_webhook,
-        ["self", "message_id", "payload", "token"],
+        ["self", "conversation_id"],
     )
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
-    _assert_params(protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"])
 
 
 def test_run_state_contract_matches_persisted_values():
@@ -1207,7 +818,7 @@ def test_run_state_contract_matches_persisted_values():
     }
 
     assert {state.value for state in RunState} == persisted_values
-    RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
+    RunInfo(run_id="run1", conversation_id="r1", state=RunState.PROCESSING)
 
 
 def test_settings_class_uses_explicit_values_not_environment(monkeypatch):

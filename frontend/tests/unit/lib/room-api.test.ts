@@ -8,8 +8,7 @@ import {
   inquiryActiveRuns,
   inquiryRoomSetting,
   SendMessage,
-  inquiryRoomMessagesByRoomId,
-  updateRoomAgentSet,
+  inquiryRoomMessagesByConversationId,
   suggestAgents,
   listRoomHistory,
   updateRoomHistoryItem,
@@ -17,7 +16,7 @@ import {
   deleteRoomHistoryItem,
 } from '@/lib/api/room'
 
-const roomCenter = getApiUrl('roomCenter')
+const rooms = getApiUrl('rooms')
 
 describe('Room API', () => {
   beforeEach(() => {
@@ -25,65 +24,71 @@ describe('Room API', () => {
   })
 
   describe('createNewRoom', () => {
-    it('should create a new room with correct request body', async () => {
+    it('should POST rooms with correct request body', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
+        http.post(rooms, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({
             success: true,
-            room_id: 'test-room-id',
+            conversation_id: 'test-room-id',
             room: {
-              room_id: 'test-room-id',
+              conversation_id: 'test-room-id',
               room_name: capturedBody.room_name,
-              room_owner_id: capturedBody.room_owner_id,
               room_owner_name: capturedBody.room_owner_name,
-              room_agent_set: capturedBody.room_agent_set || {},
               room_created_at: new Date().toISOString(),
             },
           })
         })
       )
 
-      const result = await createNewRoom('Test Room', 'user-1', 'Test User')
+      const result = await createNewRoom('Test Room', 'Test User')
 
       expect(result.success).toBe(true)
       expect(result.room?.room_name).toBe('Test Room')
       expect(capturedBody).toMatchObject({
         room_name: 'Test Room',
-        room_owner_id: 'user-1',
         room_owner_name: 'Test User',
       })
+      expect(capturedBody).not.toHaveProperty('room_owner_id')
+      expect(capturedBody).not.toHaveProperty('room_agent_set')
+      expect(capturedBody).not.toHaveProperty('applied_from_group')
     })
 
-    it('should include agent set in request body when provided', async () => {
+    it('should include extend_info and membership in request body when provided', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
+        http.post(rooms, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, room_id: 'test-room-id' })
+          return HttpResponse.json({ success: true, conversation_id: 'test-room-id' })
         })
       )
 
-      const agentSet = { 'agent-1': 'Agent One' }
-      await createNewRoom('Test Room', 'user-1', 'Test User', undefined, agentSet)
+      await createNewRoom('Test Room', 'Test User', undefined, { use_supervisor: true }, {
+        membership_seed_input: 'manual',
+        room_agent_ids: ['agent-1'],
+      })
 
-      expect(capturedBody).toMatchObject({
-        room_agent_set: { 'agent-1': 'Agent One' },
+      expect(capturedBody).toEqual({
+        room_name: 'Test Room',
+        room_owner_name: 'Test User',
+        extend_info: { use_supervisor: true },
+        membership_seed_input: 'manual',
+        room_agent_ids: ['agent-1'],
       })
     })
   })
 
   describe('inquiryRoomSetting', () => {
-    it('should fetch room settings with correct room_id', async () => {
-      let capturedBody: Record<string, unknown> | null = null
+    it('should GET the room by id', async () => {
+      let capturedConversationId: string | null = null
       server.use(
-        http.post(`${roomCenter}/inquiryRoomSetting`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
+        http.get(`${rooms}/:conversationId`, ({ params }) => {
+          capturedConversationId = params.conversationId as string
           return HttpResponse.json({
             success: true,
-            room_id: capturedBody.room_id,
-            room: { room_id: capturedBody.room_id, room_name: 'Test Room' },
+            conversation_id: params.conversationId,
+            room: { conversation_id: params.conversationId, room_name: 'Test Room' },
           })
         })
       )
@@ -91,19 +96,19 @@ describe('Room API', () => {
       const result = await inquiryRoomSetting('room-42')
 
       expect(result.success).toBe(true)
-      expect(capturedBody).toMatchObject({ room_id: 'room-42' })
+      expect(capturedConversationId).toBe('room-42')
     })
   })
 
   describe('inquiryActiveRuns', () => {
-    it('should fetch active runs with correct room_id', async () => {
-      let capturedBody: Record<string, unknown> | null = null
+    it('should GET active runs for the room', async () => {
+      let capturedConversationId: string | null = null
       server.use(
-        http.post(`${roomCenter}/inquiryActiveRuns`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
+        http.get(`${rooms}/:conversationId/active-runs`, ({ params }) => {
+          capturedConversationId = params.conversationId as string
           return HttpResponse.json({
             success: true,
-            room_id: capturedBody.room_id,
+            conversation_id: params.conversationId,
             active_runs: [{ state: 'processing', trigger_message_id: 'm1' }],
           })
         })
@@ -113,16 +118,16 @@ describe('Room API', () => {
 
       expect(result.success).toBe(true)
       expect(result.active_runs).toHaveLength(1)
-      expect(capturedBody).toMatchObject({ room_id: 'room-42' })
+      expect(capturedConversationId).toBe('room-42')
     })
   })
 
   describe('room history', () => {
     it('lists lightweight history items', async () => {
       server.use(
-        http.get(getApiUrl('roomCenter/history'), () => HttpResponse.json({
+        http.get(rooms, () => HttpResponse.json({
           items: [{
-            room_id: 'room-1',
+            conversation_id: 'room-1',
             title: 'Room 1',
             last_activity_at: '2026-08-10T00:00:00Z',
             is_pinned: false,
@@ -133,24 +138,24 @@ describe('Room API', () => {
       )
 
       const result = await listRoomHistory()
-      expect(result.items[0]).toMatchObject({ room_id: 'room-1', status: 'processing' })
+      expect(result.items[0]).toMatchObject({ conversation_id: 'room-1', status: 'processing' })
     })
 
     it('updates, reorders, and deletes history items with REST methods', async () => {
       const requests: Array<{ method: string; body?: unknown }> = []
       server.use(
-        http.patch(getApiUrl('roomCenter/history/room-1'), async ({ request }) => {
+        http.patch(`${rooms}/room-1`, async ({ request }) => {
           requests.push({ method: request.method, body: await request.json() })
           return HttpResponse.json({
-            room_id: 'room-1', title: 'Renamed', last_activity_at: '2026-08-10T00:00:00Z',
+            conversation_id: 'room-1', title: 'Renamed', last_activity_at: '2026-08-10T00:00:00Z',
             is_pinned: true, pin_order: 1, status: 'idle',
           })
         }),
-        http.put(getApiUrl('roomCenter/history/pinned-order'), async ({ request }) => {
+        http.put(`${rooms}/pinned-order`, async ({ request }) => {
           requests.push({ method: request.method, body: await request.json() })
           return HttpResponse.json({ success: true })
         }),
-        http.delete(getApiUrl('roomCenter/history/room-1'), ({ request }) => {
+        http.delete(`${rooms}/room-1`, ({ request }) => {
           requests.push({ method: request.method })
           return HttpResponse.json({ success: true })
         }),
@@ -162,7 +167,7 @@ describe('Room API', () => {
 
       expect(requests).toEqual([
         { method: 'PATCH', body: { title: 'Renamed', is_pinned: true } },
-        { method: 'PUT', body: { room_ids: ['room-1', 'room-2'] } },
+        { method: 'PUT', body: { conversation_ids: ['room-1', 'room-2'] } },
         { method: 'DELETE' },
       ])
     })
@@ -170,7 +175,7 @@ describe('Room API', () => {
 
   describe('SendMessage', () => {
     const baseSendParams = {
-      roomId: 'room-1',
+      conversationId: 'room-1',
       userInput: 'Hello',
       userId: 'user-1',
       userName: 'Test User',
@@ -182,11 +187,11 @@ describe('Room API', () => {
     it('sends room_default routing with client_request_id and no legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({
             success: true,
-            room_id: capturedBody.room_id,
+            conversation_id: 'room-1',
             message_id: 'msg-new',
           })
         })
@@ -196,8 +201,9 @@ describe('Room API', () => {
 
       expect(result.success).toBe(true)
       expect(result.message_id).toBe('msg-new')
+      expect(capturedBody).not.toHaveProperty('conversation_id')
+      expect((capturedBody as unknown as { message: { conversation_id: string } }).message.conversation_id).toBe('room-1')
       expect(capturedBody).toMatchObject({
-        room_id: 'room-1',
         user_input: 'Hello',
         user_id: 'user-1',
         user_name: 'Test User',
@@ -211,7 +217,7 @@ describe('Room API', () => {
     it('sends all_agents routing with client_request_id and no legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
@@ -233,59 +239,10 @@ describe('Room API', () => {
       expect(capturedBody).not.toHaveProperty('target_group')
     })
 
-    it('should include quoted text in extend_info', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Quoted text here',
-      })
-
-      expect(capturedBody).not.toBeNull()
-      const body = capturedBody as unknown as Record<string, unknown>
-      const message = body.message as Record<string, unknown>
-      expect(message.related_message_id).toBe('related-msg-1')
-      expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
-    })
-
-    it('should include quoted sender name in extend_info', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Quoted text here',
-        quotedSenderName: 'Spec Agent',
-      })
-
-      expect(capturedBody).not.toBeNull()
-      const body = capturedBody as unknown as Record<string, unknown>
-      const message = body.message as Record<string, unknown>
-      expect(message.extend_info).toMatchObject({
-        quoted_text: 'Quoted text here',
-        quoted_sender_name: 'Spec Agent',
-      })
-    })
-
     it('should send structured quote payload when structuredQuote is provided', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
@@ -294,8 +251,6 @@ describe('Room API', () => {
       await SendMessage({
         ...baseSendParams,
         userInput: 'Get details',
-        relatedMessageId: null,
-        quotedText: null,
         structuredQuote: {
           text: 'The highlighted content',
           source_message_id: 'agent-msg-42',
@@ -315,42 +270,33 @@ describe('Room API', () => {
         sender_display_name: 'Research Agent',
         source_agent_id: 'agent-42',
       })
-      expect(message.extend_info).toMatchObject({
-        quoted_text: 'The highlighted content',
-        quoted_sender_name: 'Research Agent',
-      })
+      // The backend derives the display fields after persisting the quote.
+      expect(message.extend_info).toBeNull()
       expect(message.related_message_id).toBeNull()
     })
 
-    it('should use legacy extend_info when structuredQuote is null but quoted_text provided', async () => {
+    it('sends no quote and no client display metadata without a structured quote', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
       )
 
-      await SendMessage({
-        ...baseSendParams,
-        userInput: 'Reply',
-        relatedMessageId: 'related-msg-1',
-        quotedText: 'Legacy quoted text',
-        quotedSenderName: 'Agent Name',
-        structuredQuote: null,
-      })
+      await SendMessage({ ...baseSendParams, userInput: 'Reply', structuredQuote: null })
 
       const body = capturedBody as unknown as Record<string, unknown>
       const message = body.message as Record<string, unknown>
-      expect(message.quote).toBeUndefined()
-      expect(message.extend_info).toMatchObject({ quoted_text: 'Legacy quoted text', quoted_sender_name: 'Agent Name' })
-      expect(message.related_message_id).toBe('related-msg-1')
+      expect(message).not.toHaveProperty('quote')
+      expect(message.extend_info).toBeNull()
+      expect(message.related_message_id).toBeNull()
     })
 
     it('sends mentioned_agent_ids without message_target_mode or target_group_id', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
@@ -375,7 +321,7 @@ describe('Room API', () => {
     it('sends saved_group routing without mentions or legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
@@ -399,7 +345,7 @@ describe('Room API', () => {
     it('never emits legacy target fields', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+        http.post(`${rooms}/:conversationId/messages`, async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({ success: true, message_id: 'msg-1' })
         })
@@ -418,31 +364,33 @@ describe('Room API', () => {
     })
   })
 
-  describe('inquiryRoomMessagesByRoomId', () => {
-    it('should fetch room messages with correct room_id', async () => {
-      let capturedBody: Record<string, unknown> | null = null
+  describe('inquiryRoomMessagesByConversationId', () => {
+    it('should GET room messages without query parameters by default', async () => {
+      let capturedUrl: URL | null = null
       server.use(
-        http.post(`${roomCenter}/inquiryRoomMessagesByRoomId`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, room_id: 'room-1', message_list: [] })
+        http.get(`${rooms}/:conversationId/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({ success: true, conversation_id: 'room-1', message_list: [] })
         })
       )
 
-      const result = await inquiryRoomMessagesByRoomId('room-1')
+      const result = await inquiryRoomMessagesByConversationId('room-1')
 
       expect(result.success).toBe(true)
       expect(result.message_list).toBeDefined()
-      expect(capturedBody).toEqual({ room_id: 'room-1' })
+      const url = capturedUrl as unknown as URL
+      expect(url.pathname).toMatch(/\/rooms\/room-1\/messages$/)
+      expect(url.search).toBe('')
     })
 
-    it('optionally sends timeline pagination fields', async () => {
-      let capturedBody: Record<string, unknown> | null = null
+    it('optionally sends timeline pagination query parameters', async () => {
+      let capturedUrl: URL | null = null
       server.use(
-        http.post(`${roomCenter}/inquiryRoomMessagesByRoomId`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
+        http.get(`${rooms}/:conversationId/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
           return HttpResponse.json({
             success: true,
-            room_id: 'room-1',
+            conversation_id: 'room-1',
             message_list: [],
             has_more: true,
             next_cursor: 'next-token'
@@ -450,39 +398,32 @@ describe('Room API', () => {
         })
       )
 
-      const result = await inquiryRoomMessagesByRoomId(
+      const result = await inquiryRoomMessagesByConversationId(
         'room-1',
         undefined,
         undefined,
         { limit: 37, cursor: 'cursor-token' }
       )
 
-      expect(capturedBody).toEqual({
-        room_id: 'room-1',
-        limit: 37,
-        cursor: 'cursor-token'
-      })
+      const params = (capturedUrl as unknown as URL).searchParams
+      expect(Object.fromEntries(params)).toEqual({ limit: '37', cursor: 'cursor-token' })
       expect(result.has_more).toBe(true)
       expect(result.next_cursor).toBe('next-token')
     })
-  })
 
-  describe('updateRoomAgentSet', () => {
-    it('should send agent set in request body', async () => {
-      let capturedBody: Record<string, unknown> | null = null
+    it('omits a null cursor', async () => {
+      let capturedUrl: URL | null = null
       server.use(
-        http.post(`${roomCenter}/updateRoomAgentSet`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true })
+        http.get(`${rooms}/:conversationId/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({ success: true, conversation_id: 'room-1', message_list: [] })
         })
       )
 
-      await updateRoomAgentSet('room-1', { 'a-1': 'Agent One', 'a-2': 'Agent Two' })
+      await inquiryRoomMessagesByConversationId('room-1', undefined, undefined, { limit: 10, cursor: null })
 
-      expect(capturedBody).toMatchObject({
-        room_id: 'room-1',
-        room_agent_set: { 'a-1': 'Agent One', 'a-2': 'Agent Two' },
-      })
+      const params = (capturedUrl as unknown as URL).searchParams
+      expect(Object.fromEntries(params)).toEqual({ limit: '10' })
     })
   })
 
@@ -490,7 +431,7 @@ describe('Room API', () => {
     it('should send message_text and top_k in request body', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
-        http.post(`${roomCenter}/suggestAgents`, async ({ request }) => {
+        http.post(getApiUrl('agent-suggestions'), async ({ request }) => {
           capturedBody = await request.json() as Record<string, unknown>
           return HttpResponse.json({
             success: true,
@@ -513,7 +454,7 @@ describe('Room API', () => {
 
   describe('error handling', () => {
     const errorSendParams = {
-      roomId: 'room-1',
+      conversationId: 'room-1',
       userInput: 'Hello',
       userId: 'user-1',
       userName: 'Test User',

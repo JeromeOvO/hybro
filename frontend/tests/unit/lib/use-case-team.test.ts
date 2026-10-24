@@ -6,6 +6,7 @@ import {
   listAgentGroups,
   updateAgentGroup,
 } from '@/lib/api/agent-group'
+import { createAgent } from "../../fixtures"
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import type { UseCaseTemplate } from '@/lib/use-case-templates'
@@ -28,21 +29,7 @@ const mockListAgentGroups = vi.mocked(listAgentGroups)
 const mockUpdateAgentGroup = vi.mocked(updateAgentGroup)
 
 function makeAgent(id: string, name: string): Agent {
-  return {
-    agent_id: id,
-    agent_card: {
-      name,
-      description: '',
-      url: `https://example.com/${id}`,
-      version: '1.0.0',
-      provider: { organization: 'test', url: 'https://test.com' },
-      capabilities: {},
-      protocolVersion: '1.0.0',
-      skills: [],
-      defaultInputModes: ['text'],
-      defaultOutputModes: ['text'],
-    },
-  }
+  return createAgent({ agent_id: id, name })
 }
 
 const catalog = [

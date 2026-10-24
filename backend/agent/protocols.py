@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from common.dto import AgentRouteResponse
 from common.protocols import AgentNetworkTargetResolver
 from common.protocols.json_types import JsonValue
-from models.agent import Agent, AgentCapabilityIssue, IssueStatus
+from models.agent import AgentCapabilityIssue, IssueStatus
 from models.agent_group import AgentGroup
 from models.agent_network import (
     AgentDiscoveryResponse,
@@ -14,7 +15,7 @@ from models.agent_network import (
     AgentSearchResponse,
 )
 from models.request import InspectionCenterRequest
-from models.response import AgentCenterResponse, InspectionCenterResponse
+from models.response import InspectionCenterResponse
 
 
 @runtime_checkable
@@ -28,28 +29,21 @@ class AgentNetworkAccess(AgentNetworkTargetResolver, Protocol):
 
 
 @runtime_checkable
-class AgentCenterCompatibility(Protocol):
-    async def register_agent_from_route(
+class AgentCatalog(Protocol):
+    async def register(
         self, *, agent_url: str, provider_id: str
-    ) -> AgentCenterResponse: ...
-    async def get_agents_by_provider_for_route(
-        self, *, provider_id: str
-    ) -> AgentCenterResponse: ...
-    async def delete_agent_from_route(
+    ) -> AgentRouteResponse: ...
+    async def list_for_provider(self, *, provider_id: str) -> AgentRouteResponse: ...
+    async def delete(
         self, *, agent_id: str, provider_id: str
-    ) -> AgentCenterResponse: ...
-    async def get_agent_card_from_url_for_route(
-        self, *, agent_url: str
-    ) -> AgentCenterResponse: ...
-    async def get_visible_agent_for_route(
+    ) -> AgentRouteResponse: ...
+    async def resolve_card(self, *, agent_url: str) -> AgentRouteResponse: ...
+    async def get_visible(
         self, *, agent_id: str, user_id: str | None
-    ) -> AgentCenterResponse: ...
-    async def list_visible_agents_for_route(
+    ) -> AgentRouteResponse: ...
+    async def list_visible(
         self, *, user_id: str | None, active_only: bool = False
-    ) -> AgentCenterResponse: ...
-    def finalize_agent_response_for_route(
-        self, response: AgentCenterResponse
-    ) -> AgentCenterResponse: ...
+    ) -> AgentRouteResponse: ...
 
 
 @runtime_checkable
@@ -70,7 +64,7 @@ class AgentCapabilityIssueStore(Protocol):
 
 
 @runtime_checkable
-class AgentGroupStoreCompatibility(Protocol):
+class AgentGroupStore(Protocol):
     async def add_agent_group(self, group: AgentGroup) -> bool: ...
     async def delete_agent_group(self, group_id: str) -> bool: ...
     async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None: ...
@@ -78,11 +72,6 @@ class AgentGroupStoreCompatibility(Protocol):
     async def update_agent_group(
         self, group_id: str, updates: dict[str, str | list[str]]
     ) -> bool: ...
-
-
-@runtime_checkable
-class AgentLivenessChecker(Protocol):
-    async def __call__(self, agent: Agent) -> Agent: ...
 
 
 @runtime_checkable
@@ -149,10 +138,9 @@ class AgentInspection(Protocol):
 
 __all__ = [
     "AgentCapabilityIssueStore",
-    "AgentCenterCompatibility",
-    "AgentGroupStoreCompatibility",
+    "AgentCatalog",
+    "AgentGroupStore",
     "AgentInspection",
-    "AgentLivenessChecker",
     "AgentNetworkAccess",
     "AgentSuggestion",
     "AgentSuggestionResult",

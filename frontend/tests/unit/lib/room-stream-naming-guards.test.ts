@@ -20,7 +20,6 @@ const OWNED_DIRS = [
   'src/lib/room-sync',
   'src/lib/api',
   'src/lib/types',
-  'src/stores/trace-store',
   'src/stores/message-store',
   'src/stores/streaming-store',
 ]
@@ -58,10 +57,10 @@ describe('room stream naming guards', () => {
 
   it('keeps the four-key SSE envelope pinned', () => {
     // The envelope contract lives in src/lib/types/sse.ts (hasSSEFrameEnvelope):
-    // {type, timestamp, room_id, data} — exactly four keys.
+    // {type, timestamp, conversation_id, data} — exactly four keys.
     const source = readFileSync(join(process.cwd(), 'src/lib/types/sse.ts'), 'utf8')
-    expect(source).toContain("keys[0] === 'data'")
-    expect(source).toContain("keys[1] === 'room_id'")
+    expect(source).toContain("keys[0] === 'conversation_id'")
+    expect(source).toContain("keys[1] === 'data'")
     expect(source).toContain("keys[2] === 'timestamp'")
     expect(source).toContain("keys[3] === 'type'")
     expect(source).toContain('keys.length === 4')

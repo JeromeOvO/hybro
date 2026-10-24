@@ -30,26 +30,26 @@ _PUBLIC_TERMINAL_ORCHESTRATION_STATUS = {
 
 
 async def _fetch_connect_snapshot(
-    snapshot_service: Any, room_id: str, *, force: bool
+    snapshot_service: Any, conversation_id: str, *, force: bool
 ) -> dict[str, Any] | None:
     """Build the initial snapshot for one connect, tolerating failures."""
 
     if snapshot_service is None:
         return None
     try:
-        return await snapshot_service.snapshot(room_id, force=force)
+        return await snapshot_service.snapshot(conversation_id, force=force)
     except Exception:
         logger.warning(
             "room snapshot build failed; stream continues delta-only",
-            extra={"room_id": room_id},
+            extra={"conversation_id": conversation_id},
             exc_info=True,
         )
         return None
 
 
-@router.get("/sse/room/{room_id}/stream")
+@router.get("/sse/room/{conversation_id}/stream")
 async def stream_room_messages(  # noqa: C901
-    room_id: str = Path(..., description="room ID"),
+    conversation_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
     transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
@@ -63,17 +63,17 @@ async def stream_room_messages(  # noqa: C901
     ``connected`` handshake carries the room's latest contiguous ``room_seq``
     and a ``snapshot`` frame follows as the first frame. ``?snapshot=1``
     forces a fresh fold from the authoritative room event log (gap recovery).
-    Without a bound snapshot service the stream degrades to the legacy
-    notification-driven behavior with an unchanged envelope.
+    Without a bound snapshot service, or when the snapshot build fails, the
+    stream continues delta-only with an unchanged envelope.
 
     Args:
-        room_id: room ID
+        conversation_id: room ID
         user: Authenticated user (from header or query param token)
 
     Returns:
         StreamingResponse: SSE stream response
     """
-    room = await db.get_room_by_room_id(room_id)
+    room = await db.get_room_by_room_id(conversation_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     if room.room_owner_id != user.user_id:
@@ -90,13 +90,13 @@ async def stream_room_messages(  # noqa: C901
         connection = None
         try:
             # create SSE connection
-            connection = await transport.add_connection(room_id)
-            logger.info(f"SSE stream started for room {room_id}")
+            connection = await transport.add_connection(conversation_id)
+            logger.info(f"SSE stream started for room {conversation_id}")
 
             # Build the snapshot before the handshake so the connected frame
             # can carry the same watermark the snapshot folds to.
             snapshot_data = await _fetch_connect_snapshot(
-                snapshot_service, room_id, force=snapshot == "1"
+                snapshot_service, conversation_id, force=snapshot == "1"
             )
 
             # send connected message (handshake gains room_seq)
@@ -107,7 +107,7 @@ async def stream_room_messages(  # noqa: C901
                 connected_data["room_seq"] = snapshot_data["room_seq"]
             connected_message = {
                 "type": "connected",
-                "room_id": room_id,
+                "conversation_id": conversation_id,
                 "timestamp": utcnow().isoformat(),
                 "data": connected_data,
             }
@@ -117,7 +117,7 @@ async def stream_room_messages(  # noqa: C901
             if snapshot_data is not None:
                 snapshot_frame = {
                     "type": "snapshot",
-                    "room_id": room_id,
+                    "conversation_id": conversation_id,
                     "timestamp": utcnow().isoformat(),
                     "data": snapshot_data,
                 }
@@ -134,7 +134,7 @@ async def stream_room_messages(  # noqa: C901
                     logger.error(
                         "sse_stream_failed",
                         extra={
-                            "room_id": room_id,
+                            "conversation_id": conversation_id,
                             "error_type": type(exc).__name__,
                         },
                     )
@@ -143,14 +143,19 @@ async def stream_room_messages(  # noqa: C901
         except Exception as exc:
             logger.error(
                 "sse_connection_failed",
-                extra={"room_id": room_id, "error_type": type(exc).__name__},
+                extra={
+                    "conversation_id": conversation_id,
+                    "error_type": type(exc).__name__,
+                },
             )
 
         finally:
             # clean up connection
             if connection:
-                await transport.remove_connection(room_id, connection.connection_id)
-                logger.info(f"SSE stream closed for room {room_id}")
+                await transport.remove_connection(
+                    conversation_id, connection.connection_id
+                )
+                logger.info(f"SSE stream closed for room {conversation_id}")
 
     return StreamingResponse(
         event_generator(),
@@ -165,9 +170,9 @@ async def stream_room_messages(  # noqa: C901
     )
 
 
-@router.get("/sse/room/{room_id}/status")
+@router.get("/sse/room/{conversation_id}/status")
 async def get_room_sse_status(
-    room_id: str = Path(..., description="room ID"),
+    conversation_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
     transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
@@ -176,13 +181,13 @@ async def get_room_sse_status(
     get SSE connection status for specified room
 
     Args:
-        room_id: room ID
+        conversation_id: room ID
         user: Authenticated user (from header or query param token)
 
     Returns:
         dict: room connection status information
     """
-    room = await db.get_room_by_room_id(room_id)
+    room = await db.get_room_by_room_id(conversation_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     if room.room_owner_id != user.user_id:
@@ -190,12 +195,12 @@ async def get_room_sse_status(
             status_code=403,
             detail="You do not have permission to inspect this room",
         )
-    return transport.get_room_status(room_id)
+    return transport.get_room_status(conversation_id)
 
 
-@router.get("/sse/room/{room_id}/events")
+@router.get("/sse/room/{conversation_id}/events")
 async def get_room_events(
-    room_id: str = Path(..., description="room ID"),
+    conversation_id: str = Path(..., description="room ID"),
     request: Request = None,  # noqa: B008 — FastAPI injected
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=1000),
@@ -210,7 +215,7 @@ async def get_room_events(
     Cold hydration (no ``after`` yet) is ``after=0``. Auth is identical to
     the SSE stream route.
     """
-    room = await db.get_room_by_room_id(room_id)
+    room = await db.get_room_by_room_id(conversation_id)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     if room.room_owner_id != user.user_id:
@@ -222,8 +227,8 @@ async def get_room_events(
     store = getattr(request.app.state, "room_event_store", None)
     if store is None:
         return {"room_seq": 0, "events": []}
-    records = await store.read_range(room_id, after=after, limit=limit)
-    return {"room_seq": await store.latest_seq(room_id), "events": records}
+    records = await store.read_range(conversation_id, after=after, limit=limit)
+    return {"room_seq": await store.latest_seq(conversation_id), "events": records}
 
 
 @router.post("/sse/message/{message_id}/cancel")
@@ -252,7 +257,7 @@ async def cancel_message(
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
 
-        room = await db.get_room_by_room_id(message.room_id)
+        room = await db.get_room_by_room_id(message.conversation_id)
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
 
@@ -280,7 +285,7 @@ async def cancel_message(
             }
 
         success = await engine.cancel(
-            room_id=message.room_id,
+            conversation_id=message.conversation_id,
             message_id=message_id,
             requested_by_user_id=user.user_id,
         )

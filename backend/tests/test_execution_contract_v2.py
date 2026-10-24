@@ -15,7 +15,7 @@ from execution.idempotency import (
 
 def test_request_uses_canonical_mode_and_mention_scope() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="supervisor",
         agent_scope={"source": "mention", "agent_ids": ["b", "a"]},
@@ -35,7 +35,7 @@ def test_request_uses_canonical_mode_and_mention_scope() -> None:
 
 def test_saved_group_scope_contains_only_server_resolved_group_id() -> None:
     request = ExecutionRequest(
-        room_id="room-1",
+        conversation_id="room-1",
         sender_id="user-1",
         mode="direct",
         agent_scope={"source": "saved_group", "group_id": "group-1"},
@@ -58,7 +58,7 @@ def test_saved_group_scope_contains_only_server_resolved_group_id() -> None:
 def test_every_agent_scope_variant_forbids_extra_fields(agent_scope) -> None:
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="direct",
             agent_scope=agent_scope,
@@ -71,7 +71,6 @@ async def test_saved_group_rejects_reserved_group_ids(group_id: str) -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": "hello",
             "client_request_id": "request-1",
             "mode": "direct",
@@ -80,6 +79,7 @@ async def test_saved_group_rejects_reserved_group_ids(group_id: str) -> None:
     )
 
     response = await send_message(
+        "room-1",
         request,
         MagicMock(user_id="user-1"),
         store=MagicMock(),
@@ -104,7 +104,6 @@ async def test_send_message_schedules_each_canonical_scope(agent_scope) -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": {"message_content": {"message_text": "hello"}},
             "client_request_id": "request-1",
             "mode": "supervisor",
@@ -128,7 +127,7 @@ async def test_send_message_schedules_each_canonical_scope(agent_scope) -> None:
         schedule_orchestration=MagicMock(),
     )
 
-    response = await send_message(request, user, store=store, engine=engine)
+    response = await send_message("room-1", request, user, store=store, engine=engine)
 
     assert response.success is True
     execution_request = engine.execute.await_args.args[0]
@@ -141,7 +140,6 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": {"message_content": {"message_text": "hello"}},
             "client_request_id": "request-replay",
             "mode": "direct",
@@ -165,13 +163,14 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
         schedule_orchestration=MagicMock(),
     )
 
-    center = SimpleNamespace(update_room_default_mode=AsyncMock(return_value=True))
+    rooms = SimpleNamespace(update_room_default_mode=AsyncMock(return_value=True))
     response = await send_message(
+        "room-1",
         request,
         user,
         store=store,
         engine=engine,
-        center=center,
+        rooms=rooms,
     )
 
     assert response.message_id == "message-1"
@@ -181,14 +180,14 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
 def test_mention_scope_must_be_non_empty_and_debate_is_not_a_mode() -> None:
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="supervisor",
             agent_scope={"source": "mention", "agent_ids": []},
         )
     with pytest.raises(ValidationError):
         ExecutionRequest(
-            room_id="room-1",
+            conversation_id="room-1",
             sender_id="user-1",
             mode="debate",
             agent_scope={"source": "room_default"},

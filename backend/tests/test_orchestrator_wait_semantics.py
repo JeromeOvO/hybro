@@ -8,6 +8,7 @@ acknowledged remote call keeps being polled until its own wait ceiling.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,14 +16,6 @@ from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from execution.orchestrator.a2a_runtime.ledger import transition_call
 from execution.orchestrator.budget import BudgetPolicy, resumed_deadline_at
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.models import (
@@ -38,6 +31,14 @@ from execution.orchestrator.session import (
     DORMANT_RECOVERY_DELAY,
     DefaultRunFactory,
     schedule_run_recovery,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 from ._orchestrator_a2a_helpers import ledger_record
@@ -69,10 +70,10 @@ class PublicHistory:
 
     def __init__(self) -> None:
         self.records: dict[str, dict] = {}
-        self.translator = PublicProjectionTranslator(lifecycle_family="canonical")
+        self.translator = PublicProjectionTranslator()
         self.sequence = 0
 
-    async def read(self, _room_id, _run_id):
+    async def read(self, _conversation_id, _run_id):
         return list(self.records.values())
 
     async def lifecycle(self, event_type, run, payload):
@@ -86,17 +87,16 @@ class PublicHistory:
                 sequence=self.sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
         if projected is None or projected.event_id in self.records:
             return
         self.records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": len(self.records) + 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -356,13 +356,14 @@ async def _composed(monkeypatch, model):
         room_ownership_reader=deps.room_ownership_reader,
         epoch_store=epochs,
         room_files=deps.room_files,
+        message_writer=MagicMock(),
         session_listener=listener,
         canonical_event_reader=history.read,
     )
     seed = make_run()
     tool = StaticFakeToolCatalog().resolve(seed, "fake_agent_pause")
     await runtime.session_host.create_session(
-        room_id=seed.room_id,
+        conversation_id=seed.conversation_id,
         profile=seed.profile,
         candidate_scope=seed.candidate_scope,
         requesting_subject_id="user-1",
@@ -651,6 +652,7 @@ def test_composition_injects_the_configured_wait_ceiling():
             room_ownership_reader=deps.room_ownership_reader,
             epoch_store=deps.epoch_store,
             room_files=deps.room_files,
+            message_writer=MagicMock(),
         )
 
     assert captured["call_wait_ceiling"] == timedelta(hours=12.5)

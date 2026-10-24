@@ -14,6 +14,8 @@ export type HitlControllerState = {
 
 export type HitlControllerSeed = {
   interactionKey: string
+  /** Identity of the exact question set; a new revision gets a new key. */
+  draftKey?: string | null
   firstRequestId: string | null
   answers: Array<{ requestId: string; answer?: string }>
 }
@@ -27,15 +29,44 @@ export type HitlControllerAction =
   | { type: 'submit_failed'; message: string; lifecycle?: HitlLifecycleState }
   | { type: 'server_reconciled'; lifecycle: HitlLifecycleState; message?: string }
 
+// Unsent drafts per question set (interaction id plus its questions). The response bar remounts whenever its
+// interaction key or the composer mode changes (SSE reconnects, snapshot
+// refreshes); without this the user's typing is lost on every remount.
+const unsentDrafts = new Map<string, HitlDrafts>()
+const MAX_UNSENT_INTERACTIONS = 20
+
+export function rememberHitlDrafts(draftKey: string, drafts: HitlDrafts): void {
+  unsentDrafts.delete(draftKey)
+  if (Object.keys(drafts).length === 0) return
+  unsentDrafts.set(draftKey, drafts)
+  const oldest = unsentDrafts.keys().next().value
+  if (unsentDrafts.size > MAX_UNSENT_INTERACTIONS && oldest !== undefined) {
+    unsentDrafts.delete(oldest)
+  }
+}
+
+export function forgetHitlDrafts(draftKey: string): void {
+  unsentDrafts.delete(draftKey)
+}
+
+/** Test isolation only. */
+export function resetUnsentHitlDrafts(): void {
+  unsentDrafts.clear()
+}
+
 export function createHitlControllerState(seed: HitlControllerSeed): HitlControllerState {
   return {
     interactionKey: seed.interactionKey,
     currentId: seed.firstRequestId,
-    drafts: Object.fromEntries(
-      seed.answers
-        .filter(item => item.answer)
-        .map(item => [item.requestId, item.answer as string]),
-    ),
+    drafts: {
+      ...(seed.draftKey ? unsentDrafts.get(seed.draftKey) : undefined),
+      // Answers the server already holds win over a local draft.
+      ...Object.fromEntries(
+        seed.answers
+          .filter(item => item.answer)
+          .map(item => [item.requestId, item.answer as string]),
+      ),
+    },
     submission: 'idle',
     errorState: null,
     errorMessage: null,

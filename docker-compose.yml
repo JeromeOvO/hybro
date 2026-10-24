@@ -208,7 +208,7 @@ services:
 
   # One-shot: registers every enabled agent with the backend, then exits.
   # Uses filtered interpolation instead of env_file so backend secrets
-  # (Mongo, Clerk, webhook signing key, ...) never reach this container.
+  # (Mongo, Clerk, ...) never reach this container.
   registrar:
     build:
       context: ./default_agents

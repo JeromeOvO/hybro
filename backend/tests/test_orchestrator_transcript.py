@@ -3,12 +3,15 @@ from __future__ import annotations
 import pytest
 
 from execution.orchestrator.models import (
+    AgentToolInput,
     ArtifactRefPart,
     AssistantMessage,
     DataPart,
     SessionNotice,
     TextPart,
     ToolCall,
+    ToolInteractionAnswer,
+    ToolInteractionAnswers,
     ToolInteractionMessage,
     ToolInteractionQuestion,
     ToolResultMessage,
@@ -18,6 +21,7 @@ from execution.orchestrator.models import (
 from execution.orchestrator.transcript import (
     TranscriptCorruptionError,
     agent_messages_to_model,
+    resolved_user_answers,
     unresolved_call_ids,
 )
 from tests._orchestrator_helpers import NOW, user_message
@@ -127,6 +131,35 @@ def test_orchestration_context_marks_failed_results_as_diagnostic_only():
     )
 
 
+def test_room_file_results_tell_the_model_contents_were_not_read():
+    with_file = result().model_copy(
+        update={"artifact_refs": ["/api/v1/files/file-1"], "content": []}
+    )
+    without_file = result()
+
+    converted = agent_messages_to_model([assistant(), with_file])
+    plain = agent_messages_to_model([assistant(), without_file])
+
+    assert "has not read the contents" in converted[1].content[0].content[0].text
+    assert "has not read the contents" not in plain[1].content[0].content[0].text
+
+
+def test_failed_result_shows_the_agent_error_code_to_the_model():
+    failed = result().model_copy(
+        update={
+            "status": "failed",
+            "is_error": True,
+            "error_code": "llm_quota_exceeded",
+            "error_message": "Quota exceeded",
+        }
+    )
+
+    text = agent_messages_to_model([assistant(), failed])[1].content[0].content[0].text
+
+    assert "[agent error code: llm_quota_exceeded]" in text
+    assert "Quota exceeded" in text
+
+
 def test_unresolved_calls_are_reported_and_orphan_results_rejected():
     assert unresolved_call_ids([assistant()]) == {"call-1"}
     with pytest.raises(TranscriptCorruptionError, match="orphan"):
@@ -167,6 +200,7 @@ def test_tool_interaction_presents_then_resolves_with_single_result():
     assert converted[1].content[0].call_id == "call-1"
     observation = converted[1].content[0].content[0].text
     assert "agent input request" in observation
+    assert "or ask the user" in observation
     assert '"presentation_id":"prs_123"' in observation
     assert '"interaction_id":"interaction-1"' in observation
     assert '"interaction_fingerprint":"fp"' in observation
@@ -181,6 +215,62 @@ def test_tool_interaction_presents_then_resolves_with_single_result():
     final_text = final[1].content[0].content[0].text
     assert "agent input request" in final_text
     assert "artifact-1" in final_text
+    # Once the call has its result the question is history, not a live
+    # instruction; the model must not ask the user again.
+    assert "already answered" in final_text
+    assert "or ask the user" not in final_text
+
+
+def test_resolved_interaction_shows_the_users_answer():
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-1:fp",
+        call_id="call-1",
+        tool_name="echo",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="agent_question",
+                prompt="Who signs the emails?",
+                answer_kind="text",
+            )
+        ],
+        created_at=NOW,
+    )
+    answered = result().model_copy(
+        update={
+            "interaction_answers": [
+                ToolInteractionAnswers(
+                    interaction_id="interaction-1",
+                    answers=[
+                        ToolInteractionAnswer(
+                            question_id="agent_question",
+                            answer="Morgan Reyes, CEO",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+    text = agent_messages_to_model([assistant(), interaction, answered])[1]
+    text = text.content[0].content[0].text
+    # The model must see the user's own answer, or it treats the Agent's use
+    # of it as a guess and asks the user again.
+    assert "the user answered it" in text
+    assert '"user_answers":[{"answer":"Morgan Reyes, CEO"' in text
+    assert "or ask the user" not in text
+    # Answers on a different interaction round are not attributed here.
+    other = answered.model_copy(
+        update={
+            "interaction_answers": [
+                ToolInteractionAnswers(interaction_id="interaction-0", answers=[])
+            ]
+        }
+    )
+    text = agent_messages_to_model([assistant(), interaction, other])[1]
+    text = text.content[0].content[0].text
+    assert "user_answers" not in text
+    assert "already answered" in text
 
 
 def test_multi_round_hitl_transcript_folding_strips_surface_questions_and_reconciles_turns():
@@ -326,3 +416,85 @@ def test_transcript_preserves_rejected_surface_call():
     assert folded[1].role == "tool"
     assert "schema validation error" in folded[1].content[0].content[0].text
     assert folded[1].content[0].is_error is True
+
+
+def test_resolved_user_answers_cover_agent_questions_and_ask_user():
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-1:fp",
+        call_id="call-1",
+        tool_name="echo",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="sender",
+                prompt="Who signs the emails?",
+                answer_kind="text",
+            )
+        ],
+        created_at=NOW,
+    )
+    answers = [
+        ToolInteractionAnswers(
+            interaction_id="interaction-1",
+            answers=[
+                ToolInteractionAnswer(question_id="sender", answer="Morgan Reyes")
+            ],
+        )
+    ]
+    answered = result().model_copy(update={"interaction_answers": answers})
+    ask = AssistantMessage(
+        message_id="assistant-2",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-2",
+                tool_name="request_user_input",
+                arguments={"question": "Which call length?"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=UsageRecord(input_tokens=1, output_tokens=1),
+        created_at=NOW,
+    )
+    ask_result = ToolResultMessage(
+        message_id="result-2",
+        call_id="call-2",
+        tool_name="request_user_input",
+        status="completed",
+        content=[TextPart(text="20 minutes")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+    # The same answers are repeated on the interaction of a later round.
+    later = interaction.model_copy(
+        update={"message_id": "interaction:call-1:fp2", "interaction_answers": answers}
+    )
+
+    pairs = resolved_user_answers(
+        [user_message("go"), assistant(), interaction, answered, later, ask, ask_result]
+    )
+
+    assert pairs == [
+        ("Who signs the emails?", "Morgan Reyes"),
+        ("Which call length?", "20 minutes"),
+    ]
+
+
+def test_agent_task_drops_a_copied_historical_plan_label():
+    assert (
+        AgentToolInput(task="[historical plan, not evidence]\nDraft emails").task
+        == "Draft emails"
+    )
+    assert (
+        AgentToolInput(
+            task="[historical plan, not evidence; middle omitted]\nDraft\n…\nend"
+        ).task
+        == "Draft\n…\nend"
+    )
+    # Only a leading label is platform-authored; quoted text stays intact.
+    task = "Quote [historical plan, not evidence] as written"
+    assert AgentToolInput(task=task).task == task
+    with pytest.raises(ValueError):
+        AgentToolInput(task="[historical plan, not evidence]\n")

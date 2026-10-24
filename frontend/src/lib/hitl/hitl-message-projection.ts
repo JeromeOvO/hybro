@@ -6,7 +6,7 @@ import type { HitlQuestionPresentation } from '@/lib/hitl/presentation'
 export type HitlAgentSource = 'cloud' | 'local' | 'hub' | undefined
 
 export type PendingHitlProjectionInput = {
-  roomId: string
+  conversationId: string
   messageId: string
   requestId: string
   source?: 'agent' | 'supervisor' | string | null | undefined
@@ -104,7 +104,7 @@ export function buildPendingHitlIncomingMessage(
       input.requestId,
       input.groupTotal,
     ),
-    roomId: input.roomId,
+    conversationId: input.conversationId,
     messageType: 'agent',
     content: input.prompt || '',
     senderName: publicAgentName(input.agentName),

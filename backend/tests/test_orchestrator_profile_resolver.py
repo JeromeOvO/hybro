@@ -161,6 +161,12 @@ def test_default_prompts_share_truth_and_resource_contracts():
         assert "minimal verified scalar facts" in prompt
         assert "Never reproduce or reconstruct a bulk or structured Artifact" in prompt
         assert "Keep conflicting evidence unresolved" in prompt
+        assert "do not add units, currency symbols" in prompt
+        assert "if the user wrote 1.5M, write 1.5M, not $1.5M" in prompt
+        assert "including retries" in prompt
+        assert "Files that a platform record lists from earlier turns" in prompt
+        assert "naming the Agent and the work you did in its place" in prompt
+        assert "whether or not the user named that Agent" in prompt
         assert "A2A AND HYBRO RUNTIME REFERENCE" in prompt
         assert "interaction_id" in prompt
         assert "answer_kind" in prompt

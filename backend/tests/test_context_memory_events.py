@@ -17,14 +17,16 @@ class FakeProjection:
         self.calls = []
         self.compacted_rooms = []
 
-    async def project_message_for_event(self, room_id: str, message_id: str, **kwargs):
+    async def project_message_for_event(
+        self, conversation_id: str, message_id: str, **kwargs
+    ):
         if self.failure is not None:
             raise self.failure
-        self.calls.append((room_id, message_id, kwargs))
+        self.calls.append((conversation_id, message_id, kwargs))
         return self.status
 
-    async def run_compaction(self, room_id: str):
-        self.compacted_rooms.append(room_id)
+    async def run_compaction(self, conversation_id: str):
+        self.compacted_rooms.append(conversation_id)
 
 
 def event(
@@ -39,7 +41,7 @@ def event(
     return MessageCommitted(
         timestamp=NOW,
         payload={},
-        room_id="r1",
+        conversation_id="r1",
         message_id=message_id,
         message_type=message_type,
         agent_id=agent_id,

@@ -1,52 +1,40 @@
 import ast
-import inspect
 import sys
 import tomllib
 from pathlib import Path
 from typing import get_type_hints
 from unittest.mock import MagicMock
 
-import pytest
-
-from common.protocols import (
-    AgentCardResolver,
-    AgentTransport,
-    LLMGateway,
-    LLMProviderAdapter,
-    ModelRegistry,
-)
+from common.protocols import AgentCardResolver, LLMGateway
+from llm_gateway.gateway import LLMProviderAdapter
 
 
 def test_adapter_implementations_satisfy_runtime_protocols():
-    from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+    from a2a_adapter import AgentCardResolverImpl
     from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
 
     fake_client = MagicMock()
     registry = ModelRegistryImpl()
 
-    assert isinstance(AgentTransportImpl(timeout=1, client=fake_client), AgentTransport)
     assert isinstance(AgentCardResolverImpl(client=fake_client), AgentCardResolver)
     assert isinstance(
         LLMGatewayImpl(model_registry=registry, providers={"openai": MagicMock()}),
         LLMGateway,
     )
-    assert isinstance(registry, ModelRegistry)
 
 
 def test_adapter_top_level_exports_are_explicit():
     import a2a_adapter
     import llm_gateway
-    from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+    from a2a_adapter import AgentCardResolverImpl
     from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
 
-    assert AgentTransportImpl is a2a_adapter.AgentTransportImpl
     assert AgentCardResolverImpl is a2a_adapter.AgentCardResolverImpl
     assert LLMGatewayImpl is llm_gateway.LLMGatewayImpl
     assert ModelRegistryImpl is llm_gateway.ModelRegistryImpl
-    assert set(a2a_adapter.__all__) == {"AgentTransportImpl", "AgentCardResolverImpl"}
+    assert set(a2a_adapter.__all__) == {"AgentCardResolverImpl"}
     assert set(llm_gateway.__all__) == {
         "LLMGatewayImpl",
-        "LLMServiceNotBoundError",
         "ModelRegistryImpl",
     }
 
@@ -106,64 +94,6 @@ def test_a2a_adapter_import_boundary():
 
     _assert_import_boundary(
         Path("a2a_adapter"),
-        allowed_roots,
-        forbidden_roots,
-        excluded_paths={Path("a2a_adapter/runtime_service.py")},
-    )
-
-
-def test_a2a_task_tracking_port_matches_execution_implementation():
-    from a2a_adapter.runtime_service import A2ATaskTrackingPort
-    from execution.task_tracking import A2ATaskTrackingService
-
-    for method_name in (
-        "create_task_for_tracking",
-        "send_message_to_tracked_agent",
-        "reply_to_task",
-    ):
-        port_signature = inspect.signature(getattr(A2ATaskTrackingPort, method_name))
-        implementation_signature = inspect.signature(
-            getattr(A2ATaskTrackingService, method_name)
-        )
-        port_parameters = [
-            (name, parameter.kind, parameter.default)
-            for name, parameter in port_signature.parameters.items()
-        ]
-        implementation_parameters = [
-            (name, parameter.kind, parameter.default)
-            for name, parameter in implementation_signature.parameters.items()
-        ]
-        assert port_parameters == implementation_parameters
-
-
-def test_a2a_service_requires_injected_task_tracking():
-    from a2a_adapter.runtime_service import A2AService
-
-    with pytest.raises(RuntimeError, match="bind_task_tracking"):
-        A2AService()._require_task_tracking()
-
-
-def test_a2a_runtime_service_import_boundary():
-    allowed_roots = set(sys.stdlib_module_names) | {
-        "__future__",
-        "a2a_adapter",
-        "common",
-        "models",
-    }
-    forbidden_roots = {
-        ("app_" + "shell"),
-        "config",
-        "container",
-        "database",
-        "execution",
-        "infrastructure",
-        "main",
-        "modules",
-        "services",
-    }
-
-    _assert_import_boundary(
-        Path("a2a_adapter/runtime_service.py"),
         allowed_roots,
         forbidden_roots,
     )
@@ -233,7 +163,6 @@ def _assert_import_boundary(
     package_path: Path,
     allowed_roots: set[str],
     forbidden_roots: set[str],
-    excluded_paths: set[Path] | None = None,
 ) -> None:
     assert package_path.exists(), f"{package_path} does not exist"
 
@@ -241,8 +170,6 @@ def _assert_import_boundary(
         [package_path] if package_path.is_file() else sorted(package_path.rglob("*.py"))
     )
     for path in paths:
-        if path in (excluded_paths or set()):
-            continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             imported_roots: set[str] = set()

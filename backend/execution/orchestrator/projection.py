@@ -201,8 +201,8 @@ class ProjectionOutboxWorker:
             else:
                 run = await self.run_store.load(run_id) or run
             run = await self._settle(run, now)
-            # Backward-compatible listeners remain supported for non-settlement
-            # intents. Canonical run_settled is projected inside its dependent
+            # The after_project listener handles non-settlement intents.
+            # Canonical run_settled is projected inside its dependent
             # durable intent, before completion, by the composition root.
             if (
                 intent.kind != "project_terminal_run_status"

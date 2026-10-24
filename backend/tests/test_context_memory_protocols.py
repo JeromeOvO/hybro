@@ -5,18 +5,13 @@ import sys
 import tomllib
 from datetime import UTC
 from pathlib import Path
-from typing import get_type_hints
 
 import pytest
 
-from common.protocols import (
-    CompactionPort,
-    ContextAssemblyPort,
-    MemoryRepository,
-    MemorySearchPort,
-    ProjectionPort,
-    RoomMemoryCleanupPort,
-)
+from context_memory.events import ProjectionPort
+from context_memory.ports import MemoryRepository
+from conversation.deletion import RoomMemoryCleanupPort
+from jobs.compaction_sweep import CompactionPort
 
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 
@@ -27,24 +22,24 @@ class FakeMongo:
 
 
 class FakeMemoryRepository:
-    async def get_room_memory(self, room_id: str) -> dict | None:
+    async def get_room_memory(self, conversation_id: str) -> dict | None:
         return None
 
-    async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
+    async def upsert_room_memory(self, conversation_id: str, memory: dict) -> None:
         return None
 
-    async def delete_room_memory(self, room_id: str) -> bool:
+    async def delete_room_memory(self, conversation_id: str) -> bool:
         return True
 
     async def create_room_memory(self, memory: dict) -> str:
         return memory["memory_id"]
 
-    async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
-        return {"room_id": room_id, **defaults}
+    async def ensure_room_memory(self, conversation_id: str, defaults: dict) -> dict:
+        return {"room_id": conversation_id, **defaults}
 
     async def push_and_trim_conversation_turn(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         *,
         max_turns: int,
@@ -55,7 +50,7 @@ class FakeMemoryRepository:
 
     async def push_and_trim_conversation_turn_if_absent(
         self,
-        room_id: str,
+        conversation_id: str,
         turn: dict,
         *,
         turn_id: str,
@@ -65,26 +60,8 @@ class FakeMemoryRepository:
     ) -> tuple[bool, bool, bool]:
         return True, True, False
 
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return True
-
-    async def get_room_summary_projection(self, room_id: str) -> dict | None:
-        return None
-
-    async def update_room_summary_atomic(
-        self,
-        room_id: str,
-        room_summary: dict,
-        *,
-        new_facts: list[dict] | None = None,
-        max_facts: int = 50,
-    ) -> bool:
-        return True
-
     async def compact_turns_bulk(
-        self, room_id: str, compacted_turns: list[dict]
+        self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
         return True
 
@@ -96,43 +73,24 @@ class FakeContentRepository:
     async def upsert_full_content(self, **kwargs) -> str:
         return kwargs["document_id"]
 
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
+    async def get_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> dict | None:
         return None
 
-    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
-        return None
-
-    async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
+    async def delete_content_by_turn_id(
+        self, conversation_id: str, turn_id: str
+    ) -> bool:
         return True
 
-    async def delete_content_by_room_id(self, room_id: str) -> int:
+    async def delete_content_by_room_id(self, conversation_id: str) -> int:
         return 0
-
-    async def get_content_stats_for_room(self, room_id: str) -> dict:
-        return {"room_id": room_id}
-
-    async def text_search(
-        self,
-        room_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]:
-        return []
-
-    async def scan_text_search(
-        self, room_id: str, query: str, limit: int
-    ) -> list[dict]:
-        return []
-
-    async def hydrate_turn_content(
-        self, room_id: str, turn_ids: list[str]
-    ) -> list[dict]:
-        return []
 
 
 class FakeRoomHistoryReader:
-    async def get_messages_for_room(self, room_id: str, limit: int, before=None):
+    async def get_messages_for_room(
+        self, conversation_id: str, limit: int, before=None
+    ):
         return []
 
     async def get_messages_by_ids(self, message_ids: list[str]):
@@ -140,20 +98,6 @@ class FakeRoomHistoryReader:
 
     async def get_message_thread(self, parent_message_id: str):
         return []
-
-
-class FakeLLM:
-    async def generate(self, request):
-        return None
-
-    async def generate_structured(self, messages, schema, model=None):
-        return type("Response", (), {"data": {}})()
-
-    async def embed(self, text):
-        return [0.1]
-
-    async def embed_batch(self, texts):
-        return [[0.1] for _ in texts]
 
 
 def _facade():
@@ -165,49 +109,17 @@ def _facade():
         memory_repository=FakeMemoryRepository(),
         content_repository=FakeContentRepository(),
         room_history_reader=FakeRoomHistoryReader(),
-        llm_provider=FakeLLM(),
         id_factory=lambda: "id-1",
         now=lambda: datetime.now(UTC),
     )
 
 
-def test_context_assembly_port_and_facade_parameter_types_match():
-    from context_memory import ContextMemoryFacade
-
-    protocol_hints = get_type_hints(
-        ContextAssemblyPort.assemble_supervisor_context_from_memory
-    )
-    facade_hints = get_type_hints(
-        ContextMemoryFacade.assemble_supervisor_context_from_memory
-    )
-
-    for parameter in (
-        "room_memory_doc",
-        "current_task",
-        "agent_registry",
-        "max_turns",
-        "memory_search_results",
-        "return",
-    ):
-        assert facade_hints[parameter] == protocol_hints[parameter]
-
-    protocol_hints = get_type_hints(
-        ContextAssemblyPort.assemble_agent_execution_context_from_memory
-    )
-    facade_hints = get_type_hints(
-        ContextMemoryFacade.assemble_agent_execution_context_from_memory
-    )
-    assert facade_hints == protocol_hints
-
-
 def test_context_memory_port_conformance():
-    from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
+    from context_memory.ports import ContentStorageRepository
 
     facade = _facade()
 
-    assert isinstance(facade, ContextAssemblyPort)
-    assert isinstance(facade, MemorySearchPort)
     assert isinstance(facade, ProjectionPort)
     assert isinstance(facade, CompactionPort)
     assert isinstance(facade, RoomMemoryCleanupPort)
@@ -323,7 +235,7 @@ def test_context_memory_packages_are_listed():
 
 
 def test_context_memory_protocol_method_sets():
-    from common import protocols
+    from context_memory import ports as protocols
 
     def public_methods(protocol):
         return {
@@ -334,14 +246,9 @@ def test_context_memory_protocol_method_sets():
 
     assert public_methods(protocols.ContentStorageRepository) == {
         "upsert_full_content",
-        "get_content_by_document_id",
         "get_content_by_turn_id",
         "delete_content_by_turn_id",
         "delete_content_by_room_id",
-        "get_content_stats_for_room",
-        "text_search",
-        "scan_text_search",
-        "hydrate_turn_content",
     }
 
 
@@ -353,7 +260,6 @@ def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch)
 
     facade = create_context_memory_facade(
         mongo=FakeMongo(),
-        llm_provider=FakeLLM(),
         room_history_reader=FakeRoomHistoryReader(),
     )
 
@@ -362,45 +268,23 @@ def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch)
 
 def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     from common.config import settings
-    from context_memory.config import (
-        CompactionConfig,
-        MemorySearchConfig,
-        TokenBudgetConfig,
-    )
+    from context_memory.config import CompactionConfig
 
-    monkeypatch.setattr(settings, "context_model_window", 12345)
-    monkeypatch.setattr(settings, "context_system_prompt_tokens", 101)
-    monkeypatch.setattr(settings, "context_tool_schema_tokens", 102)
-    monkeypatch.setattr(settings, "context_response_reserve_tokens", 103)
-    monkeypatch.setattr(settings, "context_room_pct", 0.2)
-    monkeypatch.setattr(settings, "context_history_pct", 0.5)
-    monkeypatch.setattr(settings, "context_task_pct", 0.3)
     monkeypatch.setattr(settings, "compaction_enabled", False)
     monkeypatch.setattr(settings, "compaction_max_full_turns", 7)
     monkeypatch.setattr(settings, "compaction_max_total_tokens", 777)
     monkeypatch.setattr(settings, "compaction_preserve_recent", 3)
     monkeypatch.setattr(settings, "compaction_content_ttl_days", 9)
     monkeypatch.setattr(settings, "compaction_concurrency", 4)
-    monkeypatch.setattr(settings, "memory_search_enabled", False)
 
-    token_budget = TokenBudgetConfig()
     compaction = CompactionConfig()
-    search = MemorySearchConfig()
 
-    assert token_budget.model_context_window == 12345
-    assert token_budget.system_prompt == 101
-    assert token_budget.tool_schemas == 102
-    assert token_budget.response_reserve == 103
-    assert token_budget.room_context_pct == 0.2
-    assert token_budget.conversation_history_pct == 0.5
-    assert token_budget.current_task_pct == 0.3
     assert compaction.enabled is False
     assert compaction.max_full_turns == 7
     assert compaction.max_total_tokens == 777
     assert compaction.preserve_recent_turns == 3
     assert compaction.content_ttl_days == 9
     assert compaction.concurrency == 4
-    assert search.enabled is False
 
 
 def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):
@@ -420,51 +304,6 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
     with pytest.raises(RuntimeError, match="settings validation failed"):
         context_memory_config._setting("context_model_window", 128000)
-
-
-def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
-    from conversation.agent_message_preparation import AgentMessagePreparationService
-    from models.memory import ConversationTurn, RoomMemory, TurnRole
-
-    class FailingAssembly:
-        received_memory = None
-
-        def assemble_agent_execution_context_from_memory(
-            self, room_memory, current_task, **kwargs
-        ):
-            self.received_memory = room_memory
-            raise RuntimeError("canonical assembly failed")
-
-    assembly = FailingAssembly()
-    services = object.__new__(AgentMessagePreparationService)
-    services._context_assembly = assembly
-    room_memory = RoomMemory(
-        room_id="room-1",
-        conversation_history=[
-            ConversationTurn(turn_id="turn-1", role=TurnRole.USER, content="canonical")
-        ],
-        memory_content={
-            "summary": "summary only",
-            "conversation_history": [
-                {"turn_id": "nested", "role": "user", "content": "retired nested"}
-            ],
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="canonical assembly failed"):
-        services._build_agent_execution_context_from_memory(
-            room_memory=room_memory,
-            current_task="task",
-            agent_name="Agent",
-            room_awareness=None,
-            quoted_text=None,
-            agent_task=None,
-        )
-
-    assert assembly.received_memory is room_memory
-    source = inspect.getsource(AgentMessagePreparationService.process_agent_message)
-    assert "build_context_for_agent" not in source
-    assert "room_memory_content" not in source
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():

@@ -18,11 +18,11 @@ import { hitlRequestKey } from '@/lib/hitl/hitl-message-projection'
 import { acquireHitlSubmissionFence } from './hitl-submission-fence'
 
 export function useRoomActions(
-  roomId: string,
+  conversationId: string,
   getToken: (() => Promise<string | null>) | undefined,
   lifecycle: ProcessingLifecycle,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
-  reconcileWithDb: (roomId: string) => Promise<void>,
+  reconcileWithDb: (conversationId: string) => Promise<void>,
   setCancelling: (v: boolean) => void,
   sseEnabled: boolean,
   setSseEnabled: (v: boolean) => void,
@@ -49,22 +49,22 @@ export function useRoomActions(
       ) {
         const store = useMessageStore.getState()
         const userMessage = store.entities[messageId]
-        ensureInitialProcessingStatusLog(roomId, userMessage)
+        ensureInitialProcessingStatusLog(conversationId, userMessage)
         appendProcessingStatusLog(
-          roomId,
+          conversationId,
           userMessage,
           'Stopping...',
           new Date().toISOString(),
         )
         lifecycle.armCancelTimeout(() => {
-          const cancelling = useRoomUiStore.getState().getRoomFlags(roomId).cancelling
+          const cancelling = useRoomUiStore.getState().getRoomFlags(conversationId).cancelling
           if (cancelling) {
             lifecycle.setCancelTimedOut(true)
             toast.warning('Cancellation is taking longer than expected — the agent may still be stopping')
           }
         })
         try {
-          await reconcileWithDb(roomId)
+          await reconcileWithDb(conversationId)
         } catch (reconcileError) {
           console.error('Failed to reconcile pending cancellation:', reconcileError)
         }
@@ -77,13 +77,13 @@ export function useRoomActions(
       }
 
       if (cancellation.outcome === 'already_terminal') {
-        await reconcileWithDb(roomId)
+        await reconcileWithDb(conversationId)
         setCancelling(false)
         if (cancellation.status !== 'finalizing') {
           lifecycle.markProcessingResolved()
           lifecycle.stopProcessing()
           lifecycle.disarmCancelTimeout()
-          useMessageStore.getState().removeMessage(lifecycle.placeholderId(roomId))
+          useMessageStore.getState().removeMessage(lifecycle.placeholderId(conversationId))
         }
         return true
       }
@@ -99,7 +99,7 @@ export function useRoomActions(
     getToken,
     setCancelling,
     lifecycle,
-    roomId,
+    conversationId,
     reconcileWithDb,
     requestCanonicalSnapshot,
   ])
@@ -112,7 +112,7 @@ export function useRoomActions(
     const answerById = new Map(answers.map(answer => [answer.requestId, answer.answer]))
     const store = useMessageStore.getState()
     const interactionEntities = Object.values(store.entities).filter(entity =>
-      entity.roomId === roomId
+      entity.conversationId === conversationId
       && entity.hitlRequestId
       && (entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId) === interactionId
     )
@@ -120,12 +120,12 @@ export function useRoomActions(
       entity.hitlRequestId && answerById.has(entity.hitlRequestId)
     ))
 
-    const releaseSubmissionFence = acquireHitlSubmissionFence(roomId, interactionId)
+    const releaseSubmissionFence = acquireHitlSubmissionFence(conversationId, interactionId)
     let response
     try {
       const { respondToHitlBatch: submitBatch } = await import('@/lib/api/hitl')
       response = await submitBatch(
-        roomId,
+        conversationId,
         interactionId,
         answers,
         clientRequestId,
@@ -137,7 +137,7 @@ export function useRoomActions(
         // conflict is therefore never inferred as success from local state:
         // refresh DB + REST pending authority, request a forced canonical
         // snapshot reconnect as best effort, then surface the original conflict.
-        await reconcileWithDb(roomId)
+        await reconcileWithDb(conversationId)
         try {
           requestCanonicalSnapshot?.()
         } catch (snapshotError) {
@@ -147,7 +147,7 @@ export function useRoomActions(
           throw new Error('Authoritative HITL refresh is unavailable.', { cause: error })
         }
         const refreshed = await hydrateRoomFromDb({
-          roomId,
+          conversationId,
           phase: 'hitl_overlay',
           getToken,
           hitlRequestIndex,
@@ -164,7 +164,7 @@ export function useRoomActions(
     }
 
     // MessageStore and the lifecycle may now belong to a different room.
-    if (useMessageStore.getState().roomId !== roomId) return
+    if (useMessageStore.getState().conversationId !== conversationId) return
 
     const applied = response.status === 'applied' || response.status === 'responded'
     for (const entity of entities) {
@@ -172,7 +172,7 @@ export function useRoomActions(
       if (!requestId) continue
       store.upsertMessage({
         id: entity.id,
-        roomId,
+        conversationId,
         messageType: 'agent',
         content: entity.content,
         senderName: entity.senderName,
@@ -191,7 +191,7 @@ export function useRoomActions(
     if (applied) {
       const first = entities[0]
       const resumeClientRequestId = clientRequestId ?? first?.clientRequestId
-      const processingUserEntity = findProcessingStatusUserEntity(roomId, {
+      const processingUserEntity = findProcessingStatusUserEntity(conversationId, {
         relatedMessageId: first?.relatedMessageId,
         clientRequestId: resumeClientRequestId,
         beforeTimestamp: first?.timestamp,
@@ -204,13 +204,13 @@ export function useRoomActions(
         || (currentClientRequestId && currentClientRequestId !== resumeClientRequestId)
         || (pendingAck && pendingAck !== resumeClientRequestId)
         || (first?.clientRequestId && first.clientRequestId !== resumeClientRequestId)
-        || useRoomUiStore.getState().getRoomFlags(roomId).cancelling
+        || useRoomUiStore.getState().getRoomFlags(conversationId).cancelling
       ) return
 
       // The HTTP request waits for continuation: newer SSE may already have
       // settled this exact root or paused it at a subsequent questionnaire.
       // HITL itself marks processing resolved, so that flag cannot fence ACKs.
-      const turns = useTurnStore.getState().rooms[roomId]?.turns
+      const turns = useTurnStore.getState().rooms[conversationId]?.turns
       const turn = Object.values(turns ?? {}).find(candidate => (
         (candidate.userMessageId === processingUserEntity?.id
           && candidate.clientRequestId === resumeClientRequestId)
@@ -233,17 +233,17 @@ export function useRoomActions(
         return
       }
       const latestStore = useMessageStore.getState()
-      if (selectPendingHitls(roomId, latestStore.entities, latestStore.orderedIds).some(hitl => (
+      if (selectPendingHitls(conversationId, latestStore.entities, latestStore.orderedIds).some(hitl => (
         hitl.interactionId !== interactionId && !hitl.isAnswered
       ))) return
 
       lifecycle.resetPlaceholder()
       lifecycle.resetProcessingResolved()
       lifecycle.setPendingRunEventAck(resumeClientRequestId ?? null)
-      store.removeMessage(lifecycle.placeholderId(roomId))
-      ensureInitialProcessingStatusLog(roomId, processingUserEntity)
+      store.removeMessage(lifecycle.placeholderId(conversationId))
+      ensureInitialProcessingStatusLog(conversationId, processingUserEntity)
       appendProcessingStatusLog(
-        roomId,
+        conversationId,
         processingUserEntity,
         'Applying your answers…',
         new Date(Date.now() + 1).toISOString(),
@@ -258,7 +258,7 @@ export function useRoomActions(
     lifecycle,
     reconcileWithDb,
     requestCanonicalSnapshot,
-    roomId,
+    conversationId,
   ])
 
   const cancelHitlRequest = useCallback(async (
@@ -267,7 +267,7 @@ export function useRoomActions(
   ) => {
     const store = useMessageStore.getState()
     const target = Object.values(store.entities).find(entity => {
-      if (entity.roomId !== roomId || entity.hitlRequestId !== requestId) return false
+      if (entity.conversationId !== conversationId || entity.hitlRequestId !== requestId) return false
       const entityInteractionId = entity.hitlInteractionId
         ?? entity.hitlGroupId
         ?? entity.hitlRequestId
@@ -287,7 +287,7 @@ export function useRoomActions(
     try {
       const { cancelHitl } = await import('@/lib/api/hitl')
       result = await cancelHitl(
-        roomId,
+        conversationId,
         interactionId,
         target.hitlInteractionVersion,
         target.clientRequestId ?? crypto.randomUUID(),
@@ -296,7 +296,7 @@ export function useRoomActions(
     } catch (error) {
       if (error instanceof ApiError && (error.status === 404 || error.status === 409 || error.status === 410)) {
         try {
-          await reconcileWithDb(roomId)
+          await reconcileWithDb(conversationId)
         } catch (reconcileError) {
           console.error('Failed to reconcile rejected HITL cancellation:', reconcileError)
         }
@@ -307,10 +307,10 @@ export function useRoomActions(
 
     for (const entity of Object.values(store.entities)) {
       const entityInteractionId = entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId
-      if (entity.roomId !== roomId || entityInteractionId !== interactionId) continue
+      if (entity.conversationId !== conversationId || entityInteractionId !== interactionId) continue
       store.upsertMessage({
         id: entity.id,
-        roomId,
+        conversationId,
         messageType: 'agent',
         content: entity.content,
         senderName: entity.senderName,
@@ -331,7 +331,7 @@ export function useRoomActions(
     }
 
     try {
-      await reconcileWithDb(roomId)
+      await reconcileWithDb(conversationId)
     } catch (reconcileError) {
       console.error('Failed to reconcile accepted HITL cancellation:', reconcileError)
     }
@@ -346,17 +346,17 @@ export function useRoomActions(
     lifecycle,
     reconcileWithDb,
     requestCanonicalSnapshot,
-    roomId,
+    conversationId,
     setCancelling,
   ])
 
   // Manually refresh messages — reconciles from DB and re-overlays any pending HITL questions
   // that may have been missed by SSE (e.g. during the "Applying your answers" transition).
   const refreshMessages = useCallback(async () => {
-    await reconcileWithDb(roomId)
+    await reconcileWithDb(conversationId)
     if (getAgentName && getAgentSource) {
       await hydrateRoomFromDb({
-        roomId,
+        conversationId,
         phase: 'hitl_overlay',
         getToken,
         hitlRequestIndex,
@@ -364,7 +364,7 @@ export function useRoomActions(
         getAgentSource,
       })
     }
-  }, [roomId, reconcileWithDb, getToken, hitlRequestIndex, getAgentName, getAgentSource])
+  }, [conversationId, reconcileWithDb, getToken, hitlRequestIndex, getAgentName, getAgentSource])
 
   // Toggle SSE connection
   const toggleSSE = useCallback(() => {

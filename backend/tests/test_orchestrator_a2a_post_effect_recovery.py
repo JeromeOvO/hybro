@@ -360,6 +360,7 @@ async def test_checkpointed_accepted_call_recovery_releases_lease_then_dispatche
         dispatch=dispatch,
         observations=ingress,
         recover_dispatch=concrete_recovery_dispatch,
+        hitl=InMemoryHITLApplicationPort(),
     )
     record = await ledger.load("run-1", "call-1")
     recovered = await recovery.recover_call(record, now=datetime.now(UTC))

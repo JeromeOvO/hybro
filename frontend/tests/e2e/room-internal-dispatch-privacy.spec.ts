@@ -62,15 +62,24 @@ async function expectInternalPromptNeverRendered(page: Page) {
 function agentFixture() {
   return {
     agent_id: 'agent-1',
-    agent_status: 'active',
-    agent_card: {
-      name: 'Insurer Agent',
-      description: 'Quotes insurance submissions',
-      url: 'https://example.test/agent-1',
-      version: '1.0.0',
-      capabilities: {},
-      skills: [],
+    provider_id: 'provider-1',
+    provider_name: 'Example Provider',
+    status: 'active',
+    source: 'cloud',
+    is_public: true,
+    call_count: 0,
+    name: 'Insurer Agent',
+    description: 'Quotes insurance submissions',
+    version: '1.0.0',
+    skills: [],
+    capabilities: {
+      streaming: false,
+      push_notifications: false,
+      state_transition_history: false,
+      extensions: false,
     },
+    default_input_modes: ['text/plain'],
+    default_output_modes: ['text/plain'],
   }
 }
 
@@ -101,17 +110,18 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/inquiryRoomSetting', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}`, async route => {
+    if (route.request().method() !== 'GET') return route.fallback()
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         resolved_agents: [],
         active_runs: [],
         room: {
-          room_id: ROOM_ID,
+          conversation_id: ROOM_ID,
           room_name: 'Privacy Room',
           room_owner_id: 'user-1',
           room_owner_name: 'User',
@@ -123,25 +133,14 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/inquiryRoomMessagesByRoomId', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        room_id: ROOM_ID,
-        message_list: [],
-      }),
-    })
-  })
 
-  await page.route('**/api/v1/roomCenter/inquiryActiveRuns', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}/active-runs`, async route => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         active_runs: [],
       }),
     })
@@ -155,7 +154,20 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/sendMessage', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}/messages*`, async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          conversation_id: ROOM_ID,
+          message_list: [],
+        }),
+      })
+      return
+    }
+
     const payload = route.request().postDataJSON() as { client_request_id?: unknown }
     const clientRequestId = typeof payload.client_request_id === 'string'
       ? payload.client_request_id
@@ -166,10 +178,10 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         message_id: USER_MESSAGE_ID,
         message: {
-          room_id: ROOM_ID,
+          conversation_id: ROOM_ID,
           message_id: USER_MESSAGE_ID,
           message_type: 'user',
           user_id: 'user_local_developer',
@@ -198,13 +210,13 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     const frames = [
       {
         type: 'connected',
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         timestamp: now,
         data: { status: 'connected' },
       },
       {
         type: 'task_update',
-        room_id: ROOM_ID,
+        conversation_id: ROOM_ID,
         timestamp: now,
         data: {
           message_id: AGENT_MESSAGE_ID,
@@ -239,7 +251,10 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
   await expect(page.getByTestId('send-button')).toBeEnabled()
   await expectInternalPromptNeverRendered(page)
 
-  const sendRequestPromise = page.waitForRequest('**/api/v1/roomCenter/sendMessage')
+  const sendRequestPromise = page.waitForRequest(
+    request => request.method() === 'POST'
+      && new URL(request.url()).pathname.endsWith(`/api/v1/rooms/${ROOM_ID}/messages`),
+  )
   await page.getByTestId('send-button').click()
   const sendRequest = await sendRequestPromise
   const sendPayload = sendRequest.postDataJSON() as { client_request_id?: unknown }

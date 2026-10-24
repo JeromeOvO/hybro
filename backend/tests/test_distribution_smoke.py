@@ -10,7 +10,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_RUNTIME_MODULES = (
-    "common.prompts",
+    "common.eventing",
     "execution.repository",
 )
 REQUIRED_WHEEL_PATHS = tuple(
@@ -81,13 +81,13 @@ def test_built_wheel_installs_runtime_subpackages(tmp_path: Path) -> None:
     outside_project = tmp_path / "outside-project"
     outside_project.mkdir()
     smoke_code = """
-import common.prompts
+import common.eventing
 import execution.repository
 from pathlib import Path
 import sys
 
 prefix = Path(sys.prefix).resolve()
-for module in (common.prompts, execution.repository):
+for module in (common.eventing, execution.repository):
     assert prefix in Path(module.__file__).resolve().parents
 """
     env = os.environ.copy()

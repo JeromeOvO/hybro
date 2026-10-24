@@ -46,6 +46,9 @@ _PAYLOAD_KEY_MAX_CHARS = 64
 _SAFE_IDENTIFIER_KEYS = frozenset(
     {
         "id",
+        "conversation_id",
+        # Internal event payloads keep the stored ``room_id`` key for rolling
+        # deploys (see ``InternalDomainEvent``).
         "room_id",
         "run_id",
         "message_id",

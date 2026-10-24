@@ -4,16 +4,16 @@ import { selectPendingHitls } from './select-hitl'
 import { isPendingState } from '@/lib/types/sse'
 
 export function selectComposerState(
-  roomId: string,
+  conversationId: string,
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
 ): ComposerState {
-  const pendingHitls = selectPendingHitls(roomId, entities, orderedIds)
+  const pendingHitls = selectPendingHitls(conversationId, entities, orderedIds)
 
   const hasActiveTask = orderedIds.some(id => {
     const e = entities[id]
     return e
-      && e.roomId === roomId
+      && e.conversationId === conversationId
       && !e.isEphemeral
       && e.messageType === 'agent'
       && e.taskStatus != null

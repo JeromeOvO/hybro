@@ -5,9 +5,10 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
-from agent.facade import AgentFacade
+from agent.facade import LOCAL_AGENT_INACTIVE_RETENTION, AgentFacade
 from common.dto import AgentCardSnapshot, LocalAgentUpsertResult
 from local_agents.card_probe import LocalAgentCardProbe
 from local_agents.config import LocalAgentDiscoveryConfig
@@ -70,6 +71,7 @@ class Writer:
     def __init__(self) -> None:
         self.local_ids: list[str] = []
         self.inactive: list[str] = []
+        self.prune_calls = 0
 
     async def upsert_local_agent(self, discovery_url, card):
         del discovery_url, card
@@ -85,6 +87,10 @@ class Writer:
         newly_inactive = [item for item in agent_ids if item not in self.inactive]
         self.inactive.extend(newly_inactive)
         return len(newly_inactive)
+
+    async def prune_inactive_local_agents(self):
+        self.prune_calls += 1
+        return 0
 
 
 def _service(scanner: Scanner, probe: Probe, writer: Writer) -> LocalAgentService:
@@ -222,6 +228,49 @@ async def test_card_probe_rejects_card_that_redirects_dispatch_off_host():
 
 
 @pytest.mark.asyncio
+async def test_card_probe_discovers_v03_and_mixed_agents():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+    from tests.fakes.a2a_v1 import make_v03_card_json
+
+    host = "host.docker.internal"
+    cards = {
+        9001: make_v03_card_json(url=f"http://{host}:9001/a2a"),
+        9002: make_v03_card_json(
+            supportedInterfaces=[
+                {
+                    "url": f"http://{host}:9002/v03",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3.0",
+                },
+                {
+                    "url": f"http://{host}:9002/v1",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                },
+            ]
+        ),
+    }
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=cards[request.url.port])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        probe = LocalAgentCardProbe(
+            host=host, resolver=AgentCardResolverImpl(client=client)
+        )
+        discovered = await probe.probe_agent_cards([9001, 9002])
+
+    versions = {
+        url: [item.protocol_version for item in card.interfaces]
+        for url, card in discovered
+    }
+    assert versions == {
+        f"http://{host}:9001": ["0.3.0"],
+        f"http://{host}:9002": ["0.3.0", "1.0"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_discovery_reuses_an_inflight_cycle():
     started = asyncio.Event()
     release = asyncio.Event()
@@ -278,6 +327,13 @@ class FacadeRepository:
         self.docs[agent_id].update(updates)
         return self.docs[agent_id]
 
+    async def update_where(self, agent_id, conditions, updates):
+        doc = self.docs.get(agent_id)
+        if doc is None or any(doc.get(k) != v for k, v in conditions.items()):
+            return False
+        doc.update({**updates, "agent_id": agent_id})
+        return True
+
     async def get_by_source(self, source):
         return [doc for doc in self.docs.values() if doc.get("source") == source]
 
@@ -293,6 +349,10 @@ class FacadeRepository:
                 doc["agent_status"] = "inactive"
                 count += 1
         return count
+
+    async def delete_inactive_ownerless(self, *, source, inactive_before):
+        self.prune_args = (source, inactive_before)
+        return 2
 
 
 class Resolver:
@@ -373,3 +433,55 @@ async def test_local_agent_id_is_stable_and_reactivation_preserves_record():
     assert repository.docs[first.agent_id]["source"] == "local"
     assert repository.docs[first.agent_id]["is_public"] is True
     assert await facade.is_directly_callable(first.agent_id) is True
+
+
+@pytest.mark.asyncio
+async def test_discovery_cycle_prunes_long_inactive_local_records():
+    writer = Writer()
+
+    await _service(Scanner(), Probe(), writer).request_discovery()
+
+    assert writer.prune_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_prune_deletes_ownerless_local_records_past_retention():
+    repository = FacadeRepository()
+    now = datetime(2026, 10, 23, tzinfo=UTC)
+    facade = AgentFacade(
+        repository=repository,
+        card_resolver=Resolver(),
+        id_factory=lambda: "unused",
+        now=lambda: now,
+    )
+
+    assert await facade.prune_inactive_local_agents() == 2
+    assert repository.prune_args == ("local", now - LOCAL_AGENT_INACTIVE_RETENTION)
+
+
+@pytest.mark.asyncio
+async def test_discovery_does_not_overwrite_a_record_registration_took_over():
+    taken_over = {
+        "agent_id": "local-1",
+        "provider_id": "owner",
+        "source": "cloud",
+        "normalized_url": "http://localhost:9001",
+        "agent_status": "active",
+        "agent_card": {"name": "Registered", "url": "http://localhost:9001"},
+    }
+    repository = FacadeRepository(dict(taken_over))
+    stale = {**taken_over, "provider_id": None, "source": "local"}
+
+    async def stale_read(normalized_url, provider_id=None):
+        del normalized_url, provider_id
+        return stale
+
+    repository.find_by_normalized_url = stale_read
+
+    result = await _facade(repository).upsert_local_agent(
+        "http://host.docker.internal:9001",
+        _card(),
+    )
+
+    assert result.managed is False
+    assert repository.docs["local-1"] == taken_over

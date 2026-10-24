@@ -21,7 +21,7 @@ function makeLifecycle(): ProcessingLifecycle {
 
 describe('handleHitlRequest', () => {
   beforeEach(() => {
-    useMessageStore.setState({ entities: {}, orderedIds: [], roomId: 'room-1' })
+    useMessageStore.setState({ entities: {}, orderedIds: [], conversationId: 'room-1' })
   })
 
   it('does not clear the active processing placeholder for a stale durable HITL event', async () => {
@@ -32,7 +32,7 @@ describe('handleHitlRequest', () => {
       [
         {
           id: 'placeholder-room-1',
-          roomId: 'room-1',
+          conversationId: 'room-1',
           messageType: 'agent',
           content: 'Working...',
           senderName: 'Hybro',
@@ -40,7 +40,7 @@ describe('handleHitlRequest', () => {
         },
         {
           id: 'current-user',
-          roomId: 'room-1',
+          conversationId: 'room-1',
           messageType: 'user',
           content: 'current turn',
           senderName: 'User',
@@ -60,7 +60,7 @@ describe('handleHitlRequest', () => {
 
     await handleHitlRequest(
       {
-        roomId: 'room-1',
+        conversationId: 'room-1',
         lifecycle,
         getAgentName: async () => 'Agent',
         getAgentSource: () => undefined,
@@ -70,7 +70,7 @@ describe('handleHitlRequest', () => {
       },
       {
         type: 'hitl_request',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp,
         data: {
           request_id: 'old-hitl',
@@ -107,7 +107,7 @@ describe('handleHitlRequest', () => {
     const timestamp = new Date().toISOString()
     const index = { current: new Map<string, string>() }
     const ctx = {
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lifecycle,
       getAgentName: async () => 'Cyber Broker Agent',
       getAgentSource: () => undefined,
@@ -117,7 +117,7 @@ describe('handleHitlRequest', () => {
     }
     useMessageStore.getState().upsertMessage({
       id: 'orchestrator:run-1:inv_broker',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       messageType: 'agent',
       content: '',
       senderName: 'Cyber Broker Agent',
@@ -133,7 +133,7 @@ describe('handleHitlRequest', () => {
     ] as const) {
       await handleHitlRequest(ctx, {
         type: 'hitl_request',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp,
         data: {
           request_id: requestId,
@@ -188,7 +188,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'security_training',
@@ -216,13 +216,13 @@ describe('handleHitlRequest', () => {
     const timestamp = new Date().toISOString()
     const index = { current: new Map<string, string>() }
     const ctx = {
-      roomId: 'room-1', lifecycle,
+      conversationId: 'room-1', lifecycle,
       getAgentName: async () => 'Agent', getAgentSource: () => undefined,
       reconcileWithDb: async () => {}, hitlRequestIndex: index, setCancelling: () => {},
     }
     for (const interactionId of ['interaction-1', 'interaction-2']) {
       await handleHitlRequest(ctx, {
-        type: 'hitl_request', room_id: 'room-1', timestamp,
+        type: 'hitl_request', conversation_id: 'room-1', timestamp,
         data: {
           request_id: 'cloud_providers', message_id: 'agent-message', source: 'agent',
           prompt: `Providers for ${interactionId}?`, prompt_type: 'text',
@@ -238,7 +238,7 @@ describe('handleHitlRequest', () => {
     )
 
     handleHitlResponse(ctx, {
-      type: 'hitl_response', room_id: 'room-1', timestamp,
+      type: 'hitl_response', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'cloud_providers', message_id: 'agent-message', source: 'agent',
         status: 'responded', interaction_id: 'interaction-1',
@@ -261,13 +261,13 @@ describe('handleHitlRequest', () => {
     const timestamp = new Date().toISOString()
     const index = { current: new Map<string, string>() }
     const ctx = {
-      roomId: 'room-1', lifecycle,
+      conversationId: 'room-1', lifecycle,
       getAgentName: async () => 'Agent', getAgentSource: () => undefined,
       reconcileWithDb: async () => {}, hitlRequestIndex: index, setCancelling: () => {},
     }
     for (const requestId of ['round-1', 'round-2']) {
       await handleHitlRequest(ctx, {
-        type: 'hitl_request', room_id: 'room-1', timestamp,
+        type: 'hitl_request', conversation_id: 'room-1', timestamp,
         data: {
           request_id: requestId, message_id: 'agent-message', source: 'agent',
           prompt: `Question ${requestId}`, prompt_type: 'text',
@@ -299,12 +299,12 @@ describe('handleHitlRequest', () => {
     const timestamp = new Date().toISOString()
     const index = { current: new Map<string, string>() }
     const ctx = {
-      roomId: 'room-1', lifecycle,
+      conversationId: 'room-1', lifecycle,
       getAgentName: async () => 'Agent', getAgentSource: () => undefined,
       reconcileWithDb: async () => {}, hitlRequestIndex: index, setCancelling: () => {},
     }
     await handleHitlRequest(ctx, {
-      type: 'hitl_request', room_id: 'room-1', timestamp,
+      type: 'hitl_request', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'request-error', message_id: 'agent-message', source: 'agent',
         prompt: 'Question?', prompt_type: 'text', interaction_id: 'interaction-error',
@@ -313,7 +313,7 @@ describe('handleHitlRequest', () => {
     }, 'req-1')
 
     handleHitlResponse(ctx, {
-      type: 'hitl_response', room_id: 'room-1', timestamp,
+      type: 'hitl_response', conversation_id: 'room-1', timestamp,
       data: {
         request_id: 'request-error', message_id: 'agent-message', source: 'agent',
         status: 'error', error_message: 'Unable to continue',
@@ -341,7 +341,7 @@ describe('handleHitlRequest', () => {
     const timestamp = new Date().toISOString()
     const index = { current: new Map<string, string>() }
     const ctx = {
-      roomId: 'room-1',
+      conversationId: 'room-1',
       lifecycle,
       getAgentName: async () => 'Auth Agent',
       getAgentSource: () => undefined,
@@ -352,7 +352,7 @@ describe('handleHitlRequest', () => {
 
     await handleHitlRequest(ctx, {
       type: 'hitl_request',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',
@@ -379,7 +379,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',
@@ -407,7 +407,7 @@ describe('handleHitlRequest', () => {
 
     handleHitlResponse(ctx, {
       type: 'hitl_response',
-      room_id: 'room-1',
+      conversation_id: 'room-1',
       timestamp,
       data: {
         request_id: 'auth-hitl',

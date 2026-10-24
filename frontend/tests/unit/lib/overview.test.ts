@@ -5,7 +5,7 @@ import type { AgentGroup } from '@/lib/types/agent-group'
 import type { RoomHistoryItem } from '@/lib/api/room'
 import type { SessionSummary } from '@/lib/api/session'
 
-const room = (id: string, status: RoomHistoryItem['status']): RoomHistoryItem => ({ room_id: id, title: id, last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status })
+const room = (id: string, status: RoomHistoryItem['status']): RoomHistoryItem => ({ conversation_id: id, title: id, last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status })
 const agents = [
   { ...placeholderAgent('a', '', 'active'), roomCalls: 3 },
   { ...placeholderAgent('b', '', 'inactive'), name: 'travel-planner', roomCalls: 9 },
@@ -35,7 +35,7 @@ describe('overview', () => {
       { ...room('new', 'idle'), last_activity_at: '2026-10-12T00:00:00Z' },
       { ...room('ask', 'awaiting_input'), last_activity_at: '2026-10-02T00:00:00Z' },
     ]
-    expect(recentRooms(list, 2).map(item => item.room_id)).toEqual(['ask', 'new'])
+    expect(recentRooms(list, 2).map(item => item.conversation_id)).toEqual(['ask', 'new'])
   })
 
   it('lists sessions waiting for the owner first, then the latest', () => {

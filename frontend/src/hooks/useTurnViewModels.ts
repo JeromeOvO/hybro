@@ -8,37 +8,37 @@ import type { RawTimelineEvent } from '@/lib/room-timeline/types'
 const EMPTY_EVENTS: readonly RawTimelineEvent[] = []
 
 function filterRoomMessages(
-  roomId: string,
+  conversationId: string,
   entities: Record<string, import('@/stores/message-store/types').MessageEntity>,
   orderedIds: string[],
 ): string[] {
-  return orderedIds.filter(id => entities[id]?.roomId === roomId)
+  return orderedIds.filter(id => entities[id]?.conversationId === conversationId)
 }
 
 /**
  * Derives TurnViewModel[] from the message store for a room.
  * Streaming overlays are applied in leaf components via useStreamingStore.
  */
-export function useTurnViewModels(roomId: string): TurnViewModel[] {
+export function useTurnViewModels(conversationId: string): TurnViewModel[] {
   const version = useMessageStore(s => s.version)
   const roomProcessingActive = useRoomUiStore(
-    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).processing,
+    s => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).processing,
   )
   // Use the shared default array so the selector stays referentially stable
   // when a room has no flags yet (avoids getSnapshot infinite loops).
   const activeRunTriggerMessageIds = useRoomUiStore(
-    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).activeRunTriggerMessageIds,
+    s => (s.rooms[conversationId] ?? DEFAULT_ROOM_FLAGS).activeRunTriggerMessageIds,
   )
   const prev = React.useRef<TurnViewModel[]>([])
 
   const next = React.useMemo(() => {
     const { entities, orderedIds } = useMessageStore.getState()
-    const roomOrderedIds = filterRoomMessages(roomId, entities, orderedIds)
+    const roomOrderedIds = filterRoomMessages(conversationId, entities, orderedIds)
     return buildTurnsIncremental(prev.current, entities, roomOrderedIds, EMPTY_EVENTS, {
       roomProcessingActive,
       activeRunTriggerMessageIds: new Set(activeRunTriggerMessageIds),
     })
-  }, [roomId, version, roomProcessingActive, activeRunTriggerMessageIds])
+  }, [conversationId, version, roomProcessingActive, activeRunTriggerMessageIds])
 
   prev.current = next
   return next

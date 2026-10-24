@@ -5,40 +5,31 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from common.protocols import (
-    DistributedLock,
-    IndexRegistry,
     LeaderElector,
     MongoChangeStream,
     MongoCollection,
     MongoDAL,
     RedisKV,
     RedisPubSub,
-    RedisStreams,
 )
 
 
 def test_dal_implementations_satisfy_runtime_protocols():
     from dal import (
-        DistributedLockImpl,
-        IndexRegistryImpl,
         LeaderElectorImpl,
         MongoCollectionAdapter,
         MongoDALImpl,
         RedisKVImpl,
         RedisPubSubImpl,
-        RedisStreamsImpl,
     )
 
     assert isinstance(MongoDALImpl(database=MagicMock()), MongoDAL)
     assert isinstance(MongoCollectionAdapter(MagicMock()), MongoCollection)
     assert isinstance(RedisKVImpl(client=MagicMock()), RedisKV)
     assert isinstance(RedisPubSubImpl(client=MagicMock()), RedisPubSub)
-    assert isinstance(RedisStreamsImpl(client=MagicMock()), RedisStreams)
-    assert isinstance(DistributedLockImpl(client=MagicMock()), DistributedLock)
     assert isinstance(
         LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
     )
-    assert isinstance(IndexRegistryImpl(mongo=MagicMock()), IndexRegistry)
 
 
 def test_mongo_collection_protocol_covers_repository_operations():
@@ -60,7 +51,6 @@ def test_mongo_collection_protocol_covers_repository_operations():
         "drop_index",
         "bulk_write",
         "distinct",
-        "find_one_by_stable_or_native_id",
         "watch",
     }
     assert required.issubset(set(MongoCollection.__dict__))
@@ -78,7 +68,6 @@ def test_mongo_change_stream_protocol_is_exported():
 
 def test_redis_protocols_expose_health_properties():
     assert isinstance(RedisKV.__dict__["is_connected"], property)
-    assert isinstance(RedisStreams.__dict__["is_connected"], property)
 
 
 def test_redis_kv_compare_delete_protocol_signature_matches_implementation():
@@ -119,7 +108,6 @@ def test_dal_top_level_exports_are_explicit():
 
     assert set(dal.__all__) == {
         "DistributedLockImpl",
-        "IndexRegistryImpl",
         "LeaderElectorImpl",
         "MongoCollectionAdapter",
         "MongoDALImpl",

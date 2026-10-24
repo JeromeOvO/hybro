@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,7 +17,6 @@ from context_memory.translators import normalize_room_memory
 class FakeMongoCollection:
     def __init__(self):
         self.documents: list[dict] = []
-        self.find_calls: list[tuple[dict, dict]] = []
         self.find_one_and_update_calls: list[tuple[dict, dict | list[dict], dict]] = []
         self.update_one_calls: list[tuple[dict, dict | list[dict], dict]] = []
         self.raise_on_update_one = False
@@ -30,7 +29,6 @@ class FakeMongoCollection:
         return None
 
     async def find(self, query: dict, **kwargs):
-        self.find_calls.append((deepcopy(query), deepcopy(kwargs)))
         limit = kwargs.get("limit")
         docs = [deepcopy(doc) for doc in self.documents if _matches(doc, query)]
         return docs[:limit] if limit is not None else docs
@@ -99,29 +97,6 @@ class FakeMongoCollection:
         self.documents = [doc for doc in self.documents if not _matches(doc, query)]
         return before - len(self.documents)
 
-    async def aggregate(self, pipeline: list[dict]) -> list[dict]:
-        docs = [deepcopy(doc) for doc in self.documents]
-        for stage in pipeline:
-            if "$match" in stage:
-                docs = [doc for doc in docs if _matches(doc, stage["$match"])]
-            elif "$group" in stage:
-                grouped = {}
-                group_id = stage["$group"]["_id"].lstrip("$")
-                for doc in docs:
-                    key = _get_path(doc, group_id)
-                    row = grouped.setdefault(
-                        key, {"_id": key, "count": 0, "total_size": 0}
-                    )
-                    row["count"] += 1
-                    row["total_size"] += len(doc.get("content", "").encode())
-                docs = list(grouped.values())
-        return docs
-
-    async def find_one_by_stable_or_native_id(self, field: str, value: str):
-        return await self.find_one({field: value}) or await self.find_one(
-            {"_id": value}
-        )
-
 
 class FakeMongo:
     def __init__(self):
@@ -147,6 +122,23 @@ def memory_repo(mongo):
 @pytest.fixture
 def content_repo(mongo):
     return ContentStorageMongoRepository(mongo=mongo)
+
+
+async def _push_turn(
+    memory_repo: MemoryMongoRepository,
+    conversation_id: str,
+    turn: dict,
+    **kwargs,
+) -> tuple[bool, bool]:
+    (
+        modified,
+        matched,
+        already_exists,
+    ) = await memory_repo.push_and_trim_conversation_turn_if_absent(
+        conversation_id, turn, turn_id=turn["turn_id"], **kwargs
+    )
+    assert already_exists is False
+    return modified, matched
 
 
 @pytest.mark.asyncio
@@ -225,7 +217,8 @@ async def test_push_and_trim_conversation_turn_appends_only_top_level(memory_rep
         }
     )
 
-    modified, matched = await memory_repo.push_and_trim_conversation_turn(
+    modified, matched = await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "t1", "role": "user", "content": "hello"},
         max_turns=5,
@@ -259,7 +252,8 @@ async def test_push_literalizes_complete_turn_with_mongo_expression_strings(
         "content_ref": {"document_id": "$$NOW"},
     }
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         turn,
         max_turns=5,
@@ -334,7 +328,8 @@ async def test_push_uses_only_canonical_direct_history(memory_repo):
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "new", "role": "user", "content": "new"},
         max_turns=5,
@@ -361,7 +356,8 @@ async def test_push_and_trim_does_not_append_summary_without_trim(memory_repo):
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "t1", "role": "user", "content": "hello"},
         max_turns=5,
@@ -391,7 +387,8 @@ async def test_push_and_trim_summary_uses_evicted_turn_preview(memory_repo):
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "new", "role": "user", "content": "new content"},
         max_turns=1,
@@ -426,7 +423,8 @@ async def test_push_and_trim_summary_ignores_non_string_legacy_content(memory_re
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "new", "role": "user", "content": "new content"},
         max_turns=1,
@@ -453,7 +451,8 @@ async def test_summary_tracks_duplicate_turns_without_ids_by_occurrence(memory_r
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "new", "role": "user", "content": "new"},
         max_turns=2,
@@ -494,7 +493,8 @@ async def test_summary_matches_turn_id_across_representation_changes(memory_repo
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "new", "role": "user", "content": "new"},
         max_turns=2,
@@ -530,7 +530,8 @@ async def test_push_and_trim_appends_summary_only_when_trimmed_and_keeps_tail(
         }
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {"turn_id": "t3", "role": "user", "content": "new"},
         max_turns=2,
@@ -564,7 +565,8 @@ async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
     )
 
     for index in range(1, 22):
-        await memory_repo.push_and_trim_conversation_turn(
+        await _push_turn(
+            memory_repo,
             "r1",
             {
                 "turn_id": f"t{index}",
@@ -601,7 +603,7 @@ async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
     result = await compaction.compact_if_needed(
         repository=memory_repo,
         content_repository=content_repo,
-        room_id="r1",
+        conversation_id="r1",
         config=default_config,
         now=lambda: datetime.now(UTC),
     )
@@ -624,7 +626,8 @@ async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
         compacted_doc["conversation_history"][1]["brief_summary"] == "short message 2"
     )
 
-    await memory_repo.push_and_trim_conversation_turn(
+    await _push_turn(
+        memory_repo,
         "r1",
         {
             "turn_id": "t22",
@@ -712,14 +715,14 @@ async def test_push_and_trim_if_absent_handles_concurrent_duplicate_race(
     pushes = []
 
     async def fake_push(
-        room_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None
+        conversation_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None
     ):
         pushes.append(turn)
         if len(pushes) == 2:
             doc["conversation_history"].append({"turn_id": "t1"})
         return None
 
-    async def fake_get(room_id):
+    async def fake_get(conversation_id):
         return deepcopy(doc)
 
     monkeypatch.setattr(memory_repo, "_push_turn", fake_push)
@@ -749,23 +752,6 @@ async def test_push_and_trim_if_absent_missing_room(memory_repo):
     )
 
     assert result == (False, False, False)
-
-
-@pytest.mark.asyncio
-async def test_update_turn_notes(memory_repo):
-    await memory_repo.create_room_memory(
-        {
-            "room_id": "r1",
-            "memory_id": "m1",
-            "memory_content": {"conversation_history": [{"turn_id": "t1"}]},
-            "conversation_history": [{"turn_id": "t1"}],
-        }
-    )
-
-    assert await memory_repo.update_turn_notes("r1", "t1", {"one_liner": "hi"})
-    doc = await memory_repo.get_room_memory("r1")
-    assert doc["conversation_history"][0]["turn_notes"] == {"one_liner": "hi"}
-    assert "conversation_history" not in doc["memory_content"]
 
 
 @pytest.mark.asyncio
@@ -1025,7 +1011,7 @@ async def test_compact_turns_bulk_returns_false_on_mongo_write_failure(
 async def test_content_upsert_and_get(content_repo):
     stored = await content_repo.upsert_full_content(
         document_id="doc1",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="hello",
         content_type="text",
@@ -1044,25 +1030,23 @@ async def test_content_upsert_replaces_existing_content_and_expiry(content_repo)
 
     await content_repo.upsert_full_content(
         document_id="doc-old",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="old",
         content_type="text",
         content_hash="old-hash",
         stored_at=first_expiry,
         expires_at=first_expiry,
-        turn_notes={"version": "old"},
     )
     stored = await content_repo.upsert_full_content(
         document_id="doc-new",
-        room_id="r1",
+        conversation_id="r1",
         turn_id="t1",
         content="new",
         content_type="text/markdown",
         content_hash="new-hash",
         stored_at=second_expiry,
         expires_at=second_expiry,
-        turn_notes={"version": "new"},
     )
 
     doc = await content_repo.get_content_by_turn_id("r1", "t1")
@@ -1073,18 +1057,6 @@ async def test_content_upsert_replaces_existing_content_and_expiry(content_repo)
     assert doc["content_hash"] == "new-hash"
     assert doc["stored_at"] == second_expiry
     assert doc["expires_at"] == second_expiry
-    assert doc["turn_notes"] == {"version": "new"}
-
-
-@pytest.mark.asyncio
-async def test_content_get_by_document_id_with_legacy_fallback(content_repo, mongo):
-    await mongo.collections["conversation_content"].insert_one(
-        {"_id": "legacy-id", "room_id": "r1", "turn_id": "t1", "content": "legacy"}
-    )
-
-    assert (await content_repo.get_content_by_document_id("legacy-id"))[
-        "content"
-    ] == "legacy"
 
 
 @pytest.mark.asyncio
@@ -1096,95 +1068,6 @@ async def test_content_delete_by_room(content_repo, mongo):
 
     assert await content_repo.delete_content_by_room_id("r1") == 2
     assert len(coll.documents) == 1
-
-
-@pytest.mark.asyncio
-async def test_content_stats(content_repo, mongo):
-    coll = mongo.collections["conversation_content"]
-    await coll.insert_one({"room_id": "r1", "content_type": "text", "content": "abcd"})
-    await coll.insert_one({"room_id": "r1", "content_type": "text", "content": "ef"})
-
-    stats = await content_repo.get_content_stats_for_room("r1")
-
-    assert stats["total_documents"] == 2
-    assert stats["by_type"]["text"]["size_bytes"] == 6
-
-
-@pytest.mark.asyncio
-async def test_content_text_search_projection_excludes_full_content(
-    content_repo, mongo
-):
-    await content_repo.text_search("r1", "query", limit=10)
-
-    _query, kwargs = mongo.collections["conversation_content"].find_calls[-1]
-    projection = kwargs["projection"]
-    assert "content" not in projection
-    assert projection["turn_id"] == 1
-    assert projection["turn_notes"] == 1
-    assert projection["stored_at"] == 1
-    assert kwargs["sort"] == [
-        ("score", {"$meta": "textScore"}),
-        ("turn_timestamp", -1),
-        ("stored_at", -1),
-        ("turn_id", 1),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_content_text_search_filters_expired_documents(content_repo, mongo):
-    await content_repo.text_search("r1", "query", limit=10)
-
-    query, _kwargs = mongo.collections["conversation_content"].find_calls[-1]
-    expiry_filter = query["$or"]
-
-    assert {"expires_at": {"$exists": False}} in expiry_filter
-    assert {"expires_at": None} in expiry_filter
-    assert any(
-        isinstance(item.get("expires_at"), dict) and "$gt" in item["expires_at"]
-        for item in expiry_filter
-    )
-
-
-@pytest.mark.asyncio
-async def test_content_scan_text_search_caps_lightweight_candidates_without_nin(
-    content_repo, mongo
-):
-    await content_repo.scan_text_search("r1", "query", 250)
-
-    query, kwargs = mongo.collections["conversation_content"].find_calls[-1]
-    assert "turn_id" not in query
-    assert kwargs["limit"] == 250
-    assert "exhaust" not in kwargs
-    assert "content" not in kwargs["projection"]
-
-
-@pytest.mark.asyncio
-async def test_content_hydrate_turn_content_filters_expired_documents(
-    content_repo, mongo
-):
-    coll = mongo.collections["conversation_content"]
-    await coll.insert_one(
-        {
-            "room_id": "r1",
-            "turn_id": "expired",
-            "turn_notes": {"one_liner": "expired"},
-            "expires_at": datetime.now(UTC) - timedelta(days=1),
-        }
-    )
-    await coll.insert_one(
-        {
-            "room_id": "r1",
-            "turn_id": "active",
-            "turn_notes": {"one_liner": "active"},
-            "expires_at": datetime.now(UTC) + timedelta(days=1),
-        }
-    )
-
-    docs = await content_repo.hydrate_turn_content("r1", ["expired", "active"])
-
-    assert [doc["turn_id"] for doc in docs] == ["active"]
-    _query, kwargs = coll.find_calls[-1]
-    assert kwargs["projection"]["content"] == 1
 
 
 def _matches(doc: dict, query: dict) -> bool:
@@ -1497,3 +1380,59 @@ def _find_operator(expression: dict, operator: str) -> dict:
                     except KeyError:
                         pass
     raise KeyError(operator)
+
+
+class _IndexedCollection:
+    def __init__(self, indexes: dict, *, fail_drop: bool = False):
+        self.indexes = dict(indexes)
+        self.fail_drop = fail_drop
+        self.dropped: list[str] = []
+        self.created: list[str] = []
+
+    async def index_information(self):
+        return dict(self.indexes)
+
+    async def drop_index(self, name: str):
+        if self.fail_drop:
+            raise RuntimeError("drop failed")
+        self.dropped.append(name)
+        self.indexes.pop(name, None)
+
+    async def create_index(self, keys, **kwargs):
+        self.created.append(kwargs["name"])
+        return kwargs["name"]
+
+
+class _IndexedMongo:
+    def __init__(self, content):
+        self.content = content
+
+    def collection(self, name: str):
+        return self.content
+
+
+async def test_ensure_indexes_drops_obsolete_turn_notes_text_index():
+    content = _IndexedCollection({"_id_": {}, "turn_notes_text": {}})
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert content.dropped == ["turn_notes_text"]
+    assert "turn_notes_text" not in content.created
+    assert "room_turn_unique" in content.created
+
+
+async def test_ensure_indexes_skips_drop_when_obsolete_index_is_absent():
+    content = _IndexedCollection({"_id_": {}})
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert content.dropped == []
+
+
+async def test_obsolete_index_drop_failure_does_not_block_startup(caplog):
+    content = _IndexedCollection({"turn_notes_text": {}}, fail_drop=True)
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert "room_turn_unique" in content.created
+    assert "Obsolete index removal failed" in caplog.text

@@ -22,13 +22,13 @@ describe('handleAgentResponsePartial', () => {
   })
 
   it('appends partial deltas to a message-scoped buffer keyed by message_id', () => {
-    const ctx = { roomId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
+    const ctx = { conversationId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleAgentResponsePartial(
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-1',
@@ -44,7 +44,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'agent-1',
@@ -60,7 +60,7 @@ describe('handleAgentResponsePartial', () => {
     expect(useStreamingStore.getState().buffers['req-1']).toBeUndefined()
     expect(useMessageStore.getState().entities['agent-1']).toMatchObject({
       id: 'agent-1',
-      roomId: 'room-1',
+      conversationId: 'room-1',
       agentId: 'agent-a',
       clientRequestId: 'req-1',
       taskStatus: 'working',
@@ -68,13 +68,13 @@ describe('handleAgentResponsePartial', () => {
   })
 
   it('keeps parallel agent buffers isolated under the same client_request_id', () => {
-    const ctx = { roomId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
+    const ctx = { conversationId: 'room-1', lifecycle: makeLifecycle() } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleAgentResponsePartial(
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'hermes-1',
@@ -90,7 +90,7 @@ describe('handleAgentResponsePartial', () => {
       ctx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'codex-1',
@@ -108,14 +108,14 @@ describe('handleAgentResponsePartial', () => {
 
   it('matches terminal artifact_update concat semantics for multi-chunk text', () => {
     const lifecycle = makeLifecycle()
-    const artifactCtx = { roomId: 'room-1', lifecycle }
-    const partialCtx = { roomId: 'room-1', lifecycle } as Parameters<typeof handleAgentResponsePartial>[0]
+    const artifactCtx = { conversationId: 'room-1', lifecycle }
+    const partialCtx = { conversationId: 'room-1', lifecycle } as Parameters<typeof handleAgentResponsePartial>[0]
 
     handleArtifactUpdate(
       artifactCtx,
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-artifact',
@@ -137,7 +137,7 @@ describe('handleAgentResponsePartial', () => {
       artifactCtx,
       {
         type: 'artifact_update',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-artifact',
@@ -162,7 +162,7 @@ describe('handleAgentResponsePartial', () => {
       partialCtx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-partial',
@@ -178,7 +178,7 @@ describe('handleAgentResponsePartial', () => {
       partialCtx,
       {
         type: 'agent_response_partial',
-        room_id: 'room-1',
+        conversation_id: 'room-1',
         timestamp: new Date().toISOString(),
         data: {
           message_id: 'msg-partial',

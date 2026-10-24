@@ -14,12 +14,7 @@ from execution.orchestrator.lifecycle import (
 )
 
 
-def _event(
-    event_type: str,
-    payload: dict | None = None,
-    *,
-    lifecycle_family: str = "legacy",
-) -> SessionEvent:
+def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
     return SessionEvent(
         event_type=event_type,  # type: ignore[arg-type]
         session_id="session-1",
@@ -28,12 +23,11 @@ def _event(
         sequence=1,
         timestamp=datetime.now(UTC),
         payload=payload or {},
-        lifecycle_family=lifecycle_family,  # type: ignore[arg-type]
     )
 
 
 @pytest.mark.asyncio
-async def test_terminal_settlement_runs_listeners_concurrently_with_full_timeout():
+async def test_settlement_runs_listeners_concurrently_with_full_timeout():
     release_slow = asyncio.Event()
     fast_started = asyncio.Event()
     errors: list[BaseException] = []
@@ -44,15 +38,11 @@ async def test_terminal_settlement_runs_listeners_concurrently_with_full_timeout
     async def fast_listener(_event):
         fast_started.set()
 
-    emitter = LifecycleEmitter(
-        listener_timeout_seconds=0.01,
-        settlement_timeout_seconds=1,
-        error_hook=errors.append,
-    )
+    emitter = LifecycleEmitter(settlement_timeout_seconds=1, error_hook=errors.append)
     emitter.subscribe(slow_listener)
     emitter.subscribe(fast_listener)
 
-    emit_task = asyncio.create_task(emitter.emit(_event("session_idle"), terminal=True))
+    emit_task = asyncio.create_task(emitter.emit(_event("session_idle")))
     await fast_started.wait()
     await asyncio.sleep(0.02)
 
@@ -64,7 +54,7 @@ async def test_terminal_settlement_runs_listeners_concurrently_with_full_timeout
 
 
 @pytest.mark.asyncio
-async def test_canonical_nonterminal_waits_for_durable_listener_acknowledgement():
+async def test_nonterminal_event_waits_for_durable_listener_acknowledgement():
     release = asyncio.Event()
     started = asyncio.Event()
 
@@ -74,9 +64,7 @@ async def test_canonical_nonterminal_waits_for_durable_listener_acknowledgement(
 
     emitter = LifecycleEmitter(settlement_timeout_seconds=1)
     emitter.subscribe(listener)
-    task = asyncio.create_task(
-        emitter.emit(_event("message_updated", lifecycle_family="canonical"))
-    )
+    task = asyncio.create_task(emitter.emit(_event("message_updated")))
     await started.wait()
     await asyncio.sleep(0)
     assert task.done() is False

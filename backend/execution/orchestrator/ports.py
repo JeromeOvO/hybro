@@ -12,7 +12,6 @@ from .models import (
     CompactionResult,
     ModelStreamEvent,
     ModelTurnRequest,
-    OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
     ResolvedTool,
@@ -101,14 +100,6 @@ class ToolRuntime(Protocol):
         call_record_id: str,
         interaction_id: str,
     ) -> ParkedInteractionCloseout: ...
-
-
-class Clock(Protocol):
-    def now(self) -> datetime: ...
-
-
-class IDFactory(Protocol):
-    def new_id(self, prefix: str) -> str: ...
 
 
 class ProjectionDriver(Protocol):
@@ -244,14 +235,6 @@ class OrchestratorRunStore(Protocol):
     ) -> list[tuple[str, ProjectionIntent]]: ...
 
 
-class OrchestratorEventStore(Protocol):
-    async def append(self, event: OrchestratorEvent) -> StoreOutcome: ...
-
-    async def read(
-        self, run_id: str, *, after_sequence: int = 0
-    ) -> list[OrchestratorEvent]: ...
-
-
 class InvocationCheckpointReader(Protocol):
     async def is_acceptance_checkpointed(
         self,
@@ -268,25 +251,3 @@ class InvocationCheckpointReader(Protocol):
         invocation_id: str,
         status: str,
     ) -> bool: ...
-
-
-class InvocationOutcomeCheckpointReader(Protocol):
-    async def is_run_terminal(self, run_id: str) -> bool: ...
-
-    async def is_outcome_checkpointed(
-        self,
-        run_id: str,
-        invocation_id: str,
-        outcome_digest: str,
-    ) -> bool: ...
-
-    async def has_processed_observation(
-        self,
-        run_id: str,
-        invocation_id: str,
-        observation_id: str,
-    ) -> bool: ...
-
-
-class EventProjector(Protocol):
-    async def project(self, intent: ProjectionIntent) -> StoreOutcome: ...

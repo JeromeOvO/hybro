@@ -489,9 +489,17 @@ HYBRO_TEST_REDIS_URL=redis://localhost:6379/0 uv run pytest -m integration
 
 See [`tests/README.md`](tests/README.md) for test lanes and cleanup conventions.
 
-## A2A inline file limits
+## Cleanup reports
 
-`A2A_INLINE_FILE_MAX_RAW_BYTES` limits one uploaded file before base64 encoding.
-`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in an
-outbound A2A message. Uploaded files sent to agents use inline A2A bytes; local
-filesystem paths and authenticated room-file URLs remain internal to Hybro.
+Both scripts are read-only. Run from `backend/`:
+
+```sh
+uv run python -m scripts.report_orphan_modules
+uv run python -m scripts.check_legacy_lifecycle_readiness
+```
+
+`report_orphan_modules` lists production modules that no entry point imports.
+`check_legacy_lifecycle_readiness` counts the legacy lifecycle and data-shape
+records in the configured Mongo database (or `--mongo-url`/`--database`) that
+must reach zero before each legacy-removal step; each line names the step it
+gates.

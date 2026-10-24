@@ -23,10 +23,6 @@ _QUOTE_FIELDS = (
     "sender_display_name",
     "source_agent_id",
 )
-_LEGACY_QUOTE_FIELDS = (
-    "quoted_text",
-    "quoted_sender_name",
-)
 
 
 def build_execution_request_fingerprint(request: ExecutionRequest) -> str:
@@ -57,24 +53,17 @@ def execution_request_fingerprint_payload(
     }
 
     quote = _semantic_quote(message.get("quote"))
-    extend_info = _as_mapping(message.get("extend_info"))
-    legacy_quote = (
-        {
-            field: value
-            for field in _LEGACY_QUOTE_FIELDS
-            if isinstance((value := extend_info.get(field)), str)
-        }
-        if quote is None
-        else {}
-    )
     agent_scope = request.agent_scope.model_dump(mode="json")
     if agent_scope.get("source") == "mention":
         agent_scope["agent_ids"] = _normalized_id_set(
             agent_scope.get("agent_ids"), empty_as_none=False
         )
 
+    # Persisted as ``idempotency_fingerprint`` and compared on retries. Keys are
+    # literals (the stored name is "room_id") so attribute renames on
+    # ExecutionRequest cannot change existing fingerprints.
     return {
-        "room_id": request.room_id,
+        "room_id": request.conversation_id,
         "sender_id": request.sender_id,
         "message_content": semantic_content,
         "related_message_id": _optional_plain(message.get("related_message_id")),
@@ -82,7 +71,9 @@ def execution_request_fingerprint_payload(
         "execution_parent_message_id": request.parent_message_id,
         "attachment_file_ids": _effective_attachment_file_ids(request, message),
         "quote": quote,
-        "legacy_quote": legacy_quote or None,
+        # Unstructured quotes are no longer accepted. The key stays, always
+        # null, so fingerprints stored before that removal stay byte-identical.
+        "legacy_quote": None,
         "mode": request.mode,
         "agent_scope": agent_scope,
     }

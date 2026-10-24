@@ -18,16 +18,6 @@ from tests.test_delivery_event_publisher import (
 )
 
 
-class SettlementReader:
-    def __init__(self, result: bool = True) -> None:
-        self.result = result
-        self.checked: list = []
-
-    async def is_terminal_settled(self, event):
-        self.checked.append(event)
-        return self.result
-
-
 @pytest.mark.asyncio
 async def test_delta_emit_persists_before_broadcast_and_threads_seq():
     store = InMemoryRoomEventStore()
@@ -35,7 +25,9 @@ async def test_delta_emit_persists_before_broadcast_and_threads_seq():
     publisher = make_publisher(transport=transport, room_events=store)
 
     status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert status == DeliveryEmitStatus.DELIVERED
@@ -61,12 +53,13 @@ async def test_non_terminal_retry_reuses_same_sequence():
     transport = FakeTransport()
     publisher = make_publisher(transport=transport, room_events=store)
     event = RunEventNotification(
-        room_id="room-1",
-        event_id="public:run-1:llm_call_completed:3",
+        conversation_id="room-1",
+        event_id="public:run-1:turn_start:3",
         run_id="run-1",
         seq=3,
-        run_event_type="llm_call_completed",
-        payload={"model": "gpt-4o"},
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     first_status, first_id = await publisher.emit_checked_identified(event)
@@ -88,7 +81,7 @@ async def test_final_message_retry_reuses_one_durable_room_event():
     transport = FakeTransport()
     publisher = make_publisher(transport=transport, room_events=store)
     event = AgentMessageFinal(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="assistant-1",
         agent_id="system:hybro",
         content={"content": "Final answer"},
@@ -117,7 +110,7 @@ async def test_failed_final_fanout_still_returns_persisted_identity():
 
     status, room_event_id = await publisher.emit_checked_identified(
         AgentMessageFinal(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="assistant-1",
             agent_id="system:hybro",
             content={"content": "Final answer"},
@@ -131,75 +124,8 @@ async def test_failed_final_fanout_still_returns_persisted_identity():
 
 
 @pytest.mark.asyncio
-async def test_terminal_frame_waits_for_projection_settlement():
-    store = InMemoryRoomEventStore()
-    reader = SettlementReader(result=False)
-    publisher = make_publisher(
-        transport=FakeTransport(),
-        room_events=store,
-        projection_settlement=reader,
-    )
-
-    status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(
-            room_id="room-1",
-            message_id="msg-1",
-            status="completed",
-            delivery_id="terminal:evt-1:processing",
-        )
-    )
-
-    assert status == DeliveryEmitStatus.FAILED
-    assert room_event_id is None
-    assert reader.checked
-    # Nothing persisted, nothing delivered: the finalizer retries later.
-    assert await store.latest_seq("room-1") == 0
-
-    reader.result = True
-    status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(
-            room_id="room-1",
-            message_id="msg-1",
-            status="completed",
-            delivery_id="terminal:evt-1:processing",
-        )
-    )
-    assert status == DeliveryEmitStatus.DELIVERED
-    assert room_event_id is not None
-    records = await store.read_range("room-1")
-    assert records[0]["persist_state"] == "settled"
-    assert records[0]["room_seq"] == 1
-
-
-@pytest.mark.asyncio
-async def test_terminal_task_update_not_gated_by_settlement_reader():
-    # Terminal task_update frames (descendant_cleanup / system_task_delivery)
-    # are gated by their per-step dependencies, NOT by the settlement reader.
-    reader = SettlementReader(result=False)
-    publisher = make_publisher(
-        transport=FakeTransport(),
-        room_events=InMemoryRoomEventStore(),
-        projection_settlement=reader,
-    )
-
-    from common.dto import TaskUpdateEvent
-
-    status, _ = await publisher.emit_checked_identified(
-        TaskUpdateEvent(
-            room_id="room-1",
-            message_id="child-1",
-            status="failed",
-            delivery_id="terminal:evt-1:child:child-1",
-        )
-    )
-
-    assert status == DeliveryEmitStatus.DELIVERED
-    assert reader.checked  # consulted for the persist_state label only
-
-
-@pytest.mark.asyncio
 async def test_dedup_short_circuits_skip_persistence():
-    # IN_FLIGHT / ALREADY_DELIVERED / DEDUPLICATED outcomes must not append
+    # IN_FLIGHT / ALREADY_DELIVERED outcomes must not append
     # room_events docs: those events already have their persisted doc.
     store = InMemoryRoomEventStore()
     publisher = make_publisher(
@@ -210,14 +136,14 @@ async def test_dedup_short_circuits_skip_persistence():
 
     status, _ = await publisher.emit_checked_identified(
         ProcessingStatusEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             status="completed",
             delivery_id="terminal:evt-1:processing",
         )
     )
 
-    assert status == DeliveryEmitStatus.DEDUPLICATED
+    assert status == DeliveryEmitStatus.ALREADY_DELIVERED
     assert await store.latest_seq("room-1") == 0
 
 
@@ -233,7 +159,7 @@ async def test_distinct_deltas_with_identical_content_do_not_collapse():
     for _ in range(2):
         await publisher.emit_checked_identified(
             AgentMessagePartial(
-                room_id="room-1",
+                conversation_id="room-1",
                 message_id="msg-1",
                 agent_id="a1",
                 content_delta="Hi",
@@ -253,24 +179,26 @@ async def test_parent_event_id_flows_through_persist_and_frame():
 
     decision_status, decision_id = await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id="room-1",
-            event_id="public:run-1:orchestrator_decision:2",
+            conversation_id="room-1",
+            event_id="public:run-1:turn_start:2",
             run_id="run-1",
             seq=2,
-            run_event_type="orchestrator_decision",
-            payload={"chosen_agents": ["Weather Agent"]},
+            run_event_type="turn_start",
+            payload={"internal_turn_id": "turn-1", "attempt": 1},
+            correlation_id="client-1",
         )
     )
     assert decision_status == DeliveryEmitStatus.DELIVERED
 
     child_status, _ = await publisher.emit_checked_identified(
         RunEventNotification(
-            room_id="room-1",
-            event_id="public:run-1:tool_call_accepted:4",
+            conversation_id="room-1",
+            event_id="public:run-1:message_start:4",
             run_id="run-1",
             seq=4,
-            run_event_type="tool_call_accepted",
-            payload={"tool_name": "weather_lookup"},
+            run_event_type="message_start",
+            payload={"internal_turn_id": "turn-1", "message_id": "assistant-1"},
+            correlation_id="client-1",
         ),
         parent_event_id=decision_id,
     )

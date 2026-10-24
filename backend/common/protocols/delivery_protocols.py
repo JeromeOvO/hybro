@@ -1,4 +1,3 @@
-from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from common.dto import DeliveryEvent
@@ -10,16 +9,8 @@ class DeliveryEventPublisher(Protocol):
     async def emit(self, event: DeliveryEvent) -> bool | None: ...
 
 
-# Compatibility name for the public delivery-only contract.
+# Short alias for the public delivery-only contract.
 EventPublisher = DeliveryEventPublisher
-
-
-@runtime_checkable
-class SSETransport(Protocol):
-    def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
-    async def disconnect(self, connection_id: str) -> None: ...
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int: ...
-    def set_draining(self, draining: bool) -> None: ...
 
 
 @runtime_checkable
@@ -32,9 +23,11 @@ class SSEConnectionLike(Protocol):
 
 @runtime_checkable
 class SSERouteTransport(Protocol):
-    async def add_connection(self, room_id: str) -> SSEConnectionLike: ...
-    async def remove_connection(self, room_id: str, connection_id: str) -> None: ...
-    def get_room_status(self, room_id: str) -> dict[str, JsonValue]: ...
+    async def add_connection(self, conversation_id: str) -> SSEConnectionLike: ...
+    async def remove_connection(
+        self, conversation_id: str, connection_id: str
+    ) -> None: ...
+    def get_room_status(self, conversation_id: str) -> dict[str, JsonValue]: ...
 
 
 __all__ = [
@@ -42,5 +35,4 @@ __all__ = [
     "EventPublisher",
     "SSEConnectionLike",
     "SSERouteTransport",
-    "SSETransport",
 ]

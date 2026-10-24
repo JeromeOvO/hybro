@@ -15,7 +15,11 @@ from common.dto import (
 from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_publisher import EventPublisherImpl
-from delivery.sse.deduplication import TerminalStatusDeduplicator
+from delivery.sse.deduplication import (
+    DeliveryReservation,
+    DeliveryReservationStatus,
+    TerminalStatusDeduplicator,
+)
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
@@ -40,10 +44,10 @@ class FakeTransport:
         self.error: Exception | None = None
         self.delivered_count = 1
 
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int:
+    async def broadcast_frame_to_room(self, conversation_id: str, frame: dict) -> int:
         if self.error is not None:
             raise self.error
-        self.frames.append((room_id, frame))
+        self.frames.append((conversation_id, frame))
         return self.delivered_count
 
 
@@ -56,11 +60,11 @@ class FakeBus:
         self.dead_letter_error: Exception | None = None
         self.sse_accepted = True
 
-    async def publish_sse(self, room_id: str, frame: dict) -> bool:
+    async def publish_sse(self, conversation_id: str, frame: dict) -> bool:
         if self.sse_error is not None:
             raise self.sse_error
         self.sse_trace_ids.append(get_current_trace_id())
-        self.sse.append((room_id, frame))
+        self.sse.append((conversation_id, frame))
         return self.sse_accepted
 
     async def publish_dead_letter(self, envelope: dict) -> None:
@@ -70,13 +74,34 @@ class FakeBus:
 
 
 class FakeDeduplicator:
+    """Two-phase deduplicator double; ``result=False`` reports a duplicate."""
+
+    reservation_ttl_seconds = 30
+
     def __init__(self, result=True):
         self.result = result
         self.calls = []
 
-    async def should_deliver(self, *, room_id, message_id, status):
-        self.calls.append((room_id, message_id, status))
-        return self.result
+    async def reserve(self, *, conversation_id, message_id, status, delivery_id=None):
+        self.calls.append((conversation_id, message_id, status))
+        status_value = (
+            DeliveryReservationStatus.RESERVED
+            if self.result
+            else DeliveryReservationStatus.ALREADY_DELIVERED
+        )
+        return DeliveryReservation(status_value, f"{conversation_id}:{message_id}")
+
+    async def renew(self, reservation):
+        return True
+
+    async def confirm(self, reservation):
+        return True
+
+    async def mark_delivered_after_acceptance(self, reservation, *, status):
+        return None
+
+    async def release(self, **_kwargs):
+        return None
 
 
 class FakeMetrics:
@@ -102,7 +127,6 @@ def make_publisher(
     metrics=None,
     config=None,
     room_events=None,
-    projection_settlement=None,
 ):
     return EventPublisherImpl(
         sse_transport=transport or FakeTransport(),
@@ -113,14 +137,13 @@ def make_publisher(
         instance_id="worker-1",
         metrics=metrics,
         room_events=room_events,
-        projection_settlement=projection_settlement,
     )
 
 
 def test_hitl_idempotency_keys_are_scoped_to_room_and_interaction():
     publisher = make_publisher()
     request_a = HITLRequestEvent(
-        room_id="room-a",
+        conversation_id="room-a",
         request_id="cloud_providers",
         message_id="agent-message",
         source="agent",
@@ -131,10 +154,10 @@ def test_hitl_idempotency_keys_are_scoped_to_room_and_interaction():
         question_index=1,
     )
     request_b = request_a.model_copy(
-        update={"room_id": "room-b", "interaction_id": "interaction-b"}
+        update={"conversation_id": "room-b", "interaction_id": "interaction-b"}
     )
     resolved_a = HITLResolvedEvent(
-        room_id="room-a",
+        conversation_id="room-a",
         request_id="cloud_providers",
         message_id="agent-message",
         source="agent",
@@ -162,13 +185,15 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
     publisher = make_publisher(transport=transport, bus=bus, metrics=metrics)
 
     delivered = await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     frame = {
         "type": "processing_status",
         "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
+        "conversation_id": "room-1",
         "data": {
             "status": "processing",
             "message_id": "msg-1",
@@ -192,9 +217,9 @@ async def test_long_fanout_renews_reservation_until_confirmed():
     from tests.test_delivery_deduplication import FakeRedisKV
 
     class SlowTransport(FakeTransport):
-        async def broadcast_frame_to_room(self, room_id, frame):
+        async def broadcast_frame_to_room(self, conversation_id, frame):
             await asyncio.sleep(1.1)
-            return await super().broadcast_frame_to_room(room_id, frame)
+            return await super().broadcast_frame_to_room(conversation_id, frame)
 
     redis = FakeRedisKV()
     config = DeliveryConfig(
@@ -207,7 +232,7 @@ async def test_long_fanout_renews_reservation_until_confirmed():
         dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -232,9 +257,9 @@ async def test_lost_reservation_after_fanout_writes_cross_instance_marker():
             return False
 
     class SlowTransport(FakeTransport):
-        async def broadcast_frame_to_room(self, room_id, frame):
+        async def broadcast_frame_to_room(self, conversation_id, frame):
             await asyncio.sleep(0.4)
-            return await super().broadcast_frame_to_room(room_id, frame)
+            return await super().broadcast_frame_to_room(conversation_id, frame)
 
     redis = LostRedis()
     config = DeliveryConfig(
@@ -247,7 +272,7 @@ async def test_lost_reservation_after_fanout_writes_cross_instance_marker():
         dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -291,7 +316,7 @@ async def test_post_fanout_confirmation_failure_does_not_redeliver_across_instan
         dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -337,7 +362,7 @@ async def test_accepted_result_survives_confirmation_and_marker_write_failure():
         dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -382,7 +407,7 @@ async def test_accepted_delivery_returns_when_connected_redis_commands_hang():
         dedup=dedup,
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -438,7 +463,7 @@ async def test_checked_emit_persists_marker_when_redis_reservation_recovers():
         dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -469,7 +494,7 @@ async def test_run_event_checked_emit_distinguishes_inflight_and_confirmed():
     redis = SharedNXRedisKV()
     crashed = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
     await crashed.reserve(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="evt-1",
         status="delivered",
         delivery_id="terminal:evt-1:run-event",
@@ -480,12 +505,14 @@ async def test_run_event_checked_emit_distinguishes_inflight_and_confirmed():
         dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
     )
     event = RunEventNotification(
-        room_id="room-1",
+        conversation_id="room-1",
         event_id="evt-1",
         delivery_id="terminal:evt-1:run-event",
         run_id="run-1",
         seq=2,
-        run_event_type="run_failed",
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     assert await publisher.emit_checked(event) == DeliveryEmitStatus.IN_FLIGHT
@@ -515,7 +542,9 @@ async def test_emit_suppresses_terminal_duplicate_and_counts_dedup():
     )
 
     delivered = await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="completed")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="completed"
+        )
     )
 
     assert transport.frames == []
@@ -539,7 +568,9 @@ async def test_local_delivery_failure_does_not_prevent_fanout_or_dead_letter():
     publisher = make_publisher(transport=transport, bus=bus)
 
     await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert len(bus.sse) == 1
@@ -562,7 +593,7 @@ async def test_zero_local_subscribers_and_no_broker_stays_pending():
         dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -587,7 +618,7 @@ async def test_zero_local_subscribers_and_failed_fanout_never_confirm_global_mar
         dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
     )
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         status="failed",
         delivery_id="terminal:evt-1:processing",
@@ -612,7 +643,9 @@ async def test_fanout_failure_is_dead_lettered_without_raising():
     publisher = make_publisher(bus=bus)
 
     delivered = await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert delivered is True
@@ -634,7 +667,9 @@ async def test_emit_returns_false_when_translation_fails(monkeypatch):
     )
 
     delivered = await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert delivered is False
@@ -650,7 +685,9 @@ async def test_emit_returns_false_when_all_frontend_paths_fail():
     publisher = make_publisher(transport=transport, bus=bus)
 
     delivered = await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert delivered is False
@@ -664,7 +701,7 @@ async def test_failed_terminal_delivery_releases_dedup_reservation_for_retry():
     dedup = TerminalStatusDeduplicator(config=DeliveryConfig())
     publisher = make_publisher(transport=transport, bus=bus, dedup=dedup)
     event = ProcessingStatusEvent(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-terminal",
         status="completed",
     )
@@ -694,7 +731,7 @@ async def test_emit_internal_schedules_handlers_and_publishes_without_sse():
         received.append(event)
 
     event = MessageCommitted(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         message_type="user",
         timestamp=NOW,
@@ -722,7 +759,7 @@ async def test_emit_internal_can_wait_for_local_handlers_before_returning():
         order.append("handler-done")
 
     event = MessageCommitted(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         message_type="user",
         timestamp=NOW,
@@ -748,7 +785,7 @@ async def test_emit_internal_can_skip_redis_fanout_for_local_only_events():
         received.append(event)
 
     event = MessageCommitted(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         message_type="user",
         timestamp=NOW,
@@ -777,7 +814,9 @@ async def test_emit_does_not_dispatch_internal_handlers():
     )
 
     await publisher.emit(
-        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+        ProcessingStatusEvent(
+            conversation_id="room-1", message_id="msg-1", status="processing"
+        )
     )
 
     assert called == []
@@ -800,7 +839,7 @@ async def test_multiple_internal_handlers_and_handler_exception_dead_letter():
 
     event = RunStateChanged(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         old_state="queued",
         new_state="processing",
         timestamp=NOW,
@@ -878,7 +917,7 @@ async def test_trace_context_is_added_to_typed_frames():
     with trace_id_context("trace-123"):
         await publisher.emit(
             ProcessingStatusEvent(
-                room_id="room-1", message_id="msg-1", status="processing"
+                conversation_id="room-1", message_id="msg-1", status="processing"
             )
         )
 
@@ -894,7 +933,7 @@ async def test_explicit_event_trace_is_used_for_cross_instance_publish():
 
     await publisher.emit(
         ProcessingStatusEvent(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             status="processing",
             trace_id="trace-from-event",
@@ -918,7 +957,7 @@ async def test_stop_cancels_blocked_handler_after_configured_timeout():
         await asyncio.Event().wait()
 
     event = MessageCommitted(
-        room_id="room-1",
+        conversation_id="room-1",
         message_id="msg-1",
         message_type="user",
         timestamp=NOW,
@@ -937,14 +976,14 @@ async def test_stop_cancels_blocked_handler_after_configured_timeout():
     "event",
     [
         MessageCommitted(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             message_type="user",
             timestamp=NOW,
         ),
         RunStateChanged(
             run_id="run-1",
-            room_id="room-1",
+            conversation_id="room-1",
             old_state="queued",
             new_state="processing",
             timestamp=NOW,
@@ -975,14 +1014,14 @@ async def test_remote_internal_events_cover_all_union_members_and_multiple_handl
     second = []
     events = [
         MessageCommitted(
-            room_id="room-1",
+            conversation_id="room-1",
             message_id="msg-1",
             message_type="user",
             timestamp=NOW,
         ),
         RunStateChanged(
             run_id="run-1",
-            room_id="room-1",
+            conversation_id="room-1",
             old_state="queued",
             new_state="processing",
             timestamp=NOW,
@@ -1021,7 +1060,7 @@ async def test_emit_internal_with_no_subscribers_is_noop_for_handlers():
     publisher = make_publisher(bus=bus, task_runner=runner)
     event = RunStateChanged(
         run_id="run-1",
-        room_id="room-1",
+        conversation_id="room-1",
         old_state="queued",
         new_state="processing",
         timestamp=NOW,

@@ -5,19 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
 from agent.network import AgentNetworkService
 from agent.protocols import (
     AgentCapabilityIssueStore,
-    AgentCenterCompatibility,
-    AgentGroupStoreCompatibility,
+    AgentCatalog,
+    AgentGroupStore,
     AgentInspection,
-    AgentLivenessChecker,
     AgentNetworkAccess,
     AgentSuggestionService,
 )
-from chat.protocols import RoomCenterCompatibility
+from chat.protocols import ChatRooms
 from common.auth import ClerkUser, get_current_user
 from common.protocols import (
     AgentMatcher,
@@ -31,7 +30,7 @@ from common.protocols import (
     SSEStateReader,
 )
 from execution.direct_agent import DirectAgentExecution
-from execution.ports import DirectAgentMessenger
+from execution.ports import A2APushNotificationReceiver, DirectAgentMessenger
 from local_agents.protocols import LocalAgentDiscovery
 from session.access import BoundSessionAccess
 from session.protocols import SessionAccess, SessionOwner, SessionService
@@ -39,17 +38,16 @@ from session.protocols import SessionAccess, SessionOwner, SessionService
 
 @dataclass(frozen=True, slots=True)
 class APIGatewayDeps:
-    agent_center: AgentCenterCompatibility
+    agent_catalog: AgentCatalog
     agent_service: AgentRegistry
     agent_matcher: AgentMatcher
     capability_issue_service: AgentCapabilityIssueStore
-    agent_liveness_checker: AgentLivenessChecker
-    agent_group_store: AgentGroupStoreCompatibility
+    agent_group_store: AgentGroupStore
     file_storage: FileStorage
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
     inspection_center: AgentInspection
-    room_center: RoomCenterCompatibility
+    chat_rooms: ChatRooms
     room_store: RoomRouteReader
     agent_selection_service: AgentSuggestionService
     execution_engine: ExecutionEngine
@@ -95,10 +93,10 @@ def is_bound(app: Any) -> bool:
     return deps is not None and not missing_required_deps(deps)
 
 
-def get_agent_center(
+def get_agent_catalog(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentCenterCompatibility:
-    return deps.agent_center
+) -> AgentCatalog:
+    return deps.agent_catalog
 
 
 def get_agent_service(
@@ -113,15 +111,9 @@ def get_capability_issue_service(
     return deps.capability_issue_service
 
 
-def get_agent_liveness_checker(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentLivenessChecker:
-    return deps.agent_liveness_checker
-
-
 def get_agent_group_store(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentGroupStoreCompatibility:
+) -> AgentGroupStore:
     return deps.agent_group_store
 
 
@@ -155,10 +147,10 @@ def get_inspection_center(
     return deps.inspection_center
 
 
-def get_room_center(
+def get_chat_rooms(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> RoomCenterCompatibility:
-    return deps.room_center
+) -> ChatRooms:
+    return deps.chat_rooms
 
 
 def get_room_store(
@@ -189,6 +181,19 @@ def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
     return deps.sse_transport
+
+
+def get_a2a_push_receiver(request: Request) -> A2APushNotificationReceiver:
+    """Execution's push ingress, bound after the orchestrator runtime is built."""
+    receiver = getattr(request.app.state, "a2a_push_receiver", None)
+    if receiver is None:
+        raise HTTPException(status_code=503, detail="Push ingress is unavailable")
+    return receiver
+
+
+A2APushReceiverDependency = Annotated[
+    A2APushNotificationReceiver, Depends(get_a2a_push_receiver)
+]
 
 
 def get_agent_network(

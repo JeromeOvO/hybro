@@ -441,7 +441,7 @@ async def test_snapshot_pages_complete_contiguous_history():
     store = InMemoryRoomEventStore()
     for index in range(205):
         await store.append(
-            room_id="room-1",
+            conversation_id="room-1",
             kind="cancellation",
             payload_public={"message_id": f"message-{index}"},
             idempotency_key=f"event-{index}",
@@ -469,7 +469,7 @@ async def test_invalid_canonical_event_does_not_advance_snapshot_checkpoint():
         },
     )["payload_public"]
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=started,
         idempotency_key="started",
@@ -479,7 +479,7 @@ async def test_invalid_canonical_event_does_not_advance_snapshot_checkpoint():
     assert (await service.snapshot("room-1"))["room_seq"] == 1
 
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public={**started, "event_id": "bad", "private": "forbidden"},
         idempotency_key="invalid",
@@ -495,7 +495,7 @@ async def test_invalid_canonical_event_does_not_advance_snapshot_checkpoint():
 async def test_semantically_rejected_canonical_event_stops_at_prior_watermark():
     store = InMemoryRoomEventStore()
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_run_event(
             1,
@@ -513,7 +513,7 @@ async def test_semantically_rejected_canonical_event_stops_at_prior_watermark():
     service = SnapshotService(store=store)
     assert (await service.snapshot("room-1"))["room_seq"] == 1
     await store.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="run_event",
         payload_public=_run_event(
             2,
@@ -538,7 +538,7 @@ async def test_semantically_rejected_canonical_event_stops_at_prior_watermark():
 async def test_snapshot_builds_for_one_room_are_serialized_and_monotonic():
     inner = InMemoryRoomEventStore()
     await inner.append(
-        room_id="room-1",
+        conversation_id="room-1",
         kind="cancellation",
         payload_public={"message_id": "message-1"},
         idempotency_key="one",
@@ -558,8 +558,8 @@ async def test_snapshot_builds_for_one_room_are_serialized_and_monotonic():
             finally:
                 self.active -= 1
 
-        async def latest_seq(self, room_id):
-            return await inner.latest_seq(room_id)
+        async def latest_seq(self, conversation_id):
+            return await inner.latest_seq(conversation_id)
 
     store = MeasuringStore()
     service = SnapshotService(store=store)

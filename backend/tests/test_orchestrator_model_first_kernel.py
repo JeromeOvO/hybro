@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
-from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
 from execution.orchestrator.kernel import (
     KernelConflict,
     _surface_agent_questions_tool_definition,
@@ -43,6 +42,7 @@ from tests._orchestrator_helpers import (
     make_run,
     tool_events,
 )
+from tests.orchestrator_harness.fake_tools import RecordingFakeToolRuntime
 
 
 def _interaction_suspension(
@@ -259,7 +259,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     all_events = [
         (
@@ -279,10 +279,9 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -291,7 +290,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
         room_seq += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_seq,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -358,6 +357,104 @@ async def test_model_first_join_routes_and_emits_answered_from_context():
     turn_end = [p for e, p in events if e == "turn_completed"]
     assert turn_end[0]["message_id"] == "assistant-2"
     assert len(turn_end[0]["tool_call_ids"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_model_reply_join_ends_consumed_parent_tool_before_turn_end():
+    """Regression: the parked parent's Tool end must precede the turn_end.
+
+    The join's terminal result terminalizes the parent entry of an earlier
+    batch; folds reject a turn_end whose inventory lists an open Tool.
+    """
+
+    runtime = InteractionRuntime()
+    runtime.suspensions["call-1"] = _interaction_suspension("call-1")
+    runtime.model_replies["call-2"] = ToolResult(
+        call_id="call-2",
+        tool_name="fake_agent_pause",
+        status="completed",
+        content=[TextPart(text="done")],
+        artifact_refs=[],
+    )
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(("call-1", "fake_agent_pause", '{"status":"input_required"}')),
+            tool_events(("call-2", "fake_agent_pause", '{"status":"input_required"}')),
+            final_events("done"),
+        ],
+        tool_runtime=runtime,
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        events.append((event_type, payload))
+
+    result = await kernel.run(
+        next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
+    )
+
+    assert result.outcome == "final_answer"
+    turn_end_index = next(
+        index for index, (kind, _) in enumerate(events) if kind == "turn_completed"
+    )
+    listed = events[turn_end_index][1]["tool_call_ids"]
+    assert len(listed) == 2
+    ended_before = [
+        payload["public_call_id"]
+        for kind, payload in events[:turn_end_index]
+        if kind == "tool_execution_completed"
+    ]
+    assert sorted(ended_before) == sorted(listed)
+    assert not [
+        payload
+        for kind, payload in events[turn_end_index:]
+        if kind == "tool_execution_completed" and payload["public_call_id"] in listed
+    ]
+
+    from delivery.snapshot import RoomEventFold
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    translator = PublicProjectionTranslator()
+    fold = RoomEventFold()
+    room_seq = 0
+    for sequence, (event_type, payload) in enumerate(
+        [("run_started", {"mode": "ultimate"}), *events], start=1
+    ):
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=result.run.session_id,
+                run_id=result.run.run_id,
+                causation_id=result.run.request.user_message_id,
+                sequence=sequence,
+                timestamp=NOW,
+                payload=payload,
+                conversation_id=result.run.conversation_id,
+                user_message_id=result.run.request.user_message_id,
+                client_request_id=result.run.client_request_id,
+            ),
+            catalog=result.run.tool_catalog,
+        )
+        if projected is None:
+            continue
+        room_seq += 1
+        assert fold.apply(
+            {
+                "room_id": result.run.conversation_id,
+                "room_seq": room_seq,
+                "kind": "run_event",
+                "ts": NOW.isoformat(),
+                "payload_public": {
+                    "event_id": projected.event_id,
+                    "run_id": projected.run_id,
+                    "seq": projected.seq,
+                    "type": projected.kind,
+                    "payload": projected.payload,
+                    "correlation_id": projected.client_request_id,
+                },
+            }
+        ), (event_type, payload)
 
 
 @pytest.mark.asyncio
@@ -609,7 +706,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     assistant_id = result.run.proposed_final_message_id
     assert assistant_id is not None
@@ -627,10 +724,9 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -640,7 +736,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
         room_sequence += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_sequence,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -657,7 +753,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "agent_response",
             "ts": NOW.isoformat(),
@@ -672,7 +768,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -956,7 +1052,7 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
         "active_interaction_id": None,
         "agent_call_message_ids": [],
     }
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     room_sequence = 0
     closeout_started = False
     for sequence, (event_type, payload) in enumerate(events, start=1):
@@ -973,10 +1069,9 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -984,7 +1079,7 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
             continue
         room_sequence += 1
         record = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1027,7 +1122,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
         tool_runtime=runtime,
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     emission_attempts: dict[str, int] = {}
     private_sequence = 0
@@ -1046,10 +1141,9 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1060,7 +1154,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
             if projected.event_id not in records:
                 room_sequence += 1
                 records[projected.event_id] = {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "room_seq": room_sequence,
                     "kind": "run_event",
                     "ts": NOW.isoformat(),
@@ -1091,7 +1185,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
     assert interrupted.status == "finalizing"
     assert interrupted.proposed_final_message_id is not None
 
-    async def read_canonical_events(_room_id, _run_id):
+    async def read_canonical_events(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = read_canonical_events
@@ -1194,7 +1288,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
             assert child.state == "canceled"
             assert child.terminal_result is not None
             assert a2a.hitl.is_abandoned_for_test("interaction-1")
-            assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
+            assert await a2a.hitl.get_eligible_interactions(run.conversation_id) == []
             assert all(
                 entry.state == "terminal"
                 for batch in _run.tool_batches
@@ -1227,7 +1321,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     room_sequence = 0
     applied_event_ids: set[str] = set()
@@ -1243,10 +1337,9 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -1256,7 +1349,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
         room_sequence += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_sequence,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
@@ -1273,7 +1366,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1493,7 +1586,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
         supervisor_hitl=AsyncMock(),
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     private_sequence = 0
     room_sequence = 0
@@ -1510,10 +1603,9 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1521,7 +1613,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
             return
         room_sequence += 1
         records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1568,7 +1660,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
     )
     assert saved.outcome == "accepted"
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -1629,7 +1721,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
         assert fold.apply(record), record
     room_sequence += 1
     settled_record = {
-        "room_id": terminal.run.room_id,
+        "room_id": terminal.run.conversation_id,
         "room_seq": room_sequence,
         "kind": "run_event",
         "ts": NOW.isoformat(),
@@ -1704,7 +1796,7 @@ async def _terminal_public_tool_replay_fixture(status):
     )
     runtime = InteractionRuntime()
     kernel, store, _, _ = await make_kernel([], run=run, tool_runtime=runtime)
-    projected = PublicProjectionTranslator(lifecycle_family="canonical").translate(
+    projected = PublicProjectionTranslator().translate(
         SessionEvent(
             event_type="tool_execution_completed",
             session_id=run.session_id,
@@ -1724,10 +1816,9 @@ async def _terminal_public_tool_replay_fixture(status):
                 "duration_ms": 0,
                 "result_text": "",
             },
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=run.tool_catalog,
     )
@@ -1771,7 +1862,7 @@ async def test_terminal_preflight_reconciles_exact_public_outcome_for_all_status
     else:
         assert payload["failure_reason"] == expected_failure
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [record]
 
     emissions = []
@@ -1836,7 +1927,7 @@ async def test_terminal_preflight_rejects_malformed_public_tool_end_before_effec
     else:
         record["payload_public"]["payload"].pop(delete_key)
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [record]
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -1880,7 +1971,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
         supervisor_hitl=AsyncMock(),
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     emissions: list[tuple[str, dict[str, object]]] = []
     private_sequence = 0
@@ -1899,10 +1990,9 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1910,7 +2000,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
             return
         room_sequence += 1
         records[projected.event_id] = {
-            "room_id": run.room_id,
+            "room_id": run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -1987,7 +2077,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
     )
     assert saved.outcome == "accepted"
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return list(records.values())
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -2024,7 +2114,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
     room_sequence += 1
     assert fold.apply(
         {
-            "room_id": terminal.run.room_id,
+            "room_id": terminal.run.conversation_id,
             "room_seq": room_sequence,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -2107,7 +2197,7 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
     )
     runtime = InteractionRuntime()
     kernel, store, _, _ = await make_kernel([], run=run, tool_runtime=runtime)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     projected = translator.translate(
         SessionEvent(
             event_type="tool_execution_completed",
@@ -2128,10 +2218,9 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
                 "duration_ms": 0,
                 "result_text": "",
             },
-            room_id=run.room_id,
+            conversation_id=run.conversation_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=run.tool_catalog,
     )
@@ -2151,7 +2240,7 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
     }
     canonical_records = [record, record] if conflict == "duplicate" else [record]
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return canonical_records
 
     kernel.canonical_event_reader = canonical_event_reader
@@ -2300,7 +2389,7 @@ async def test_terminal_recovery_rejects_incomplete_child_of_closed_legacy_turn(
         }
     )
 
-    async def canonical_event_reader(_room_id, _run_id):
+    async def canonical_event_reader(_conversation_id, _run_id):
         return [
             {
                 "room_seq": 9,
@@ -2648,7 +2737,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
     initial_run = await store.load(run_id)
     assert initial_run is not None
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records_by_id: dict[str, dict[str, object]] = {}
     emission_attempts: dict[str, int] = {}
     private_sequence = 0
@@ -2680,10 +2769,9 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
                 sequence=private_sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=run.room_id,
+                conversation_id=run.conversation_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -2691,7 +2779,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
             append_record(
                 projected.event_id,
                 {
-                    "room_id": run.room_id,
+                    "room_id": run.conversation_id,
                     "kind": "run_event",
                     "ts": NOW.isoformat(),
                     "payload_public": {
@@ -2726,7 +2814,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         append_record(
             event_id,
             {
-                "room_id": initial_run.room_id,
+                "room_id": initial_run.conversation_id,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),
                 "payload_public": {
@@ -2772,7 +2860,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         append_record(
             event_id,
             {
-                "room_id": initial_run.room_id,
+                "room_id": initial_run.conversation_id,
                 "kind": kind,
                 "ts": NOW.isoformat(),
                 "payload_public": payload,
@@ -2855,7 +2943,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
         for entry in batch.entries
     )
 
-    async def read_canonical_events(_room_id: str, _run_id: str):
+    async def read_canonical_events(_conversation_id: str, _run_id: str):
         return list(records_by_id.values())
 
     def restarted_kernel() -> OrchestratorKernel:
@@ -2892,7 +2980,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
     append_record(
         f"agent_response:{final_message_id}",
         {
-            "room_id": completed.run.room_id,
+            "room_id": completed.run.conversation_id,
             "kind": "agent_response",
             "ts": NOW.isoformat(),
             "payload_public": {
@@ -3142,7 +3230,7 @@ async def test_real_continuation_ingress_preserves_follow_up_for_kernel_surface(
     second_record = await ledger.load_by_record_id(call.call_record_id)
     assert second_record is not None
     assert second_record.pending_interaction_id == "interaction-2"
-    assert await hitl.get_published_interactions(call.room_id) == []
+    assert await hitl.get_published_interactions(call.conversation_id) == []
 
     class Artifacts:
         async def materialize(self, *args, **kwargs):
@@ -3219,7 +3307,7 @@ async def test_real_continuation_ingress_preserves_follow_up_for_kernel_surface(
     assert [
         interaction.interaction_id
         for interaction, _route, _fingerprint in await hitl.get_published_interactions(
-            call.room_id
+            call.conversation_id
         )
     ] == ["interaction-2"]
 
@@ -3465,7 +3553,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     started = translator.translate(
         SessionEvent(
@@ -3476,17 +3564,16 @@ async def test_rejected_ask_then_surface_forward_accepted():
             sequence=1,
             timestamp=NOW,
             payload={"mode": "ultimate"},
-            room_id=result.run.room_id,
+            conversation_id=result.run.conversation_id,
             user_message_id=result.run.request.user_message_id,
             client_request_id=result.run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=result.run.tool_catalog,
     )
     assert started is not None
     assert fold.apply(
         {
-            "room_id": result.run.room_id,
+            "room_id": result.run.conversation_id,
             "room_seq": 1,
             "kind": "run_event",
             "ts": NOW.isoformat(),
@@ -3511,10 +3598,9 @@ async def test_rejected_ask_then_surface_forward_accepted():
                 sequence=sequence,
                 timestamp=NOW,
                 payload=payload,
-                room_id=result.run.room_id,
+                conversation_id=result.run.conversation_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -3523,7 +3609,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
         room_seq += 1
         assert fold.apply(
             {
-                "room_id": result.run.room_id,
+                "room_id": result.run.conversation_id,
                 "room_seq": room_seq,
                 "kind": "run_event",
                 "ts": NOW.isoformat(),

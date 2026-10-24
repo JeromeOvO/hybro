@@ -19,6 +19,7 @@ from common.dto.delivery import (
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 
 from ..models import TextPart, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from .errors import RecoverableCheckpointError
 from .hitl_prompt import (
     prompt_type_for_question,
@@ -63,7 +64,7 @@ def public_activity_message_id(
 ) -> str:
     call_id = (
         _canonical_public_call_id(record, run)
-        if getattr(run, "lifecycle_family", None) == "canonical"
+        if run is not None
         else record.invocation_id
     )
     return f"orchestrator:{record.run_id}:{call_id}"
@@ -125,7 +126,6 @@ async def _emit_delivery_event(
         if status not in {
             DeliveryEmitStatus.DELIVERED,
             DeliveryEmitStatus.ALREADY_DELIVERED,
-            DeliveryEmitStatus.DEDUPLICATED,
         }:
             raise RuntimeError(
                 f"canonical {event.event_type} was not durably delivered"
@@ -148,7 +148,10 @@ async def park_call_for_interaction(
     """Park a call on an interaction observation.
 
     Typed specs → ``input_required`` / ``auth_required`` with activated HITL.
-    Missing spec → silent completed tool result (cyber untyped recovery).
+    The A2A adapter derives a free-text spec from a plain ``input-required``
+    status message, so those questions take the typed path too.
+    Missing spec (plain ``auth-required``, or no question text) → completed
+    tool result carrying whatever the Agent sent.
     Invalid spec → fail-closed failed terminal.
     """
     raw_spec = observation.interaction_spec
@@ -336,7 +339,7 @@ async def emit_hitl_request_events(
     public_secret_values: tuple[str, ...] = (),
 ) -> None:
     run = await _load_hitl_run(record, run_store)
-    canonical = getattr(run, "lifecycle_family", None) == "canonical"
+    canonical = run is not None
     if hitl_delivery is None:
         if canonical:
             raise RuntimeError("canonical HITL delivery is not bound")
@@ -362,7 +365,7 @@ async def emit_hitl_request_events(
         request_ids.append(question.question_id)
         choices = list(question.choices) if question.choices else None
         event = HITLRequestEvent(
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             run_id=record.run_id if canonical else None,
             request_id=question.question_id,
             message_id=message_id,
@@ -430,7 +433,7 @@ async def emit_hitl_resolved_events(
     public_secret_values: tuple[str, ...] = (),
 ) -> None:
     run = await _load_hitl_run(record, run_store)
-    canonical = getattr(run, "lifecycle_family", None) == "canonical"
+    canonical = run is not None
     if hitl_delivery is None:
         if canonical:
             raise RuntimeError("canonical HITL delivery is not bound")
@@ -448,7 +451,7 @@ async def emit_hitl_resolved_events(
         request_ids.append(question.question_id)
         given = answered.get(question.question_id)
         event = HITLResolvedEvent(
-            room_id=record.room_id,
+            conversation_id=record.conversation_id,
             run_id=record.run_id if canonical else None,
             request_id=question.question_id,
             message_id=message_id,
@@ -473,13 +476,7 @@ async def emit_hitl_resolved_events(
         await _emit_delivery_event(hitl_delivery, event, canonical=canonical)
     if canonical and status == "responded":
         latest = await _load_hitl_run(record, run_store)
-        if latest is None or latest.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if latest is None or latest.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return
         assert canonical_control is not None
         await canonical_control(

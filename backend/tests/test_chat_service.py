@@ -10,12 +10,16 @@ import pytest
 from chat import ChatService
 from common.dto import RoomInfo
 from conversation import RoomDeletionService
-from models.request import RoomCenterRoomSettingRequest
 
 
-@pytest.fixture
-def chat_service():
-    return ChatService()
+def _file_lifecycle():
+    return SimpleNamespace(
+        begin_room_deletion=AsyncMock(return_value="deletion-1"),
+        wait_for_room_writes=AsyncMock(return_value=True),
+        set_deletion_phase=AsyncMock(return_value=True),
+        delete_for_room=AsyncMock(return_value=0),
+        delete_room_state=AsyncMock(return_value=True),
+    )
 
 
 @pytest.mark.asyncio
@@ -26,7 +30,16 @@ async def test_chat_service_delegated_methods_fail_before_bind():
         RuntimeError,
         match=r"ChatService\.bind_facade\(\) not called - startup incomplete",
     ):
-        await svc.create_new_room(RoomCenterRoomSettingRequest(room_name="Room"))
+        await svc.create_room(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            extend_info=None,
+            membership_seed_input=None,
+            room_agent_ids=None,
+            seed_group_id=None,
+            seed_all_current_agents=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -34,7 +47,7 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     svc = ChatService()
     facade = AsyncMock()
     facade.create_room.return_value = RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="owner",
         owner_name="Owner",
@@ -44,7 +57,6 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     facade.get_room.return_value = facade.create_room.return_value
     facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
     facade.list_room_history_for_owner.return_value = [facade.create_room.return_value]
-    facade.replace_membership.return_value = facade.create_room.return_value
     facade.update_room.return_value = facade.create_room.return_value
     facade.get_room_owner.return_value = "owner"
     facade.delete_room.return_value = True
@@ -54,58 +66,43 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     svc.bind_room_deletion(
         RoomDeletionService(
             room_lifecycle=facade,
+            file_lifecycle=_file_lifecycle(),
             memory_cleanup=memory_cleanup,
         )
     )
 
-    create_response = await svc.create_new_room(
-        RoomCenterRoomSettingRequest(
-            room_name="Room",
-            room_owner_id="owner",
-            room_owner_name="Owner",
-            room_agent_set={"a1": "Agent One"},
-            extend_info={"debateMode": True, "use_supervisor": True},
-            requesting_user_id="owner",
-        )
+    create_response = await svc.create_room(
+        owner_id="owner",
+        owner_name="Owner",
+        room_name="Room",
+        extend_info={"debateMode": True, "use_supervisor": True},
+        membership_seed_input="manual",
+        room_agent_ids=["a1"],
+        seed_group_id=None,
+        seed_all_current_agents=None,
     )
-    inquiry_response = await svc.inquiry_room_setting(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
-    list_response = await svc.inquiry_rooms_by_room_owner_id(
-        RoomCenterRoomSettingRequest(room_owner_id="owner")
-    )
-    history_response = await svc.inquiry_room_history_by_owner_id(
-        RoomCenterRoomSettingRequest(room_owner_id="owner")
-    )
-    replace_response = await svc.update_room_agent_set(
-        RoomCenterRoomSettingRequest(
-            room_id="r1",
-            room_agent_set={"a1": "Agent One"},
-            requesting_user_id="owner",
-        )
-    )
-    rename_response = await svc.update_room_name(
-        RoomCenterRoomSettingRequest(room_id="r1", room_name="Renamed")
-    )
-    delete_response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
+    inquiry_response = await svc.get_room("r1")
+    list_response = await svc.list_rooms_for_owner("owner")
+    history_response = await svc.list_room_history("owner")
+    rename_response = await svc.rename_room("r1", "Renamed")
+    delete_response = await svc.delete_room("r1", requesting_user_id="owner")
 
     assert create_response.success is True
-    assert create_response.room.room_id == "r1"
+    assert create_response.room.conversation_id == "r1"
     assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
-    assert list_response.room_list[0].room_id == "r1"
-    assert history_response.room_list[0].room_id == "r1"
-    assert replace_response.success is True
+    assert list_response.room_list[0].conversation_id == "r1"
+    assert history_response.room_list[0].conversation_id == "r1"
     assert rename_response.success is True
     assert delete_response.success is True
     facade.create_room.assert_awaited_once()
     create_request = facade.create_room.await_args.args[0]
     assert create_request.extend_info == {"debateMode": True, "use_supervisor": True}
+    assert create_request.membership_seed.mode == "manual"
+    assert create_request.membership_seed.agent_ids == ["a1"]
+    assert create_request.membership_seed.requesting_user_id == "owner"
     facade.get_room.assert_awaited()
     facade.list_rooms_for_owner.assert_awaited_once_with("owner")
     facade.list_room_history_for_owner.assert_awaited_once_with("owner", limit=100)
-    facade.replace_membership.assert_awaited_once()
     facade.update_room.assert_awaited_once_with("r1", {"room_name": "Renamed"})
     facade.delete_room.assert_awaited_once_with("r1", "owner")
 
@@ -115,16 +112,14 @@ async def test_chat_service_room_setting_returns_room_metadata_only():
     svc = ChatService()
     facade = AsyncMock()
     facade.get_room.return_value = RoomInfo(
-        room_id="r1",
+        conversation_id="r1",
         room_name="Room",
         owner_id="owner",
         owner_name="Owner",
     )
     svc.bind_facade(facade)
 
-    response = await svc.inquiry_room_setting(
-        RoomCenterRoomSettingRequest(room_id="r1")
-    )
+    response = await svc.get_room("r1")
 
     assert response.success is True
     assert response.active_runs is None
@@ -142,13 +137,12 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     svc.bind_room_deletion(
         RoomDeletionService(
             room_lifecycle=facade,
+            file_lifecycle=_file_lifecycle(),
             memory_cleanup=memory_cleanup,
         )
     )
 
-    response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="intruder")
-    )
+    response = await svc.delete_room("r1", requesting_user_id="intruder")
 
     assert response.success is False
     assert response.status_code == 403
@@ -158,94 +152,141 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
 
 
 @pytest.mark.asyncio
-async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails():
+async def test_create_room_without_membership_input_seeds_empty_manual_membership():
     svc = ChatService()
     facade = AsyncMock()
-    facade.get_room_owner.return_value = "owner"
-    facade.delete_room.return_value = True
-    svc.bind_facade(facade)
-    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
-    svc.bind_room_deletion(
-        RoomDeletionService(
-            room_lifecycle=facade,
-            memory_cleanup=memory_cleanup,
-        )
+    facade.create_room.return_value = RoomInfo(
+        conversation_id="r1", room_name="Room", owner_id="owner", owner_name="Owner"
     )
+    svc.bind_facade(facade)
 
-    response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
+    response = await svc.create_room(
+        owner_id="owner",
+        owner_name="Owner",
+        room_name="Room",
+        extend_info=None,
+        membership_seed_input=None,
+        room_agent_ids=None,
+        seed_group_id=None,
+        seed_all_current_agents=None,
     )
 
     assert response.success is True
-    assert response.status_code == 200
-    assert response.error is None
-    facade.delete_room.assert_awaited_once_with("r1", "owner")
+    seed = facade.create_room.await_args.args[0].membership_seed
+    assert seed.mode == "manual"
+    assert seed.agent_ids is None
 
 
-# =============================================================================
-# _looks_like_agent_id Tests
-# =============================================================================
-
-
-class TestLooksLikeAgentId:
-    """Tests for UUID-style agent ID detection."""
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "550e8400-e29b-41d4-a716-446655440000",
-            "550e8400e29b41d4a716446655440000",
-        ],
+@pytest.mark.asyncio
+async def test_room_response_passes_stored_membership_status_through():
+    svc = ChatService()
+    facade = AsyncMock()
+    facade.get_room.return_value = RoomInfo(
+        conversation_id="r1",
+        room_name="Room",
+        owner_id="owner",
+        membership_origin="saved_group",
+        membership_origin_status="seeded_edited",
     )
-    def test_recognizes_valid_uuids(self, value):
-        assert ChatService._looks_like_agent_id(value) is True
+    svc.bind_facade(facade)
 
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "MyAgent",
-            "agent-name",
-            "",
-            "not-a-uuid-at-all",
-        ],
+    response = await svc.get_room("r1")
+
+    assert response.room.membership_origin_status == "seeded_edited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "error", "status_code"),
+    [
+        (
+            lambda svc: svc.create_room(
+                owner_id="owner",
+                owner_name="Owner",
+                room_name=None,
+                extend_info=None,
+                membership_seed_input=None,
+                room_agent_ids=None,
+                seed_group_id=None,
+                seed_all_current_agents=None,
+            ),
+            "Room name is required",
+            400,
+        ),
+        (
+            lambda svc: svc.create_room(
+                owner_id="owner",
+                owner_name=None,
+                room_name="Room",
+                extend_info=None,
+                membership_seed_input=None,
+                room_agent_ids=None,
+                seed_group_id=None,
+                seed_all_current_agents=None,
+            ),
+            "Room owner name is required",
+            400,
+        ),
+        (
+            lambda svc: svc.update_history_fields("r1", is_pinned=None, pin_order=None),
+            "No history fields supplied",
+            400,
+        ),
+    ],
+)
+async def test_room_operations_reject_missing_inputs(call, error, status_code):
+    svc = ChatService()
+    svc.bind_facade(AsyncMock())
+
+    response = await call(svc)
+
+    assert response.success is False
+    assert response.error == error
+    assert response.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_rename_maps_facade_errors_through_the_room_error_envelope():
+    svc = ChatService()
+    facade = AsyncMock()
+    facade.update_room.side_effect = ValueError("Access denied for room")
+    svc.bind_facade(facade)
+
+    response = await svc.rename_room("r1", "Renamed")
+
+    assert response.success is False
+    assert response.status_code == 403
+    assert response.conversation_id == "r1"
+
+
+@pytest.mark.asyncio
+async def test_unpinning_clears_pin_order():
+    svc = ChatService()
+    facade = AsyncMock()
+    facade.update_room.return_value = RoomInfo(
+        conversation_id="r1", room_name="Room", owner_id="owner"
     )
-    def test_rejects_non_uuid_strings(self, value):
-        assert ChatService._looks_like_agent_id(value) is False
+    svc.bind_facade(facade)
 
-    def test_rejects_non_string(self):
-        assert ChatService._looks_like_agent_id(123) is False
-        assert ChatService._looks_like_agent_id(None) is False
+    response = await svc.update_history_fields("r1", is_pinned=False, pin_order=None)
 
-
-# =============================================================================
-# _normalize_room_agent_set Tests
-# =============================================================================
+    assert response.success is True
+    facade.update_room.assert_awaited_once_with(
+        "r1", {"is_pinned": False, "pin_order": None}
+    )
 
 
-class TestNormalizeRoomAgentSet:
-    """Tests for room_agent_set normalization."""
+def test_missing_required_bindings_reports_each_unbound_dependency():
+    svc = ChatService()
+    assert svc.missing_required_bindings() == [
+        "facade",
+        "room_deletion",
+        "message_reader",
+    ]
 
-    def test_returns_empty_for_none(self, chat_service):
-        assert chat_service._normalize_room_agent_set(None) == {}
+    svc.bind_facade(object())
+    svc.bind_room_deletion(object())
+    assert svc.missing_required_bindings() == ["message_reader"]
 
-    def test_returns_empty_for_empty(self, chat_service):
-        assert chat_service._normalize_room_agent_set({}) == {}
-
-    def test_preserves_correct_shape(self, chat_service):
-        """Keys are UUIDs, values are names -- already canonical."""
-        data = {"550e8400e29b41d4a716446655440000": "MyAgent"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert result == data
-
-    def test_flips_inverted_shape(self, chat_service):
-        """Keys are names, values are UUIDs -- needs flipping."""
-        data = {"MyAgent": "550e8400e29b41d4a716446655440000"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert "550e8400e29b41d4a716446655440000" in result
-        assert result["550e8400e29b41d4a716446655440000"] == "MyAgent"
-
-    def test_handles_ambiguous_data(self, chat_service):
-        """When keys and values both look like IDs, preserves original."""
-        data = {"550e8400e29b41d4a716446655440000": "660e8400e29b41d4a716446655440000"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert result == data
+    svc.bind_message_reader(object())
+    assert svc.missing_required_bindings() == []

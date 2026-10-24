@@ -46,12 +46,12 @@ export async function fetchRoomFileBlob(
 
 export async function uploadFile(
   file: File,
-  roomId: string,
+  conversationId: string,
   getToken?: () => Promise<string | null>,
 ): Promise<FileUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  formData.append('room_id', roomId)
+  formData.append('conversation_id', conversationId)
 
   const headers: Record<string, string> = {}
   if (getToken) {

@@ -14,7 +14,6 @@ import {
   MessageCirclePlus,
   ShieldCheck,
   BarChart3,
-  ThumbsUp,
   ChevronDown,
   ChevronRight,
   Link2,
@@ -70,8 +69,8 @@ import {
 import { toast } from "sonner"
 import { deleteAgent, getAgent } from "@/lib/api/agent"
 import { cn } from "@/lib/utils"
-import type { AgentCenterResponse, AgentCapabilities } from "@/lib/types"
-import type { AgentSkill } from "@/lib/types"
+import type { AgentRouteResponse } from "@/lib/types"
+import type { AgentCapabilitiesView, AgentSkillView } from "@/lib/types/agent"
 import { routes } from '@/lib/routes'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
@@ -91,16 +90,14 @@ const CAPABILITY_TOOLTIPS: Record<string, string> = {
   "Extensions": "Supports additional protocol extensions",
 }
 
-function visibleCapabilities(caps: AgentCapabilities): string[] {
-  const all: [string, unknown][] = [
+function visibleCapabilities(caps: AgentCapabilitiesView): string[] {
+  const all: [string, boolean][] = [
     ["Streaming", caps.streaming],
-    ["Push Notifications", caps.pushNotifications],
-    ["State History", caps.stateTransitionHistory],
+    ["Push Notifications", caps.push_notifications],
+    ["State History", caps.state_transition_history],
     ["Extensions", caps.extensions],
   ]
-  return all
-    .filter(([, v]) => (Array.isArray(v) ? v.length > 0 : !!v))
-    .map(([label]) => label)
+  return all.filter(([, enabled]) => enabled).map(([label]) => label)
 }
 
 function formatCount(n: number): string {
@@ -109,10 +106,10 @@ function formatCount(n: number): string {
   return String(n)
 }
 
-function collectQuickPrompts(skills: AgentSkill[]): string[] {
+function collectQuickPrompts(skills: AgentSkillView[]): string[] {
   const prompts: string[] = []
   for (const skill of skills) {
-    for (const example of skill.examples ?? []) {
+    for (const example of skill.examples) {
       if (prompts.length >= 3) return prompts
       prompts.push(example)
     }
@@ -134,7 +131,7 @@ export default function ConsumerAgentProfilePage() {
   const [creatingSubnet, setCreatingSubnet] = useState(false)
 
   const isSystem = isSystemAgent(agentId)
-  const { data: agentData, isLoading: loading } = useQuery<AgentCenterResponse>({
+  const { data: agentData, isLoading: loading } = useQuery<AgentRouteResponse>({
     queryKey: ["agent", agentId],
     enabled: !!agentId && !isSystem,
     queryFn: () => getAgent(agentId, undefined, getToken),
@@ -304,15 +301,11 @@ export default function ConsumerAgentProfilePage() {
   /* ───────── Main profile ───────── */
 
   const agent = agentData.agent
-  const card = agent.agent_card
+  const card = agent
   const memberOf = subnets.networks.filter(network => network.agents.includes(agent.agent_id))
-  const isLocal = agent.source === "hub" || agent.source === "local"
+  const isLocal = agent.source === "local"
   const canUnregister = !isLocal && userId === agent.provider_id
-  const isVisibleLocal = agent.source === "hub"
-    ? agent.agent_status === "active" && agent.is_hub_online === true
-    : agent.source === "local"
-      ? agent.agent_status === "active"
-      : true
+  const isVisibleLocal = isLocal ? agent.status === "active" : true
 
   if (!isVisibleLocal) {
     return (
@@ -338,17 +331,15 @@ export default function ConsumerAgentProfilePage() {
   }
 
   const enabledCaps = visibleCapabilities(card.capabilities)
-  const isActive = agent.agent_status === "active"
+  const isActive = agent.status === "active"
   const isChatDisabled = !isActive
 
   const callCount = agent.call_count ?? 0
 
-  const likeCount = agent.like_count ?? 0
-
-  const hasStats = callCount > 0 || likeCount > 0
+  const hasStats = callCount > 0
 
   const quickPrompts = collectQuickPrompts(card.skills)
-  const providerName = card.provider?.organization || agent.provider_name || undefined
+  const providerName = card.provider_organization || agent.provider_name || undefined
   const heroMeta = [card.version ? `v${card.version}` : null, providerName ? `Built by ${providerName}` : null]
     .filter(Boolean)
     .join(' · ')
@@ -384,7 +375,7 @@ export default function ConsumerAgentProfilePage() {
         <div className="space-y-5">
           <div className="flex items-start gap-5">
             <Avatar className={cn("h-24 w-24 shrink-0 rounded-xl", !isActive && "grayscale opacity-60")}>
-              <AvatarImage src={card.iconUrl || undefined} alt={card.name} />
+              <AvatarImage src={card.icon_url || undefined} alt={card.name} />
               <AvatarFallback className="rounded-none p-0 overflow-hidden">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={getAgentAvatarUri(agentId)} alt={card.name} className="h-full w-full" />
@@ -396,16 +387,11 @@ export default function ConsumerAgentProfilePage() {
                 <h1 className="text-2xl font-semibold tracking-tight">{card.name}</h1>
                 <div className="flex flex-col items-start gap-1.5">
                   <StatusIndicator
-                    view={agentStatusView(
-                      agent.agent_status === 'active' && agent.source === 'hub' && agent.is_hub_online === false
-                        ? 'unavailable'
-                        : agent.agent_status ?? 'unknown',
-                    )}
+                    view={agentStatusView(agent.status)}
                   />
                   <Badge variant="badgeMuted" className="h-6 gap-1.5 pl-1.5 pr-2.5 py-0 font-medium">
                     <AgentSourceBadge
                       source={agent.source}
-                      isHubOnline={agent.is_hub_online}
                       className="h-3.5 w-3.5"
                     />
                     {isLocal ? "Local" : "Remote"}
@@ -439,10 +425,10 @@ export default function ConsumerAgentProfilePage() {
               </Tooltip>
             </TooltipProvider>
 
-            {card.documentationUrl && (
+            {card.documentation_url && (
               <Button variant="secondary" asChild>
                 <a
-                  href={card.documentationUrl}
+                  href={card.documentation_url}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -468,7 +454,7 @@ export default function ConsumerAgentProfilePage() {
                 {typeof navigator !== "undefined" && "share" in navigator && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => handleNativeShare(card.name, card.description)}>
+                    <DropdownMenuItem onClick={() => handleNativeShare(card.name, card.description ?? "")}>
                       <Share2 className="h-4 w-4" />
                       More Options…
                     </DropdownMenuItem>
@@ -567,12 +553,6 @@ export default function ConsumerAgentProfilePage() {
               </span>
             )}
 
-            {likeCount > 0 && (
-              <span className="flex items-center gap-1.5">
-                <ThumbsUp className="h-4 w-4" />
-                {formatCount(likeCount)} likes
-              </span>
-            )}
           </div>
         )}
 
@@ -698,7 +678,7 @@ export default function ConsumerAgentProfilePage() {
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-2">
-                      {card.defaultInputModes.map((mode) => {
+                      {card.default_input_modes.map((mode) => {
                         const Icon = getModeIcon(mode)
                         const label = getModeLabel(mode)
                         return (
@@ -734,7 +714,7 @@ export default function ConsumerAgentProfilePage() {
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-2">
-                      {card.defaultOutputModes.map((mode) => {
+                      {card.default_output_modes.map((mode) => {
                         const Icon = getModeIcon(mode)
                         const label = getModeLabel(mode)
                         return (

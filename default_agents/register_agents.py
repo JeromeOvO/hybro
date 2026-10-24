@@ -2,7 +2,7 @@
 
 Reads agents.yaml, waits for the backend and each agent to become ready, then
 registers every enabled agent with the backend. Idempotent: re-running treats
-"already registered" as success.
+an HTTP 409 registration conflict ("already registered") as success.
 
 Environment:
   BACKEND_URL             Base URL of the backend (default: http://backend:8000)
@@ -101,11 +101,9 @@ def register(agent_url: str) -> bool:
         _log(f"registered {agent_url}")
         return True
 
-    body = resp.text.lower()
-    if resp.status_code == 400 and (
-        "already" in body or "exist" in body or "duplicate" in body
-    ):
-        _log(f"already registered {agent_url} (ok)")
+    if resp.status_code == 409:
+        # A record for this URL already exists; the default agent is reachable.
+        _log(f"already registered {agent_url} (ok): {resp.text[:300]}")
         return True
 
     if resp.status_code == 401:

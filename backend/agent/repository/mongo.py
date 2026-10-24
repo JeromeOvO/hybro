@@ -1,14 +1,45 @@
 from __future__ import annotations
 
-from agent.url_utils import normalize_agent_url
-from common.protocols import MongoDAL
+from datetime import datetime
 
-_LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
+from common.protocols import MongoDAL
+from common.utils.mongo_indexes import ensure_text_index
+from common.utils.time import utcnow
 
 
 class AgentMongoRepository:
     def __init__(self, mongo: MongoDAL, collection_name: str = "agents") -> None:
         self._agents = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> bool:
+        """Create the URL uniqueness index; return lexical search readiness."""
+        existing = await self._agents.index_information()
+        index = existing.get("unique_normalized_url")
+        needs_recreate = index is None or index.get("partialFilterExpression") != {
+            "normalized_url": {"$type": "string"}
+        }
+        if needs_recreate:
+            try:
+                await self._agents.drop_index("unique_normalized_url")
+            except Exception:
+                pass
+            await self._agents.create_index(
+                [("normalized_url", 1)],
+                unique=True,
+                name="unique_normalized_url",
+                partialFilterExpression={"normalized_url": {"$type": "string"}},
+            )
+        return await ensure_text_index(
+            self._agents,
+            name="agent_lexical_text",
+            weights={
+                "agent_card.name": 10,
+                "agent_card.skills.name": 8,
+                "agent_card.skills.tags": 6,
+                "agent_card.description": 3,
+                "agent_card.skills.description": 3,
+            },
+        )
 
     async def get_by_id(self, agent_id: str) -> dict | None:
         return await self._agents.find_one({"agent_id": agent_id})
@@ -24,7 +55,7 @@ class AgentMongoRepository:
 
     async def get_public(self, limit: int = 50) -> list[dict]:
         return await self._agents.find(
-            {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
+            {"is_public": True},
             limit=limit,
         )
 
@@ -42,22 +73,7 @@ class AgentMongoRepository:
         exact_query: dict = {"normalized_url": normalized_url}
         if provider_id is not None:
             exact_query["provider_id"] = provider_id
-        exact = await self._agents.find_one(exact_query)
-        if exact is not None:
-            return exact
-
-        legacy_query: dict = {"normalized_url": {"$exists": False}}
-        if provider_id is not None:
-            legacy_query["provider_id"] = provider_id
-        legacy_docs = await self._agents.find(
-            legacy_query,
-            limit=_LEGACY_NORMALIZED_URL_SCAN_LIMIT,
-        )
-        for doc in legacy_docs:
-            card_url = (doc.get("agent_card") or {}).get("url")
-            if card_url and normalize_agent_url(card_url) == normalized_url:
-                return doc
-        return None
+        return await self._agents.find_one(exact_query)
 
     async def list_visible(
         self,
@@ -69,7 +85,7 @@ class AgentMongoRepository:
         limit: int = 0,
         exhaust: bool = False,
     ) -> list[dict]:
-        visibility = [{"is_public": True}, {"is_public": {"$exists": False}}]
+        visibility: list[dict] = [{"is_public": True}]
         if user_id is not None:
             visibility.append({"provider_id": user_id})
 
@@ -115,6 +131,15 @@ class AgentMongoRepository:
     async def delete(self, agent_id: str) -> bool:
         return await self._agents.delete_one({"agent_id": agent_id})
 
+    async def update_where(
+        self, agent_id: str, conditions: dict, updates: dict
+    ) -> bool:
+        """Set ``updates`` only while the record still matches ``conditions``."""
+        return await self._agents.update_one(
+            {**conditions, "agent_id": agent_id},
+            {"$set": {**updates, "agent_id": agent_id}},
+        )
+
     async def update(self, agent_id: str, updates: dict) -> dict | None:
         await self._agents.update_one(
             {"agent_id": agent_id},
@@ -150,7 +175,30 @@ class AgentMongoRepository:
                 "source": source,
                 "agent_status": {"$ne": "inactive"},
             },
-            {"$set": {"agent_status": "inactive"}},
+            {"$set": {"agent_status": "inactive", "inactive_since": utcnow()}},
+        )
+
+    async def delete_inactive_ownerless(
+        self,
+        *,
+        source: str,
+        inactive_before: datetime,
+    ) -> int:
+        # Records marked inactive before ``inactive_since`` existed fall back
+        # to ``updated_at``.
+        return await self._agents.delete_many(
+            {
+                "source": source,
+                "provider_id": None,
+                "agent_status": "inactive",
+                "$or": [
+                    {"inactive_since": {"$lt": inactive_before}},
+                    {
+                        "inactive_since": None,
+                        "updated_at": {"$lt": inactive_before},
+                    },
+                ],
+            }
         )
 
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
