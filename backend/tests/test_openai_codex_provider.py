@@ -89,7 +89,7 @@ def turn(**updates):
     return GatewayTurnRequest.model_validate(
         {
             "provider": "openai",
-            "model_id": "gpt-5.4",
+            "model_id": "gpt-6-sol",
             "api": "responses",
             "system_prompt": "system fixture",
             "messages": [
@@ -143,7 +143,9 @@ async def test_sse_utf8_eof_correlation_usage_and_body(newline):
     payload = json.loads(sent.content)
     assert payload["store"] is False and payload["stream"] is True
     assert "max_output_tokens" not in payload and "max_tokens" not in payload
-    assert payload["model"] == "gpt-5.4" and payload["instructions"] == "system fixture"
+    assert (
+        payload["model"] == "gpt-6-sol" and payload["instructions"] == "system fixture"
+    )
 
 
 def tool_events():
@@ -391,7 +393,7 @@ async def test_malformed_terminal_and_provider_errors_redacted(events):
 async def test_http_failure_single_attempt(status, classification):
     calls = []
     with pytest.raises(LLMProviderFailure) as error:
-        await provider([], calls, status=status).generate([], "gpt-5.4")
+        await provider([], calls, status=status).generate([], "gpt-6-sol")
     assert len(calls) == 1
     assert error.value.classification.error_class == classification
 
@@ -447,11 +449,11 @@ async def test_structured_local_validation_once(text, valid):
     }
     if valid:
         assert (
-            await adapter.generate_structured([], "gpt-5.4", schema=schema)
+            await adapter.generate_structured([], "gpt-6-sol", schema=schema)
         ).data == {"ok": True}
     else:
         with pytest.raises(LLMProviderFailure) as error:
-            await adapter.generate_structured([], "gpt-5.4", schema=schema)
+            await adapter.generate_structured([], "gpt-6-sol", schema=schema)
         assert "fixture-secret-marker" not in "".join(
             traceback.format_exception(error.value)
         )
@@ -473,7 +475,7 @@ async def test_ordinary_function_calls_results_and_named_choice():
             },
             {"role": "tool", "tool_call_id": "old", "content": "result"},
         ],
-        "gpt-5.4",
+        "gpt-6-sol",
         tools=[
             {
                 "type": "function",
@@ -554,7 +556,7 @@ async def test_original_gateway_all_oauth_entrypoints_refresh_and_embedding_isol
     def handle(request):
         calls.append(request)
         assert str(request.url) == RESPONSES_URL
-        assert json.loads(request.content)["model"] == "gpt-5.4"
+        assert json.loads(request.content)["model"] == "gpt-6-sol"
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -592,7 +594,7 @@ async def test_original_gateway_all_oauth_entrypoints_refresh_and_embedding_isol
     )
     gateway = LLMGatewayImpl(settings_obj=settings)
     try:
-        assert (await gateway.generate([], model="legacy")).model == "gpt-5.4"
+        assert (await gateway.generate([], model="legacy")).model == "gpt-6-sol"
         assert (await gateway.generate_structured([], json_mode=True)).data == {
             "ok": True
         }
@@ -746,7 +748,7 @@ def test_cli_default_oauth_binding_verifies_codex_before_save(
         assert str(request.url) == RESPONSES_URL
         payload = json.loads(request.content)
         assert (
-            payload["model"] == "gpt-5.4"
+            payload["model"] == "gpt-6-sol"
             and "JSON object must conform" not in payload["instructions"]
         )
         return httpx.Response(
@@ -769,7 +771,7 @@ def test_cli_default_oauth_binding_verifies_codex_before_save(
             "--auth",
             "oauth",
             "--text-model",
-            "gpt-5.4",
+            "gpt-6-sol",
             "--image-model",
             "none",
         ],

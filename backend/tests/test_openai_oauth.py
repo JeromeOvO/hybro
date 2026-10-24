@@ -432,7 +432,7 @@ def test_cli_oauth_login_verify_save_noop_and_no_image_or_base_url(
         "--auth",
         "oauth",
         "--text-model",
-        "gpt-5.4",
+        "gpt-6-sol",
         "--image-model",
         "none",
     ]
@@ -460,7 +460,7 @@ def test_cli_oauth_login_verify_save_noop_and_no_image_or_base_url(
     )
     assert "Unchanged; no files rewritten." in reports
     assert not model_choices(oauth_config().provider).image
-    assert validate_models(oauth_config()).model_id == "gpt-5.4"
+    assert validate_models(oauth_config()).model_id == "gpt-6-sol"
 
 
 @pytest.mark.parametrize("failure", [asyncio.CancelledError, RuntimeConfigurationError])
@@ -474,7 +474,7 @@ def test_cli_login_failure_saves_nothing(tmp_path, monkeypatch, failure):
             "--auth",
             "oauth",
             "--text-model",
-            "gpt-5.4",
+            "gpt-6-sol",
             "--image-model",
             "none",
         ],

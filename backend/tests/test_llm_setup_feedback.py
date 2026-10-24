@@ -162,24 +162,21 @@ OAUTH_MODELS = [m for m in TEXT_MODELS if m.auth == "oauth"]
 
 
 def test_full_source_confirmed_catalog():
+    # Retired for ChatGPT sign-in: gpt-5.5 and every earlier subscription model.
     assert [m.model_id for m in OAUTH_MODELS] == [
-        "gpt-5.5",
-        "gpt-5.1",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
-        "gpt-5.2",
-        "gpt-5.2-codex",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4-mini",
-        "gpt-5.4",
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
     ]
     for entry in OAUTH_MODELS:
         assert entry.max_output_tokens == 32768
-        assert entry.context_window == (
-            128000 if entry.model_id.endswith("spark") else 272000
-        )
+        assert entry.context_window == 272000
         assert not model_choices(oauth_config().provider).image
+    assert model_choices(oauth_config().provider).text[0] == "gpt-6.1-sol"
 
 
 @pytest.mark.parametrize("entry", OAUTH_MODELS, ids=lambda m: m.model_id)
@@ -199,23 +196,18 @@ async def test_every_catalog_model_and_reasoning_level_is_wire_eligible(entry):
             )
         ]
         body = json.loads(calls[0].content)
-        expected = level
-        if entry.model_id == "gpt-5.1-codex-mini" and level in {"minimal", "low"}:
-            expected = "medium"
-        elif not entry.model_id.startswith("gpt-5.1") and level == "minimal":
-            expected = "low"
+        expected = "low" if level == "minimal" else level
         assert body["reasoning"] == {"effort": expected, "summary": "auto"}
         assert body["model"] == entry.model_id and body["store"] is False
         assert "max_output_tokens" not in body
         assert result[-1].finish_reason == "stop" and len(calls) == 1
-    if entry.model_id.startswith("gpt-5.1"):
-        with pytest.raises(LLMModelRoutingError):
-            _ = [
-                e
-                async for e in provider([], []).stream_turn_once(
-                    turn(model_id=entry.model_id, thinking_level="xhigh")
-                )
-            ]
+    with pytest.raises(LLMModelRoutingError):
+        _ = [
+            e
+            async for e in provider([], []).stream_turn_once(
+                turn(model_id=entry.model_id, thinking_level="ultra")
+            )
+        ]
 
 
 @pytest.mark.parametrize(
@@ -231,10 +223,10 @@ async def test_terminal_status_compatibility_preserves_failure_semantics(kind, s
         events[-1]["response"]["status"] = status
     adapter = provider(events, [])
     if status in ("absent", None) and kind != "response.incomplete":
-        assert (await adapter.generate([], "gpt-5.4")).content == "ok"
+        assert (await adapter.generate([], "gpt-6-sol")).content == "ok"
     else:
         with pytest.raises(LLMProviderFailure):
-            await adapter.generate([], "gpt-5.4")
+            await adapter.generate([], "gpt-6-sol")
 
 
 @pytest.mark.parametrize(
@@ -346,7 +338,7 @@ async def test_local_structured_validation_diagnostics_stay_private(text, catego
     with pytest.raises(LLMProviderFailure) as caught:
         await provider(text_events(text), []).generate_structured(
             [],
-            "gpt-5.4",
+            "gpt-6-sol",
             schema={
                 "type": "object",
                 "properties": {"ok": {"const": True}},
@@ -389,7 +381,7 @@ def test_oauth_setup_saves_after_plain_text_with_missing_status(
             *a, **kw, transport=httpx.MockTransport(handle)
         ),
     )
-    choices = iter(["openai", "oauth", "gpt-5.4"])
+    choices = iter(["openai", "oauth", "gpt-6-sol"])
     console = SetupConsole(
         lambda *_: next(choices), lambda: pytest.fail("API key"), lambda _: None
     )
@@ -410,4 +402,4 @@ async def test_incomplete_event_cannot_claim_completed_status():
     events = text_events()
     events[-1]["type"] = "response.incomplete"
     with pytest.raises(LLMProviderFailure):
-        await provider(events, []).generate([], "gpt-5.4")
+        await provider(events, []).generate([], "gpt-6-sol")

@@ -40,7 +40,7 @@ def oauth_credential(
 def oauth_config() -> RuntimeConfig:
     return RuntimeConfig(
         provider=RuntimeProvider(id="openai", auth="oauth"),
-        models=RuntimeModels(text="gpt-5.4"),
+        models=RuntimeModels(text="gpt-6-sol"),
     )
 
 

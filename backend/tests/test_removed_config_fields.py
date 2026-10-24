@@ -250,7 +250,7 @@ async def test_pruning_rewrite_does_not_break_oauth_refresh_snapshot(tmp_path):
         RuntimeConfig.model_validate(
             {
                 "provider": {"id": "openai", "auth": "oauth"},
-                "models": {"text": "gpt-5.5"},
+                "models": {"text": "gpt-6.1-sol"},
             }
         ),
         credential,

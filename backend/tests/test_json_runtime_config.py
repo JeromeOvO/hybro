@@ -162,7 +162,7 @@ async def test_oauth_rotation_preserves_service_credentials(tmp_path):
     )
     config = RuntimeConfig(
         provider=RuntimeProvider(id="openai", auth="oauth"),
-        models=RuntimeModels(text="gpt-5.5"),
+        models=RuntimeModels(text="gpt-6.1-sol"),
     )
     store = RuntimeConfigStore(tmp_path / "runtime")
     store.save(config, credential, {})

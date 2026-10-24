@@ -91,7 +91,7 @@ def test_terminal_restored_on_syscall_or_output_failure(
     [
         (b"\r\r\r\r", "openai", "api_key", "gpt-5-mini", None),
         (b"\r\r\x1b[B\r\x1b[B\r", "openai", "api_key", "gpt-4o-mini", "gpt-image-1"),
-        (b"\r\x1b[B\r\r\r", "openai", "oauth", "gpt-5.5", None),
+        (b"\r\x1b[B\r\r\r", "openai", "oauth", "gpt-6.1-sol", None),
         (b"\x1b[B\r\x1b[B\r\r\r", "deepseek", "api_key", "deepseek-v4-flash", None),
         (
             b"\x1b[A\r\x1b[A\r\r\r",

@@ -418,12 +418,8 @@ def _reasoning_effort(model: str, level: str) -> str:
     )
     if entry is None or level not in entry.thinking_levels:
         raise LLMModelRoutingError("Unsupported Codex reasoning effort")
-    # pi-ai 0.73.1 model thinkingLevelMap; no unsupported xhigh for 5.1.
-    if model == "gpt-5.1-codex-mini" and level in {"minimal", "low"}:
-        return "medium"
-    if not model.startswith("gpt-5.1") and level == "minimal":
-        return "low"
-    return level
+    # Current Codex models accept low..xhigh; "minimal" maps to their lowest.
+    return "low" if level == "minimal" else level
 
 
 def _body(
