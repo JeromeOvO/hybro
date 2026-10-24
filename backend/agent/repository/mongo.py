@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from common.protocols import MongoDAL
 from common.utils.mongo_indexes import ensure_text_index
+from common.utils.time import utcnow
 
 
 class AgentMongoRepository:
@@ -163,7 +166,30 @@ class AgentMongoRepository:
                 "source": source,
                 "agent_status": {"$ne": "inactive"},
             },
-            {"$set": {"agent_status": "inactive"}},
+            {"$set": {"agent_status": "inactive", "inactive_since": utcnow()}},
+        )
+
+    async def delete_inactive_ownerless(
+        self,
+        *,
+        source: str,
+        inactive_before: datetime,
+    ) -> int:
+        # Records marked inactive before ``inactive_since`` existed fall back
+        # to ``updated_at``.
+        return await self._agents.delete_many(
+            {
+                "source": source,
+                "provider_id": None,
+                "agent_status": "inactive",
+                "$or": [
+                    {"inactive_since": {"$lt": inactive_before}},
+                    {
+                        "inactive_since": None,
+                        "updated_at": {"$lt": inactive_before},
+                    },
+                ],
+            }
         )
 
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -82,6 +83,12 @@ class FakeCollection:
             self.docs.append(new_doc)
             return True
         return False
+
+    async def delete_many(self, query: dict) -> int:
+        kept = [doc for doc in self.docs if not _matches(doc, query)]
+        deleted = len(self.docs) - len(kept)
+        self.docs = kept
+        return deleted
 
     async def update_many(self, query: dict, update: dict) -> int:
         self.update_many_calls.append((deepcopy(query), deepcopy(update)))
@@ -297,23 +304,29 @@ def _matches_field(doc: dict, key: str, expected: Any) -> bool:
     if key == "$and":
         return all(_matches(doc, branch) for branch in expected)
     actual = _get_path(doc, key)
-    exists = _path_exists(doc, key)
     if isinstance(expected, dict):
-        for op, value in expected.items():
-            if op == "$in" and actual not in value:
-                return False
-            if op == "$nin" and actual in value:
-                return False
-            if op == "$ne" and actual == value:
-                return False
-            if op == "$exists" and exists is not bool(value):
-                return False
-            if op == "$regex" and value.replace("\\.", ".").strip(".*") not in str(
-                actual or ""
-            ):
-                return False
-        return True
+        exists = _path_exists(doc, key)
+        return all(
+            _matches_operator(actual, exists, op, value)
+            for op, value in expected.items()
+        )
     return actual == expected
+
+
+def _matches_operator(actual: Any, exists: bool, op: str, value: Any) -> bool:
+    if op == "$in":
+        return actual in value
+    if op == "$nin":
+        return actual not in value
+    if op == "$ne":
+        return actual != value
+    if op == "$lt":
+        return actual is not None and actual < value
+    if op == "$exists":
+        return exists is bool(value)
+    if op == "$regex":
+        return value.replace("\\.", ".").strip(".*") in str(actual or "")
+    return True
 
 
 def _get_path(doc: dict, path: str) -> Any:
@@ -371,3 +384,45 @@ def _duplicates_normalized_url(doc: dict, duplicate_normalized_urls: set[str]) -
 
 class DuplicateKeyError(Exception):
     pass
+
+
+@pytest.mark.asyncio
+async def test_mark_agents_inactive_records_when_the_record_went_inactive():
+    repo, collection = _repo(
+        [{"agent_id": "a1", "source": "local", "agent_status": "active"}]
+    )
+
+    assert await repo.mark_agents_inactive(["a1"], source="local") == 1
+
+    assert collection.docs[0]["agent_status"] == "inactive"
+    assert isinstance(collection.docs[0]["inactive_since"], datetime)
+
+
+@pytest.mark.asyncio
+async def test_delete_inactive_ownerless_keeps_owned_recent_and_active_records():
+    cutoff = datetime(2026, 10, 16, tzinfo=UTC)
+    old = cutoff - timedelta(days=1)
+    recent = cutoff + timedelta(days=1)
+    base = {"source": "local", "provider_id": None, "agent_status": "inactive"}
+    repo, collection = _repo(
+        [
+            {**base, "agent_id": "stale", "inactive_since": old},
+            {**base, "agent_id": "legacy-stale", "updated_at": old},
+            {**base, "agent_id": "recent", "inactive_since": recent},
+            {**base, "agent_id": "owned", "provider_id": "u1", "inactive_since": old},
+            {**base, "agent_id": "active", "agent_status": "active", "updated_at": old},
+            {**base, "agent_id": "cloud", "source": "cloud", "inactive_since": old},
+        ]
+    )
+
+    deleted = await repo.delete_inactive_ownerless(
+        source="local", inactive_before=cutoff
+    )
+
+    assert deleted == 2
+    assert [doc["agent_id"] for doc in collection.docs] == [
+        "recent",
+        "owned",
+        "active",
+        "cloud",
+    ]

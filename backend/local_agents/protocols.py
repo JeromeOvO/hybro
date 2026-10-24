@@ -17,6 +17,8 @@ class LocalAgentWriter(Protocol):
 
     async def mark_local_agents_inactive(self, agent_ids: list[str]) -> int: ...
 
+    async def prune_inactive_local_agents(self) -> int: ...
+
 
 class LocalAgentDiscovery(Protocol):
     async def request_discovery(

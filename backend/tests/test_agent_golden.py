@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent.facade import AgentFacade
+from agent.facade import AgentFacade, AgentRegistrationConflict
 from common.dto.agent import AgentCardSnapshot
 from tests.test_agent_facade import Repository, _doc
 
@@ -120,3 +120,73 @@ async def test_agent_golden_private_and_inactive_agents_do_not_leak_to_discovery
     assert [match.agent_id for match in unauthenticated] == ["public"]
     assert repo.text_search_calls == [["public"]]
     assert filtered_empty == []
+
+
+def _writer_card() -> AgentCardSnapshot:
+    return AgentCardSnapshot(
+        agent_id="snapshot",
+        name="Writer",
+        description="Writes stories",
+        url="https://writer.example",
+        raw_card={"name": "Writer", "url": "https://writer.example"},
+    )
+
+
+def _existing(**overrides) -> dict:
+    doc = {
+        "agent_id": "local-1",
+        "provider_id": None,
+        "source": "local",
+        "normalized_url": "https://writer.example",
+        "agent_status": "inactive",
+        "inactive_since": datetime(2026, 1, 1, tzinfo=UTC),
+        "is_public": True,
+        "agent_card": {"name": "Writer", "url": "https://writer.example"},
+    }
+    doc.update(overrides)
+    return doc
+
+
+@pytest.mark.asyncio
+async def test_register_takes_over_inactive_ownerless_discovery_record():
+    repo = GoldenRepository([])
+    repo.docs["local-1"] = _existing()
+    facade = _golden_facade(repo, _writer_card())
+
+    registered = await facade.register_agent("https://writer.example", "u1")
+
+    assert registered.agent_id == "local-1"
+    assert list(repo.docs) == ["local-1"]
+    doc = repo.docs["local-1"]
+    assert (doc["provider_id"], doc["source"], doc["agent_status"]) == (
+        "u1",
+        "cloud",
+        "active",
+    )
+    assert doc["inactive_since"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "code"),
+    [
+        ({"provider_id": "u1", "source": "cloud"}, "already_registered"),
+        ({"provider_id": "u2", "source": "cloud"}, "owned_by_another_provider"),
+        (
+            {"provider_id": "u2", "source": "cloud", "agent_status": "inactive"},
+            "owned_by_another_provider",
+        ),
+        ({"agent_status": "active"}, "active_local_discovery"),
+    ],
+)
+async def test_register_refuses_records_it_cannot_take_over(overrides, code):
+    repo = GoldenRepository([])
+    repo.docs["local-1"] = _existing(**overrides)
+    before = dict(repo.docs["local-1"])
+    facade = _golden_facade(repo, _writer_card())
+
+    with pytest.raises(AgentRegistrationConflict) as exc_info:
+        await facade.register_agent("https://writer.example", "u1")
+
+    assert exc_info.value.code == code
+    assert repo.docs["local-1"] == before

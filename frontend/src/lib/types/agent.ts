@@ -89,5 +89,6 @@ export interface AgentRouteResponse {
   card?: AgentCardView | null;
   success: boolean;
   error?: string | null;
+  error_code?: string | null;
   status_code?: number;
 }

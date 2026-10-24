@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from agent.facade import AgentFacade
+from agent.facade import AgentFacade, AgentRegistrationConflict
 from agent.views import agent_card_view, agent_view
 from common.auth import resolve_provider_name
 from common.dto import AgentInfo, AgentRouteResponse, AgentView
@@ -28,9 +28,15 @@ class AgentCatalogService:
     async def register(self, *, agent_url: str, provider_id: str) -> AgentRouteResponse:
         try:
             info = await self._facade.register_agent(agent_url, provider_id)
+        except AgentRegistrationConflict as exc:
+            return AgentRouteResponse(
+                success=False,
+                error=str(exc),
+                error_code=exc.code,
+                status_code=409,
+            )
         except ValueError as exc:
-            status = 400 if "already registered" in str(exc).lower() else 500
-            return AgentRouteResponse(success=False, error=str(exc), status_code=status)
+            return AgentRouteResponse(success=False, error=str(exc), status_code=500)
         except Exception as exc:
             logger.error("Failed to register agent: %s", exc)
             return AgentRouteResponse(success=False, error=str(exc), status_code=500)

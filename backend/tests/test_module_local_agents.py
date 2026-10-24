@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agent.facade import AgentFacade
+from agent.facade import LOCAL_AGENT_INACTIVE_RETENTION, AgentFacade
 from common.dto import AgentCardSnapshot, LocalAgentUpsertResult
 from local_agents.card_probe import LocalAgentCardProbe
 from local_agents.config import LocalAgentDiscoveryConfig
@@ -71,6 +71,7 @@ class Writer:
     def __init__(self) -> None:
         self.local_ids: list[str] = []
         self.inactive: list[str] = []
+        self.prune_calls = 0
 
     async def upsert_local_agent(self, discovery_url, card):
         del discovery_url, card
@@ -86,6 +87,10 @@ class Writer:
         newly_inactive = [item for item in agent_ids if item not in self.inactive]
         self.inactive.extend(newly_inactive)
         return len(newly_inactive)
+
+    async def prune_inactive_local_agents(self):
+        self.prune_calls += 1
+        return 0
 
 
 def _service(scanner: Scanner, probe: Probe, writer: Writer) -> LocalAgentService:
@@ -338,6 +343,10 @@ class FacadeRepository:
                 count += 1
         return count
 
+    async def delete_inactive_ownerless(self, *, source, inactive_before):
+        self.prune_args = (source, inactive_before)
+        return 2
+
 
 class Resolver:
     async def resolve_card(self, url):
@@ -417,3 +426,27 @@ async def test_local_agent_id_is_stable_and_reactivation_preserves_record():
     assert repository.docs[first.agent_id]["source"] == "local"
     assert repository.docs[first.agent_id]["is_public"] is True
     assert await facade.is_directly_callable(first.agent_id) is True
+
+
+@pytest.mark.asyncio
+async def test_discovery_cycle_prunes_long_inactive_local_records():
+    writer = Writer()
+
+    await _service(Scanner(), Probe(), writer).request_discovery()
+
+    assert writer.prune_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_prune_deletes_ownerless_local_records_past_retention():
+    repository = FacadeRepository()
+    now = datetime(2026, 10, 23, tzinfo=UTC)
+    facade = AgentFacade(
+        repository=repository,
+        card_resolver=Resolver(),
+        id_factory=lambda: "unused",
+        now=lambda: now,
+    )
+
+    assert await facade.prune_inactive_local_agents() == 2
+    assert repository.prune_args == ("local", now - LOCAL_AGENT_INACTIVE_RETENTION)

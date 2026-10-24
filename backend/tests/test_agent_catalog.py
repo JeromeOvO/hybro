@@ -9,6 +9,7 @@ import pytest
 from a2a_adapter.card_data import build_agent_card
 from a2a_adapter.translators import a2a_card_to_snapshot
 from agent.catalog import AgentCatalogService
+from agent.facade import AgentRegistrationConflict
 from agent.liveness import AgentLivenessService
 from common.dto import AgentCardSnapshot, AgentInfo
 from models.agent import AgentStatus
@@ -55,7 +56,7 @@ async def test_register_returns_view_without_transport_url():
 @pytest.mark.parametrize(
     ("error", "status"),
     [
-        (ValueError("Agent with this URL is already registered"), 400),
+        (AgentRegistrationConflict("owned_by_another_provider", "taken"), 409),
         (ValueError("agent card could not resolve"), 500),
         (RuntimeError("database down"), 500),
     ],
@@ -67,6 +68,7 @@ async def test_register_maps_failures_to_status(error, status):
 
     assert (response.success, response.status_code) == (False, status)
     assert response.error == str(error)
+    assert response.error_code == getattr(error, "code", None)
 
 
 async def test_provider_name_is_resolved_only_without_card_organization(

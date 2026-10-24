@@ -63,11 +63,10 @@ async def register_agent(
         provider_id=provider_id,
     )
 
-    # Handle duplicate error from service layer
-    if not response.success and response.status_code == 400:
+    if not response.success and response.status_code == 409:
         raise HTTPException(
-            status_code=400,
-            detail=response.error,
+            status_code=409,
+            detail={"code": response.error_code, "message": response.error},
         )
 
     return response

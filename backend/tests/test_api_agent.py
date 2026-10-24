@@ -97,11 +97,14 @@ class TestRegisterAgent:
         assert "agent_url is required" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_raises_400_for_duplicate_agent(self, mock_user, patch_agent_deps):
+    async def test_raises_typed_409_for_registration_conflict(
+        self, mock_user, patch_agent_deps
+    ):
         patch_agent_deps.register.return_value = AgentRouteResponse(
             success=False,
-            error="Agent with this URL is already registered",
-            status_code=400,
+            error="Another provider has already registered an agent at this URL",
+            error_code="owned_by_another_provider",
+            status_code=409,
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -111,7 +114,11 @@ class TestRegisterAgent:
                 catalog=patch_agent_deps,
             )
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == {
+            "code": "owned_by_another_provider",
+            "message": "Another provider has already registered an agent at this URL",
+        }
 
 
 class TestGetAgentByProvider:

@@ -109,6 +109,7 @@ EXPECTED_METHODS = {
         "LocalAgentWriter": {
             "list_local_agent_ids",
             "mark_local_agents_inactive",
+            "prune_inactive_local_agents",
             "upsert_local_agent",
         },
     },
@@ -215,6 +216,7 @@ CONSUMER_PORT_METHODS = {
     ("agent.facade", "AgentRepository"): {
         "activate_agents",
         "delete",
+        "delete_inactive_ownerless",
         "find_by_normalized_url",
         "get_by_id",
         "get_by_ids",

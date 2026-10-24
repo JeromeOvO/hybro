@@ -108,6 +108,8 @@ class AgentRouteResponse(FrozenDTO):
     card: AgentCardView | None = None
     success: bool
     error: str | None = None
+    # Machine-readable reason for a failed request, such as a 409 conflict code.
+    error_code: str | None = None
     status_code: int = 200
 
 

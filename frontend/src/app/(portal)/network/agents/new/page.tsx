@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { PageHeader } from "@/components/page-header"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
-import { getAgentCardFromUrl, registerAgent } from "@/lib/api/agent"
+import { getAgentCardFromUrl, registerAgent, registrationConflictMessage } from "@/lib/api/agent"
 import { inspectA2AConnection, inspectAgentCard } from "@/lib/api/inspection"
 import { ApiError } from "@/lib/api-client"
 import type {
@@ -247,15 +247,15 @@ export default function RegisterAgentPage() {
         }, 1500)
       } else {
         toast.error("Registration failed", {
-          description: response.error || "The agent URL is already registered or invalid."
+          description: response.error || "The agent URL could not be registered."
         })
       }
     } catch (error) {
       if (error instanceof ApiError && error.isClientError) {
         toast.warning("Registration failed", {
-          description: error.status === 400
-            ? "The agent URL is already registered or invalid."
-            : error.message
+          description: registrationConflictMessage(error) ?? (
+            error.status === 400 ? "The agent URL is invalid." : error.message
+          )
         })
       } else {
         toast.error("Registration failed", {

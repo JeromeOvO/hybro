@@ -7,7 +7,7 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
-import { apiGet, apiPost } from '../api-client'
+import { ApiError, apiGet, apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
 const LOCAL_AGENTS_BASE_URL = getApiUrl('local-agents')
@@ -46,6 +46,19 @@ export async function registerAgent(
     request,
     getToken
   )
+}
+
+/**
+ * The reason a registration was refused with HTTP 409, from the backend's
+ * `{detail: {code, message}}` conflict body; undefined for any other error.
+ */
+export function registrationConflictMessage(error: unknown): string | undefined {
+  if (!(error instanceof ApiError) || error.status !== 409) return undefined
+  const details = error.details
+  if (typeof details !== 'object' || details === null || !('detail' in details)) return undefined
+  const detail = details.detail
+  if (typeof detail !== 'object' || detail === null || !('message' in detail)) return undefined
+  return typeof detail.message === 'string' && detail.message ? detail.message : undefined
 }
 
 // Get agents from provider_id
