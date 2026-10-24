@@ -2032,3 +2032,33 @@ async def test_recovery_dispatches_an_applied_answer_left_without_a_command():
     assert await recovery.recover_due(due_at=datetime.now(UTC)) == 1
     assert (await ledger.load_by_record_id(call.call_record_id)).state == "working"
     assert len(dispatch.commands) == 1
+
+
+async def test_answer_for_closed_interaction_stops_reconciling(caplog):
+    coordinator, ledger, hitl, _refs, dispatch, call, route = await setup_waiting()
+    await hitl.answer(
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+        verified_auth_reference_digests=[],
+        verified_auth_references=[],
+    )
+    assert (
+        await hitl.abandon(
+            "interaction-1",
+            call_record_id=call.call_record_id,
+            reason="superseded_by_new_interaction",
+        )
+        == "accepted"
+    )
+
+    with caplog.at_level("WARNING"):
+        state = await coordinator.reconcile_answer(call_record_id=call.call_record_id)
+        recovery = A2AContinuationRecoveryService(coordinator, ledger)
+        assert await recovery.recover_due(due_at=datetime.now(UTC), limit=10) == 0
+
+    assert state == "input_required"
+    assert dispatch.commands == []
+    assert "hitl_answer_reconcile_deferred" not in caplog.text

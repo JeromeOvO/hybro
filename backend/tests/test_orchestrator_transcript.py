@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from execution.orchestrator.models import (
+    AgentToolInput,
     ArtifactRefPart,
     AssistantMessage,
     DataPart,
@@ -20,6 +21,7 @@ from execution.orchestrator.models import (
 from execution.orchestrator.transcript import (
     TranscriptCorruptionError,
     agent_messages_to_model,
+    resolved_user_answers,
     unresolved_call_ids,
 )
 from tests._orchestrator_helpers import NOW, user_message
@@ -414,3 +416,85 @@ def test_transcript_preserves_rejected_surface_call():
     assert folded[1].role == "tool"
     assert "schema validation error" in folded[1].content[0].content[0].text
     assert folded[1].content[0].is_error is True
+
+
+def test_resolved_user_answers_cover_agent_questions_and_ask_user():
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-1:fp",
+        call_id="call-1",
+        tool_name="echo",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="sender",
+                prompt="Who signs the emails?",
+                answer_kind="text",
+            )
+        ],
+        created_at=NOW,
+    )
+    answers = [
+        ToolInteractionAnswers(
+            interaction_id="interaction-1",
+            answers=[
+                ToolInteractionAnswer(question_id="sender", answer="Morgan Reyes")
+            ],
+        )
+    ]
+    answered = result().model_copy(update={"interaction_answers": answers})
+    ask = AssistantMessage(
+        message_id="assistant-2",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-2",
+                tool_name="request_user_input",
+                arguments={"question": "Which call length?"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=UsageRecord(input_tokens=1, output_tokens=1),
+        created_at=NOW,
+    )
+    ask_result = ToolResultMessage(
+        message_id="result-2",
+        call_id="call-2",
+        tool_name="request_user_input",
+        status="completed",
+        content=[TextPart(text="20 minutes")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+    # The same answers are repeated on the interaction of a later round.
+    later = interaction.model_copy(
+        update={"message_id": "interaction:call-1:fp2", "interaction_answers": answers}
+    )
+
+    pairs = resolved_user_answers(
+        [user_message("go"), assistant(), interaction, answered, later, ask, ask_result]
+    )
+
+    assert pairs == [
+        ("Who signs the emails?", "Morgan Reyes"),
+        ("Which call length?", "20 minutes"),
+    ]
+
+
+def test_agent_task_drops_a_copied_historical_plan_label():
+    assert (
+        AgentToolInput(task="[historical plan, not evidence]\nDraft emails").task
+        == "Draft emails"
+    )
+    assert (
+        AgentToolInput(
+            task="[historical plan, not evidence; middle omitted]\nDraft\n…\nend"
+        ).task
+        == "Draft\n…\nend"
+    )
+    # Only a leading label is platform-authored; quoted text stays intact.
+    task = "Quote [historical plan, not evidence] as written"
+    assert AgentToolInput(task=task).task == task
+    with pytest.raises(ValueError):
+        AgentToolInput(task="[historical plan, not evidence]\n")

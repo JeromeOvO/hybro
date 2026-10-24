@@ -73,6 +73,7 @@ from execution.orchestrator.session import (
     RunFactory,
     SessionConflict,
 )
+from execution.orchestrator.transcript import resolved_user_answers
 from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
@@ -87,6 +88,9 @@ _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
 _MAX_ROOM_HISTORY_MESSAGES = 10
 _MAX_ROOM_HISTORY_CHARS_PER_MESSAGE = 4_000
+# Earlier attachments and Agent artifacts a follow-up Run may select by ref.
+_MAX_EARLIER_RESOURCES = 20
+_MAX_EARLIER_RESOURCE_TURNS = 50
 
 RoomMemoryReader = Callable[[str], Awaitable[dict[str, Any] | None]]
 
@@ -173,6 +177,12 @@ class RoomMessageEnvelope:
     # Naming an Agent is a user instruction to use it, so it reaches the model
     # as a separate, platform-authored note rather than as prose.
     addressed_agents: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RoomContext:
+    history: tuple[ModelMessage, ...] = ()
+    earlier_refs: tuple[PreparedResourceRef, ...] = ()
 
 
 class RoomEnvelopeSource(Protocol):
@@ -408,6 +418,7 @@ def _build_resource_manifest(
     source_message_id: str,
     user_text: str | None,
     attachments: list[AttachmentEnvelope] | None,
+    earlier_refs: tuple[PreparedResourceRef, ...] = (),
 ) -> RunResourceManifestSnapshot:
     from context_memory.resources import (
         AttachmentResource,
@@ -441,6 +452,8 @@ def _build_resource_manifest(
         )
         for entry in entries
     ]
+    current = {ref.ref_id for ref in refs}
+    refs.extend(ref for ref in earlier_refs if ref.ref_id not in current)
     return RunResourceManifestSnapshot(
         manifest_id=f"manifest-{_sha256_hex(json.dumps([ref.model_dump(mode='json') for ref in refs]))}",
         refs=refs,
@@ -448,6 +461,123 @@ def _build_resource_manifest(
             json.dumps([ref.model_dump(mode="json") for ref in refs])
         ),
     )
+
+
+def _attach_turn_records(messages: list[ModelMessage], records: dict[int, str]) -> None:
+    """Append each earlier turn's record after that turn's answer.
+
+    Keyed by the user message index; attaching to the following assistant
+    message keeps the history alternating.
+    """
+    for index, record in records.items():
+        target = (
+            index + 1
+            if index + 1 < len(messages) and messages[index + 1].role == "assistant"
+            else index
+        )
+        messages[target] = ModelMessage(
+            role=messages[target].role,
+            content=[*messages[target].content, ModelTextPart(text=record)],
+        )
+
+
+def _history_entries(
+    state: Any, current_turn_id: str
+) -> tuple[list[tuple[str | None, ModelMessage]], list[str]]:
+    """Recent history as ``(user turn id or None, message)`` plus all user turns.
+
+    The window keeps the most recent messages and starts with a user turn.
+    """
+    user_turn_ids: list[str] = []
+    # (user turn id or None for an answer, message) in history order.
+    entries: list[tuple[str | None, ModelMessage]] = []
+    for turn in state.conversation_history:
+        if turn.turn_id == current_turn_id:
+            continue
+        content = turn.content or turn.brief_summary
+        if not isinstance(content, str) or not content.strip():
+            continue
+        content = content.strip()[:_MAX_ROOM_HISTORY_CHARS_PER_MESSAGE]
+        if turn.role == "user":
+            user_turn_ids.append(turn.turn_id)
+            entries.append(
+                (
+                    turn.turn_id,
+                    ModelMessage(role="user", content=[ModelTextPart(text=content)]),
+                )
+            )
+        elif turn.role == "supervisor" or (
+            turn.role == "agent" and turn.agent_id == "system:hybro"
+        ):
+            entries.append(
+                (
+                    None,
+                    ModelMessage(
+                        role="assistant", content=[ModelTextPart(text=content)]
+                    ),
+                )
+            )
+    entries = entries[-_MAX_ROOM_HISTORY_MESSAGES:]
+    while entries and entries[0][1].role != "user":
+        entries.pop(0)
+    return entries, user_turn_ids
+
+
+def _run_resources(run: Any) -> list[tuple[PreparedResourceRef, str]]:
+    """A finished Run's attachments and Agent artifacts, with short labels."""
+    manifest = run.resource_manifest
+    if manifest is None:
+        return []
+    agent_names = {
+        entry.definition.name: entry.agent_display_name or entry.definition.label
+        for entry in (run.tool_catalog.entries if run.tool_catalog else [])
+    }
+    producers: dict[str, str] = {}
+    for message in run.transcript:
+        name = agent_names.get(getattr(message, "tool_name", ""))
+        if name is None or getattr(message, "kind", None) != "tool_result":
+            continue
+        for ref_id in message.artifact_refs:
+            producers.setdefault(ref_id, name)
+    resources: list[tuple[PreparedResourceRef, str]] = []
+    for ref in manifest.refs:
+        mime = ref.mime_type or "unknown type"
+        if ref.kind == "attachment":
+            resources.append((ref, f"attachment the user uploaded ({mime})"))
+        elif ref.kind == "artifact":
+            producer = producers.get(ref.ref_id)
+            label = f"Artifact ({mime})"
+            resources.append(
+                (ref, f"{label} produced by {producer}" if producer else label)
+            )
+    return resources
+
+
+def _earlier_turn_record(
+    answers: list[tuple[str, str]],
+    resources: list[tuple[str, PreparedResourceRef, str]],
+    *,
+    header: str,
+) -> str | None:
+    """Platform note with a turn's user answers and still-selectable files."""
+    if not answers and not resources:
+        return None
+    lines = [header]
+    if answers:
+        lines.append("The user gave these answers; treat them as user-supplied facts:")
+        lines.extend(
+            f"- Question: {question}\n  Answer: {answer}"
+            for question, answer in answers
+        )
+    if resources:
+        lines.append(
+            "Files that Agents can still receive by reference "
+            "(pass the id through attachment_refs or artifact_refs):"
+        )
+        lines.extend(
+            f"- {ref.ref_id}: {label}" for _turn, ref, label in reversed(resources)
+        )
+    return "\n".join(lines)
 
 
 def _sha256_hex(value: str) -> str:
@@ -1022,12 +1152,6 @@ class DualRuntimeRouter:
             raise UnsupportedEnvelopeError(
                 "orchestrator candidate scope resolved to zero agents"
             )
-        resource_manifest = _build_resource_manifest(
-            source_message_id=message_id,
-            user_text=envelope.message_text,
-            attachments=envelope.attachments,
-        )
-
         session_host = self._runtime.session_host
         session = session_host.get_session(conversation_id)
         if session is not None:
@@ -1040,6 +1164,17 @@ class DualRuntimeRouter:
         epoch = await self._runtime.epoch_store.read_active(conversation_id)
         if epoch is None:
             raise UnsupportedEnvelopeError("Room epoch is not active")
+        room_context = await self._load_room_context(
+            conversation_id,
+            current_message_id=message_id,
+            room_epoch=epoch.epoch,
+        )
+        resource_manifest = _build_resource_manifest(
+            source_message_id=message_id,
+            user_text=envelope.message_text,
+            attachments=envelope.attachments,
+            earlier_refs=room_context.earlier_refs,
+        )
         run_id = f"run-{uuid4().hex}"
         prepared = await self._runtime.catalog_assembler.prepare(
             run_id=run_id,
@@ -1056,10 +1191,6 @@ class DualRuntimeRouter:
             ),
             created_at=datetime.now(UTC),
         )
-        conversation_history = await self._load_conversation_history(
-            conversation_id,
-            current_message_id=message_id,
-        )
         await session_host.create_session(
             conversation_id=conversation_id,
             profile=profile,
@@ -1067,7 +1198,7 @@ class DualRuntimeRouter:
             requesting_subject_id=requesting_subject_id,
             frozen_catalog=prepared.snapshot,
             resource_manifest=resource_manifest,
-            conversation_history=conversation_history,
+            conversation_history=room_context.history,
             run_factory=_PreparedRunFactory(run_id, self._run_factory),
         )
 
@@ -1102,48 +1233,106 @@ class DualRuntimeRouter:
             status_code=200,
         )
 
-    async def _load_conversation_history(
+    async def _load_room_context(
         self,
         conversation_id: str,
         *,
         current_message_id: str,
-    ) -> tuple[ModelMessage, ...]:
+        room_epoch: int | None = None,
+    ) -> RoomContext:
+        """Load earlier turns' history and the files they left for follow-ups.
+
+        Room memory keeps only each turn's message and final answer. Each
+        earlier turn's Run supplies what memory drops: answers the user gave
+        during the turn, and the attachments and Agent artifacts it holds,
+        which stay selectable by reference in the new Run (same Room epoch,
+        most recent first, bounded).
+        """
         if self._room_memory_reader is None:
-            return ()
+            return RoomContext()
         document = await self._room_memory_reader(conversation_id)
         if not document:
-            return ()
-        state = normalize_room_memory(document)
-        current_turn_id = f"message:{current_message_id}"
-        messages: list[ModelMessage] = []
-        for turn in state.conversation_history:
-            if turn.turn_id == current_turn_id:
+            return RoomContext()
+        entries, user_turn_ids = _history_entries(
+            normalize_room_memory(document), f"message:{current_message_id}"
+        )
+        runs: dict[str, Any] = {}
+        earlier = await self._earlier_resources(
+            user_turn_ids, runs, room_epoch=room_epoch
+        )
+        kept = {turn_id for turn_id, _ in entries if turn_id is not None}
+        messages = [message for _, message in entries]
+        records: dict[int, str] = {}
+        for index, (turn_id, _message) in enumerate(entries):
+            if turn_id is None:
                 continue
-            content = turn.content or turn.brief_summary
-            if not isinstance(content, str) or not content.strip():
+            run = await self._turn_run(turn_id, runs)
+            record = _earlier_turn_record(
+                resolved_user_answers(run.transcript) if run is not None else [],
+                [item for item in earlier if item[0] == turn_id],
+                header="[platform record of this earlier turn]",
+            )
+            if record:
+                records[index] = record
+        older = _earlier_turn_record(
+            [],
+            [item for item in earlier if item[0] not in kept],
+            header="[platform record of older turns in this room]",
+        )
+        if older and messages:
+            messages[0] = ModelMessage(
+                role=messages[0].role,
+                content=[*messages[0].content, ModelTextPart(text=older)],
+            )
+        _attach_turn_records(messages, records)
+        return RoomContext(
+            history=tuple(messages),
+            earlier_refs=tuple(ref for _, ref, _label in reversed(earlier)),
+        )
+
+    async def _earlier_resources(
+        self,
+        user_turn_ids: list[str],
+        runs: dict[str, Any],
+        *,
+        room_epoch: int | None,
+    ) -> list[tuple[str, PreparedResourceRef, str]]:
+        """Most recent earlier attachments and artifacts, newest first."""
+        if room_epoch is None:
+            return []
+        found: list[tuple[str, PreparedResourceRef, str]] = []
+        seen: set[str] = set()
+        for turn_id in reversed(user_turn_ids[-_MAX_EARLIER_RESOURCE_TURNS:]):
+            run = await self._turn_run(turn_id, runs)
+            if run is None or run.request.room_epoch != room_epoch:
                 continue
-            content = content.strip()[:_MAX_ROOM_HISTORY_CHARS_PER_MESSAGE]
-            if turn.role == "user":
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=[ModelTextPart(text=content)],
-                    )
+            for ref, label in reversed(_run_resources(run)):
+                if ref.ref_id in seen:
+                    continue
+                seen.add(ref.ref_id)
+                found.append((turn_id, ref, label))
+                if len(found) >= _MAX_EARLIER_RESOURCES:
+                    return found
+        return found
+
+    async def _turn_run(self, turn_id: str, runs: dict[str, Any]) -> Any | None:
+        if turn_id in runs:
+            return runs[turn_id]
+        run_store = getattr(self._runtime, "run_store", None)
+        run = None
+        if run_store is not None and turn_id.startswith("message:"):
+            try:
+                run = await run_store.load_by_user_message_id(
+                    turn_id.removeprefix("message:")
                 )
-                continue
-            if turn.role == "supervisor" or (
-                turn.role == "agent" and turn.agent_id == "system:hybro"
-            ):
-                messages.append(
-                    ModelMessage(
-                        role="assistant",
-                        content=[ModelTextPart(text=content)],
-                    )
+            except Exception:
+                logger.warning(
+                    "earlier turn Run is unavailable",
+                    extra={"turn_id": turn_id},
+                    exc_info=True,
                 )
-        messages = messages[-_MAX_ROOM_HISTORY_MESSAGES:]
-        while messages and messages[0].role != "user":
-            messages.pop(0)
-        return tuple(messages)
+        runs[turn_id] = run
+        return run
 
 
 __all__ = [

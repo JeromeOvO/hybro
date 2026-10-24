@@ -1228,9 +1228,10 @@ status. See the [local MCP instructions](../README.md#local-mcp-access). The
 6. `start_orchestration` (awaited) or `schedule_orchestration` (background)
    passes the request and the persisted user message id to
    `DualRuntimeRouter.process_room_user_message`, which freezes the candidate
-   scope, resource manifest, and Agent tool catalog, loads up to ten recent
-   canonical history turns from `room_memories` (4,000 characters each), creates
-   the canonical Run, and prompts the room's `RoomSessionHost`.
+   scope, resource manifest (including up to 20 earlier attachments and Agent
+   artifacts from the current Room epoch), and Agent tool catalog, loads up to
+   ten recent canonical history turns from `room_memories` (4,000 characters
+   each), creates the canonical Run, and prompts the room's `RoomSessionHost`.
 7. `OrchestratorKernel` runs the bounded model/tool loop; the final assistant
    message reaches the room through the projection outbox (see
    [Orchestrator](#orchestrator)).
@@ -1577,8 +1578,12 @@ evidence with versioned `hybro.ai/a2a/part-provenance` TextPart metadata.
 Platform-reserved metadata overrides owner collisions. If a model omits
 `context_refs`, prepared-invocation freezing includes only compatible context
 refs owned by the exact root user message; a non-empty explicit selection stays
-exact, and artifacts or attachments are never added implicitly. The frozen
-manifest and digest make this replayable. User-uploaded files are read from the
+exact, and artifacts or attachments, including those carried from earlier turns,
+are never added implicitly. The frozen
+manifest and digest make this replayable. The model sees earlier calls' `task`
+arguments prefixed with `[historical plan, not evidence]`; `AgentToolInput`
+strips that label from the start of a new `task`, so a copied plan never
+forwards it to an Agent. User-uploaded files are read from the
 room file store and sent as A2A `FileContent.bytes` (decoded once to protobuf
 `Part.raw`); local paths and authenticated room-file URLs never reach agents.
 These transport fields never enter public room projection.
@@ -1776,7 +1781,10 @@ generic prompt.
   ledger, so `reconcile_answer` can rebuild and dispatch the continuation after a
   crash or a lost claim. Recovery logs `hitl_answer_reconcile_deferred`,
   `hitl_continuation_recovery_deferred`, and
-  `hitl_continuation_claim_unavailable` when it waits.
+  `hitl_continuation_claim_unavailable` when it waits. An answer whose
+  interaction was since closed (abandoned, for example
+  `superseded_by_new_interaction`) can never be projected, so reconciliation
+  leaves the call in its parked state instead of retrying.
 - One durable continuation command supplies the outbound A2A `message_id`, so a
   retry cannot create a second remote command identity. Remote delivery
   uncertainty is durable and never blindly retried; inspection that still sees
@@ -2360,7 +2368,22 @@ When a Run is created, `DualRuntimeRouter` reads `room_memories` and passes up t
 the ten most recent user and HYBRO (`system:hybro` or supervisor) turns, each
 truncated to 4,000 characters and using `brief_summary` for compact turns, as the
 Run's conversation history; the current message is skipped and the history
-starts with a user turn.
+starts with a user turn. Room memory holds only each turn's message and final
+answer, so for each earlier user turn the router loads that turn's Run by user
+message id and, when the user answered Agent questions or `request_user_input`
+during it, appends a platform record of those question-and-answer pairs to the
+turn's answer. A follow-up therefore keeps facts the user supplied mid-turn.
+
+The same earlier Runs supply files. The router scans up to 50 earlier user turns,
+newest first, and keeps the attachments and Agent artifacts from the resource
+manifests of Runs in the current Room epoch, regardless of uploader, up to the
+20 most recent. They are appended to the new Run's resource manifest with their
+original ids, MIME types, and digests, so the Agent Tool schemas offer them in
+`attachment_refs` and `artifact_refs` and materialization applies the usual Room
+and epoch ownership checks. Each turn's platform record lists its files with a
+short label (attachment, or Artifact and the producing Agent); files from turns
+outside the history window are listed in one record on the first history
+message.
 
 ### Canonical persistence and append order
 

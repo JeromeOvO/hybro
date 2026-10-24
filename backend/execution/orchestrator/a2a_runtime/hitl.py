@@ -521,6 +521,11 @@ class A2AContinuationCoordinator:
             != call.requesting_subject_digest
         ):
             raise PermissionError("durable answer owner does not match call")
+        if await self.hitl.read_interaction(call.pending_interaction_id) is None:
+            # An answered interaction becomes unreadable only when it is
+            # closed (abandoned), which is permanent. Its public projection
+            # can never be emitted, so retrying would never converge.
+            return call.state
         marked = await self._persist_answer_marker(call, answer_record)
         if marked is None:
             current = await self.ledger.load_by_record_id(call_record_id)

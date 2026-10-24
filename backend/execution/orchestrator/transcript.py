@@ -28,8 +28,60 @@ _UNREAD_FILES_NOTE = (
 )
 
 
+# Mirrors ``kernel.REQUEST_USER_INPUT_TOOL_NAME``; the kernel imports this module.
+_REQUEST_USER_INPUT_TOOL_NAME = "request_user_input"
+_USER_ANSWER_MAX_CHARS = 1_000
+
+
 class TranscriptCorruptionError(ValueError):
     pass
+
+
+def resolved_user_answers(messages: list[object]) -> list[tuple[str, str]]:
+    """Return ``(question, answer)`` pairs the user resolved in a transcript.
+
+    Covers typed Agent questions the user answered and the orchestrator's own
+    ask-user questions, in transcript order, so a later Run can treat them as
+    user-supplied facts.
+    """
+    prompts: dict[tuple[str, str], str] = {}
+    asked: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for message in messages:
+        if isinstance(message, AssistantMessage):
+            for call in message.tool_calls:
+                question = call.arguments.get("question")
+                if call.tool_name == _REQUEST_USER_INPUT_TOOL_NAME and isinstance(
+                    question, str
+                ):
+                    asked[call.call_id] = question
+            continue
+        if isinstance(message, ToolInteractionMessage):
+            for item in message.questions:
+                prompts[(message.interaction_id, item.question_id)] = item.prompt
+        if isinstance(message, (ToolInteractionMessage, ToolResultMessage)):
+            for answered in message.interaction_answers:
+                for answer in answered.answers:
+                    key = (answered.interaction_id, answer.question_id)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    pairs.append(
+                        (
+                            prompts.get(key, answer.question_id),
+                            answer.answer[:_USER_ANSWER_MAX_CHARS],
+                        )
+                    )
+        if (
+            isinstance(message, ToolResultMessage)
+            and message.status == "completed"
+            and message.call_id in asked
+        ):
+            answer = _content_text(message.content).strip()
+            if answer:
+                pairs.append((asked[message.call_id], answer[:_USER_ANSWER_MAX_CHARS]))
+    return pairs
 
 
 def agent_messages_to_model(
@@ -378,5 +430,6 @@ def _content_text(parts: list[object]) -> str:
 __all__ = [
     "TranscriptCorruptionError",
     "agent_messages_to_model",
+    "resolved_user_answers",
     "unresolved_call_ids",
 ]

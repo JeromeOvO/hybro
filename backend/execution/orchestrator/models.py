@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from common.dto.base import stored_conversation_id
 
@@ -548,6 +549,11 @@ class ModelStreamEvent(ContractModel):
         return self
 
 
+_HISTORICAL_TASK_LABEL = re.compile(
+    r"\A(?:\s*\[historical plan, not evidence[^\]\n]*\][ \t]*(?:\n|\Z))+"
+)
+
+
 class AgentToolInput(ContractModel):
     """Platform-owned arguments for one privately bound Agent tool."""
 
@@ -555,6 +561,16 @@ class AgentToolInput(ContractModel):
     context_refs: list[str] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
     attachment_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("task")
+    @classmethod
+    def _strip_copied_history_label(cls, value: str) -> str:
+        # The transcript labels earlier calls' tasks as historical plans; a
+        # model that copies such a task must not forward the label to an Agent.
+        stripped = _HISTORICAL_TASK_LABEL.sub("", value)
+        if not stripped.strip():
+            raise ValueError("task is empty after removing the history label")
+        return stripped
 
 
 class PreparedResourceRef(ContractModel):
