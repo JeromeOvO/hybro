@@ -104,8 +104,7 @@ class MongoOrchestratorRunStore:
         )
         if not value:
             return None
-        # The dedicated row is authoritative; validate with it, not the mirror.
-        return _run_from_document(value, await self._load_recovery_claim(run_id))
+        return await self._run_with_dedicated_claim(value)
 
     async def _load_recovery_claim(self, run_id: str) -> RecoveryClaim | None:
         if self._recovery_collection is None:
@@ -245,7 +244,7 @@ class MongoOrchestratorRunStore:
                 "schema_version": {"$in": [5, 6]},
             }
         )
-        return _run_from_document(value) if value else None
+        return await self._run_with_dedicated_claim(value) if value else None
 
     async def _load_client_request_duplicate(
         self, run: OrchestratorRunState
@@ -255,7 +254,15 @@ class MongoOrchestratorRunStore:
         value = await self.collection.find_one(
             {"room_id": run.conversation_id, "client_request_id": run.client_request_id}
         )
-        return _run_from_document(value) if value else None
+        return await self._run_with_dedicated_claim(value) if value else None
+
+    async def _run_with_dedicated_claim(
+        self, value: dict[str, Any]
+    ) -> OrchestratorRunState:
+        # The dedicated row is authoritative; validate with it, not the mirror.
+        return _run_from_document(
+            value, await self._load_recovery_claim(value["run_id"])
+        )
 
     async def cas_mutate(  # noqa: C901
         self,

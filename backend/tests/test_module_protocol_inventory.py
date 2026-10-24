@@ -231,6 +231,7 @@ CONSUMER_PORT_METHODS = {
         "text_search",
         "update",
         "update_health",
+        "update_where",
         "upsert",
     },
     ("conversation.attachments", "AttachmentMetadataReader"): {"get_for_room_file"},

@@ -177,6 +177,7 @@ async def test_register_takes_over_inactive_ownerless_discovery_record():
             "owned_by_another_provider",
         ),
         ({"agent_status": "active"}, "active_local_discovery"),
+        ({"source": "cloud"}, "owned_by_another_provider"),
     ],
 )
 async def test_register_refuses_records_it_cannot_take_over(overrides, code):
@@ -189,4 +190,26 @@ async def test_register_refuses_records_it_cannot_take_over(overrides, code):
         await facade.register_agent("https://writer.example", "u1")
 
     assert exc_info.value.code == code
+    assert repo.docs["local-1"] == before
+
+
+@pytest.mark.asyncio
+async def test_register_refuses_takeover_when_discovery_changed_the_record():
+    repo = GoldenRepository([])
+    repo.docs["local-1"] = _existing(agent_status="active")
+    before = dict(repo.docs["local-1"])
+    stale = _existing()
+    reads = iter([stale])
+    find = repo.find_by_normalized_url
+
+    async def stale_first_read(normalized_url, provider_id=None):
+        return next(reads, None) or await find(normalized_url, provider_id)
+
+    repo.find_by_normalized_url = stale_first_read
+    facade = _golden_facade(repo, _writer_card())
+
+    with pytest.raises(AgentRegistrationConflict) as exc_info:
+        await facade.register_agent("https://writer.example", "u1")
+
+    assert exc_info.value.code == "active_local_discovery"
     assert repo.docs["local-1"] == before

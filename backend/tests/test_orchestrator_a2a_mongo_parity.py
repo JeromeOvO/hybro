@@ -31,7 +31,11 @@ from execution.orchestrator.a2a_runtime.models import (
     HITLRouteSnapshotV2,
     NormalizedA2AObservation,
 )
-from execution.orchestrator.models import ProjectionIntent, RecoveryClaim
+from execution.orchestrator.models import (
+    OrchestratorRunState,
+    ProjectionIntent,
+    RecoveryClaim,
+)
 from execution.repository.orchestrator.hitl import MongoHITLApplicationStore
 from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
 from execution.repository.orchestrator.stores import (
@@ -1812,3 +1816,25 @@ async def test_mongo_repair_restores_stale_mirror_from_cancellation_row():
         item for item in leases.values if item["run_id"] == "run-stale-mirror"
     ) == {"run_id": "run-stale-mirror", **row.model_dump()}
     assert await store.repair_canceling_recovery(limit=10) == 0
+
+
+async def test_mongo_correlation_loads_validate_with_the_dedicated_claim():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    document = _canceling_with_stale_execution_mirror("run-stale-load")
+    await runs.insert_one(document)
+    row = RecoveryClaim(kind="cancellation", next_attempt_at=NOW)
+    await leases.insert_one({"run_id": "run-stale-load", **row.model_dump()})
+
+    by_message = await store.load_by_user_message_id(
+        document["request"]["user_message_id"]
+    )
+    duplicate = await store._load_client_request_duplicate(
+        OrchestratorRunState.model_validate(
+            {**document, "recovery_claim": row.model_dump()}
+        )
+    )
+
+    assert by_message is not None and by_message.recovery_claim == row
+    assert duplicate is not None and duplicate.recovery_claim == row

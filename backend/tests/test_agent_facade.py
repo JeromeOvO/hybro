@@ -76,6 +76,13 @@ class Repository:
     async def delete(self, agent_id):
         return self.docs.pop(agent_id, None) is not None
 
+    async def update_where(self, agent_id, conditions, updates):
+        doc = self.docs.get(agent_id)
+        if doc is None or any(doc.get(k) != v for k, v in conditions.items()):
+            return False
+        doc.update({**updates, "agent_id": agent_id})
+        return True
+
 
 class Resolver:
     async def resolve_card(self, _url):

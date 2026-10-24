@@ -73,6 +73,9 @@ class AgentRepository(Protocol):
         self, agent_ids: list[str], query: str, limit: int
     ) -> list[dict]: ...
     async def update(self, agent_id: str, updates: dict) -> dict | None: ...
+    async def update_where(
+        self, agent_id: str, conditions: dict, updates: dict
+    ) -> bool: ...
     async def public_url_exists(self, subdomain: str, base_domain: str) -> bool: ...
     async def activate_agents(self, agent_ids: list[str]) -> int: ...
 
@@ -115,13 +118,25 @@ def _registration_conflict(
             "owned_by_another_provider",
             "Another provider has already registered an agent at this URL",
         )
-    if _status_value(existing.get("agent_status"), default=None) == "active":
+    if existing.get("source", "cloud") != "local":
+        return AgentRegistrationConflict(
+            "owned_by_another_provider",
+            "Another agent record already holds this URL",
+        )
+    if _status_value(existing.get("agent_status"), default=None) != "inactive":
         return AgentRegistrationConflict(
             "active_local_discovery",
             "Local discovery already lists a running agent at this URL",
         )
     return None
 
+
+# Registration takes over only a record that is still ownerless and inactive.
+_TAKEOVER_CONDITIONS = {
+    "source": "local",
+    "provider_id": None,
+    "agent_status": "inactive",
+}
 
 _ALLOWED_UPDATE_KEYS = frozenset(
     {
@@ -300,7 +315,23 @@ class AgentFacade:
             doc["inactive_since"] = None
 
         self._validate_rate_limits(doc)
-        await self._repository.upsert(agent_id, doc)
+        if existing is None:
+            await self._repository.upsert(agent_id, doc)
+        elif not await self._repository.update_where(
+            agent_id, _TAKEOVER_CONDITIONS, doc
+        ):
+            # The record changed after the read: discovery reactivated it or
+            # someone registered it first.
+            current = await self._repository.find_by_normalized_url(
+                normalized_url, provider_id=None
+            )
+            raise (
+                (current and _registration_conflict(current, provider_id))
+                or AgentRegistrationConflict(
+                    "active_local_discovery",
+                    "The local discovery record at this URL changed; try again",
+                )
+            )
         return agent_info_from_doc(doc)
 
     async def upsert_local_agent(
@@ -336,8 +367,10 @@ class AgentFacade:
             was_inactive = (
                 _status_value(existing.get("agent_status"), default=None) != "active"
             )
-            await self._repository.update(
+            # Registration may have taken the record over since the read.
+            if not await self._repository.update_where(
                 existing["agent_id"],
+                {"source": "local"},
                 {
                     "agent_card": merged_card,
                     "capabilities": list(card.capabilities),
@@ -345,7 +378,11 @@ class AgentFacade:
                     "inactive_since": None,
                     "updated_at": now,
                 },
-            )
+            ):
+                return LocalAgentUpsertResult(
+                    agent_id=existing["agent_id"],
+                    managed=False,
+                )
             return LocalAgentUpsertResult(
                 agent_id=existing["agent_id"],
                 managed=True,

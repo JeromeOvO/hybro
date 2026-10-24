@@ -327,6 +327,13 @@ class FacadeRepository:
         self.docs[agent_id].update(updates)
         return self.docs[agent_id]
 
+    async def update_where(self, agent_id, conditions, updates):
+        doc = self.docs.get(agent_id)
+        if doc is None or any(doc.get(k) != v for k, v in conditions.items()):
+            return False
+        doc.update({**updates, "agent_id": agent_id})
+        return True
+
     async def get_by_source(self, source):
         return [doc for doc in self.docs.values() if doc.get("source") == source]
 
@@ -450,3 +457,31 @@ async def test_prune_deletes_ownerless_local_records_past_retention():
 
     assert await facade.prune_inactive_local_agents() == 2
     assert repository.prune_args == ("local", now - LOCAL_AGENT_INACTIVE_RETENTION)
+
+
+@pytest.mark.asyncio
+async def test_discovery_does_not_overwrite_a_record_registration_took_over():
+    taken_over = {
+        "agent_id": "local-1",
+        "provider_id": "owner",
+        "source": "cloud",
+        "normalized_url": "http://localhost:9001",
+        "agent_status": "active",
+        "agent_card": {"name": "Registered", "url": "http://localhost:9001"},
+    }
+    repository = FacadeRepository(dict(taken_over))
+    stale = {**taken_over, "provider_id": None, "source": "local"}
+
+    async def stale_read(normalized_url, provider_id=None):
+        del normalized_url, provider_id
+        return stale
+
+    repository.find_by_normalized_url = stale_read
+
+    result = await _facade(repository).upsert_local_agent(
+        "http://host.docker.internal:9001",
+        _card(),
+    )
+
+    assert result.managed is False
+    assert repository.docs["local-1"] == taken_over

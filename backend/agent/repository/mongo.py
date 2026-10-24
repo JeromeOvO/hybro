@@ -131,6 +131,15 @@ class AgentMongoRepository:
     async def delete(self, agent_id: str) -> bool:
         return await self._agents.delete_one({"agent_id": agent_id})
 
+    async def update_where(
+        self, agent_id: str, conditions: dict, updates: dict
+    ) -> bool:
+        """Set ``updates`` only while the record still matches ``conditions``."""
+        return await self._agents.update_one(
+            {**conditions, "agent_id": agent_id},
+            {"$set": {**updates, "agent_id": agent_id}},
+        )
+
     async def update(self, agent_id: str, updates: dict) -> dict | None:
         await self._agents.update_one(
             {"agent_id": agent_id},
