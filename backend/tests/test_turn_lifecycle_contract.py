@@ -130,6 +130,7 @@ def test_every_canonical_payload_is_typed(kind: str):
         ("message_end", {"stop_reason": "tool_use", "disposition": "final"}),
         ("tool_execution_start", {"tool_call_id": "provider-call-raw"}),
         ("tool_execution_end", {"outcome": "completed", "is_error": True}),
+        ("tool_execution_end", {"error_code": "quota_exceeded"}),
         ("run_settled", {"status": "completed", "failure_code": "internal_error"}),
     ],
 )
@@ -145,6 +146,48 @@ def test_canonical_payload_rejects_private_or_contradictory_fields(
             seq=1,
             run_event_type=kind,
             payload=payload,
+            correlation_id="client-1",
+        )
+
+
+def _failed_end(**fields: object) -> dict[str, object]:
+    return {
+        **PAYLOADS["tool_execution_end"],
+        "outcome": "failed",
+        "result": "",
+        "is_error": True,
+        "failure_reason": "execution",
+        **fields,
+    }
+
+
+def test_failed_tool_execution_end_carries_agent_error_code():
+    event = RunEventNotification(
+        conversation_id="room-1",
+        event_id="event-1",
+        run_id="run-1",
+        seq=1,
+        run_event_type="tool_execution_end",
+        payload=_failed_end(error_code="llm_quota_exceeded", error_message="Quota"),
+        correlation_id="client-1",
+    )
+    assert event.payload.error_code == "llm_quota_exceeded"
+    assert event.payload.error_message == "Quota"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"error_code": "not a code"}, {"error_code": "ok", "error_message": "m" * 501}],
+)
+def test_failed_tool_execution_end_rejects_malformed_agent_error(fields):
+    with pytest.raises(ValidationError):
+        RunEventNotification(
+            conversation_id="room-1",
+            event_id="event-1",
+            run_id="run-1",
+            seq=1,
+            run_event_type="tool_execution_end",
+            payload=_failed_end(**fields),
             correlation_id="client-1",
         )
 

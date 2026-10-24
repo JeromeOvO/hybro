@@ -1448,6 +1448,25 @@ async def test_canonical_ask_user_suspends_and_resumes_with_durable_answer():
     assert flushed[0].content[0].text == "Shanghai"
 
 
+def test_interaction_answers_are_recorded_once_per_round():
+    from execution.orchestrator.kernel import _with_interaction_answers
+    from execution.orchestrator.models import (
+        ToolInteractionAnswer,
+        ToolInteractionAnswers,
+    )
+
+    round_1 = ToolInteractionAnswers(
+        interaction_id="interaction-1",
+        answers=[ToolInteractionAnswer(question_id="q", answer="first")],
+    )
+    round_2 = ToolInteractionAnswers(interaction_id="interaction-2", answers=[])
+    known = _with_interaction_answers([], round_1)
+    # Every later observation of the same continuation replays round 1.
+    assert _with_interaction_answers(known, round_1) == [round_1]
+    assert _with_interaction_answers(known, None) == [round_1]
+    assert _with_interaction_answers(known, round_2) == [round_1, round_2]
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

@@ -165,6 +165,11 @@ class ToolExecutionEndPayload(CanonicalEventPayloadDTO):
     execution_kind: Literal["agent", "tool"] = "tool"
     target: ExecutionTargetPayload | None = None
     detail_available: bool = False
+    # The failing Agent's own reason, from the A2A error metadata.
+    error_code: (
+        Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")] | None
+    ) = None
+    error_message: Annotated[str, Field(max_length=500)] | None = None
 
     @model_validator(mode="after")
     def _closed_outcome_shape(self) -> ToolExecutionEndPayload:
@@ -180,6 +185,10 @@ class ToolExecutionEndPayload(CanonicalEventPayloadDTO):
             raise ValueError("invalid tool outcome fields")
         if self.detail_available and self.outcome != "completed":
             raise ValueError("detail_available is valid only for completed outcome")
+        if self.outcome != "failed" and (
+            self.error_code is not None or self.error_message is not None
+        ):
+            raise ValueError("error details are valid only for failed outcome")
         _validate_execution_shape(self)
         return self
 

@@ -16,12 +16,15 @@ from common.dto.hitl import A2AInteractionSpec
 from ..kernel import KernelConflict
 from ..models import (
     TextPart,
+    ToolInteractionAnswer,
+    ToolInteractionAnswers,
     ToolInteractionQuestion,
     ToolObservation,
     ToolSuspension,
 )
 from ..ports import InvocationCheckpointReader
 from .errors import RecoverableAdapterError, RecoverableCheckpointError
+from .hitl_prompt import model_answer_text
 from .ledger import (
     TERMINAL_AGENT_CALL_STATES,
     ConflictingTerminalObservation,
@@ -1083,11 +1086,26 @@ def _to_tool_observation(
             interaction_fingerprint=interaction_fingerprint,
             questions=questions,
         )
+    command = record.continuation_command
     return ToolObservation(
         observation_id=observation.observation_id,
         invocation_id=record.invocation_id,
         outcome=outcome,
         observed_at=observation.observed_at,
+        interaction_answers=(
+            ToolInteractionAnswers(
+                interaction_id=command.interaction_id,
+                answers=[
+                    ToolInteractionAnswer(
+                        question_id=answer.question_id,
+                        answer=model_answer_text(answer.answer),
+                    )
+                    for answer in command.answers
+                ],
+            )
+            if command is not None
+            else None
+        ),
     )
 
 

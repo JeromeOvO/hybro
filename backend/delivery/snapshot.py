@@ -720,6 +720,9 @@ class RoomEventFold:
                 tool["is_error"] = payload.get("is_error")
                 tool["duration_ms"] = payload.get("duration_ms")
                 tool["detail_available"] = payload.get("detail_available") is True
+                for key in ("error_code", "error_message"):
+                    if isinstance(payload.get(key), str):
+                        tool[key] = payload[key]
         elif sub_type == "model_decision":
             if internal is None:
                 return False

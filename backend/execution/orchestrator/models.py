@@ -217,6 +217,18 @@ class ToolInteractionQuestion(ContractModel):
     choices: list[str] | None = None
 
 
+class ToolInteractionAnswer(ContractModel):
+    question_id: str
+    answer: str
+
+
+class ToolInteractionAnswers(ContractModel):
+    """The user's answers to one Agent interaction, shown only to the model."""
+
+    interaction_id: str
+    answers: list[ToolInteractionAnswer] = Field(default_factory=list)
+
+
 class ToolSuspension(ContractModel):
     invocation_id: str
     status: ToolSuspensionStatus
@@ -245,6 +257,8 @@ class ToolObservation(ContractModel):
     invocation_id: str
     outcome: ToolExecutionOutcome
     observed_at: datetime
+    # The user's answers to the interaction this call was last resumed with.
+    interaction_answers: ToolInteractionAnswers | None = None
 
 
 ToolBatchEntryState = Literal[
@@ -296,6 +310,8 @@ class ToolBatchEntry(ContractModel):
     interaction_id: str | None = None
     interaction_fingerprint: str | None = None
     interaction_questions: list[ToolInteractionQuestion] = Field(default_factory=list)
+    # User answers per interaction round, written to the model transcript.
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _entry_state_is_consistent(self) -> ToolBatchEntry:
@@ -367,6 +383,7 @@ class ToolResultMessage(ContractModel):
     is_error: bool
     error_code: str | None = None
     error_message: str | None = None
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -388,6 +405,8 @@ class ToolInteractionMessage(ContractModel):
     questions: list[ToolInteractionQuestion] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
     agent_label: str | None = None
+    # Answers to this call's earlier rounds, so a follow-up round keeps them.
+    interaction_answers: list[ToolInteractionAnswers] = Field(default_factory=list)
     created_at: datetime
 
 

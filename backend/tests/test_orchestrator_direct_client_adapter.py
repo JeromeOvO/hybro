@@ -10,12 +10,17 @@ from google.protobuf.json_format import MessageToDict
 
 from a2a_adapter.client_facade import A2AClientFacadeError
 from a2a_adapter.orchestrator_direct_client import (
+    FREE_TEXT_INTERACTION_PREFIX,
+    FREE_TEXT_QUESTION_ID,
     DirectCallAddress,
     OrchestratorDirectA2AClient,
+    _agent_error,
+    _extract_interaction_spec,
     endpoint_scope_digest,
 )
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_ERROR_METADATA_KEY,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
     HYBRO_A2A_INTERACTION_METADATA_KEY,
     HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
@@ -518,6 +523,18 @@ async def test_send_input_required_builds_interaction_receipt():
     assert observation.event_kind == "input_required"
     assert observation.status is None
     assert observation.content[0].text == ("I need the client name and coverage limit.")
+    spec = observation.interaction_spec
+    assert spec is not None
+    assert spec["interaction_id"].startswith(FREE_TEXT_INTERACTION_PREFIX)
+    assert spec["questions"] == [
+        {
+            "question_id": FREE_TEXT_QUESTION_ID,
+            "interaction_kind": "questionnaire",
+            "prompt": "I need the client name and coverage limit.",
+            "answer_kind": "text",
+            "required": True,
+        }
+    ]
 
 
 async def test_send_inline_data_artifact_reaches_observation_with_text():
@@ -1057,7 +1074,7 @@ async def test_extract_interaction_spec_requires_status_message_metadata():
         artifacts=None,
     )
 
-    assert _extract_interaction_spec(task) is None
+    assert _extract_interaction_spec(task, event_kind="input_required") is None
 
 
 async def test_continue_task_preserves_endpoint_scope_for_later_rounds():
@@ -1124,3 +1141,95 @@ async def test_unknown_task_identity_returns_delivery_uncertain():
     client = _client(FakeSdk(cancel=cancel))
     receipt = await client.cancel(_cancellation_command())
     assert receipt.outcome == "delivery_uncertain"
+
+
+def _status_task(state, *, text=None, message_id="msg-1", metadata=None) -> Task:
+    status = build_task_status(state)
+    status.message = (
+        Message(
+            role=MessageRole.AGENT,
+            parts=[TextPart(text=text)] if text else [],
+            message_id=message_id,
+            metadata=metadata,
+        )
+        if text is not None or metadata is not None
+        else None
+    )
+    return Task(id="task-1", context_id="ctx-1", status=status, artifacts=None)
+
+
+def test_free_text_spec_is_stable_per_question_and_skipped_without_text():
+    first = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?"),
+        event_kind="input_required",
+    )
+    again = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?"),
+        event_kind="input_required",
+    )
+    next_round = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text="Which tone?", message_id="m2"),
+        event_kind="input_required",
+    )
+    empty = _extract_interaction_spec(
+        _status_task(TaskState.input_required, text=""),
+        event_kind="input_required",
+    )
+    auth = _extract_interaction_spec(
+        _status_task(TaskState.auth_required, text="Sign in"),
+        event_kind="auth_required",
+    )
+
+    assert first == again
+    assert first["interaction_id"] != next_round["interaction_id"]
+    assert empty is None
+    assert auth is None
+
+
+def test_free_text_continuation_is_a_plain_a2a_reply():
+    command = _continuation_command().model_copy(
+        update={
+            "interaction_id": f"{FREE_TEXT_INTERACTION_PREFIX}abc",
+            "answers": [
+                HITLQuestionAnswer(
+                    question_id=FREE_TEXT_QUESTION_ID,
+                    answer=HITLTextAnswer(text="Formal, please"),
+                )
+            ],
+        }
+    )
+    message = _client(FakeSdk())._build_continuation_message(
+        command,
+        address=DirectCallAddress(
+            call_record_id="call-1",
+            task_id="task-1",
+            context_id="context-1",
+            endpoint_scope="https://agent.example/a2a",
+            agent_id="agent-1",
+        ),
+    )
+
+    assert message["parts"] == [{"kind": "text", "text": "Formal, please"}]
+    assert message["metadata"] == {"agent_id": "agent-1"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            {"code": "llm_quota_exceeded", "message": "Quota exceeded"},
+            ("llm_quota_exceeded", "Quota exceeded"),
+        ),
+        ({"code": "bad code!", "message": "x"}, (None, None)),
+        ({"code": "ok", "message": "m" * 900}, ("ok", "m" * 500)),
+        ("not-a-mapping", (None, None)),
+    ],
+)
+def test_agent_error_reads_only_bounded_documented_fields(raw, expected):
+    task = _status_task(
+        TaskState.failed,
+        text="failed",
+        metadata={HYBRO_A2A_ERROR_METADATA_KEY: raw},
+    )
+
+    assert _agent_error(task) == expected

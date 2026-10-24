@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -32,6 +33,7 @@ from uuid import uuid4
 
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_ERROR_METADATA_KEY,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
     HYBRO_A2A_INTERACTION_METADATA_KEY,
     HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
@@ -60,6 +62,12 @@ from .webhook_payloads import (
 
 logger = logging.getLogger(__name__)
 _MAX_INLINE_DATA_ARTIFACTS = 20
+_MAX_FREE_TEXT_PROMPT_CHARS = 10_000
+# Identity of the interaction Hybro derives from a plain A2A input-required.
+FREE_TEXT_INTERACTION_PREFIX = "a2a-input-required:"
+FREE_TEXT_QUESTION_ID = "agent_question"
+_AGENT_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}")
+_MAX_AGENT_ERROR_MESSAGE_CHARS = 500
 
 # ---------------------------------------------------------------------------
 # Provider-neutral command mirrors (structural, never imported from the
@@ -256,19 +264,85 @@ def _event_kind(task: Any) -> str:
     return "working"
 
 
-def _extract_interaction_spec(task: Any) -> dict[str, Any] | None:
+def _extract_interaction_spec(task: Any, *, event_kind: str) -> dict[str, Any] | None:
     message = getattr(getattr(task, "status", None), "message", None)
     metadata = getattr(message, "metadata", None)
-    if not isinstance(metadata, Mapping):
-        return None
-    raw = metadata.get(HYBRO_A2A_INTERACTION_METADATA_KEY)
+    raw = (
+        metadata.get(HYBRO_A2A_INTERACTION_METADATA_KEY)
+        if isinstance(metadata, Mapping)
+        else None
+    )
     if raw is None:
+        if event_kind == "input_required":
+            return _free_text_interaction_spec(task, message)
         return None
     try:
         spec = A2AInteractionSpec.model_validate(raw)
     except (TypeError, ValueError):
         return None
     return spec.model_dump(mode="json")
+
+
+def _free_text_interaction_spec(task: Any, message: Any) -> dict[str, Any] | None:
+    """Treat a plain A2A ``input-required`` question as one free-text question.
+
+    Agents that do not speak Hybro's interaction metadata still ask the user
+    through standard A2A. The status message text becomes the prompt; the
+    answer goes back to the same task as plain text. Without text there is
+    nothing to ask, so the observation keeps no spec.
+    """
+    prompt = get_text_from_message(message).strip()[:_MAX_FREE_TEXT_PROMPT_CHARS]
+    if not prompt:
+        return None
+    # The A2A message id distinguishes repeated rounds that ask the same text.
+    round_key = getattr(message, "message_id", None) or prompt
+    digest = sha256(f"{getattr(task, 'id', '')}\n{round_key}".encode()).hexdigest()[:32]
+    return {
+        "schema_version": 1,
+        "interaction_id": f"{FREE_TEXT_INTERACTION_PREFIX}{digest}",
+        "questions": [
+            {
+                "question_id": FREE_TEXT_QUESTION_ID,
+                "interaction_kind": "questionnaire",
+                "prompt": prompt,
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+
+
+def _agent_error(task: Any) -> tuple[str | None, str | None]:
+    """Read the Agent's own failure code from the documented metadata key.
+
+    Untrusted remote data: only a short identifier code and bounded message
+    text are kept; anything else is ignored.
+    """
+    message = getattr(getattr(task, "status", None), "message", None)
+    metadata = getattr(message, "metadata", None)
+    raw = (
+        metadata.get(HYBRO_A2A_ERROR_METADATA_KEY)
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if not isinstance(raw, Mapping):
+        return None, None
+    code = raw.get("code")
+    if not isinstance(code, str) or not _AGENT_ERROR_CODE.fullmatch(code):
+        return None, None
+    text = raw.get("message")
+    error_message = (
+        text.strip()[:_MAX_AGENT_ERROR_MESSAGE_CHARS]
+        if isinstance(text, str) and text.strip()
+        else None
+    )
+    return code, error_message
+
+
+def _is_free_text_interaction(interaction_id: str | None) -> bool:
+    return bool(interaction_id) and str(interaction_id).startswith(
+        FREE_TEXT_INTERACTION_PREFIX
+    )
 
 
 def _artifact_value(artifact: Any, field: str) -> Any:
@@ -292,7 +366,7 @@ def _task_to_observation_kwargs(  # noqa: C901
     event_kind = _event_kind(task)
     status = _terminal_status(task)
     interaction_spec = (
-        _extract_interaction_spec(task)
+        _extract_interaction_spec(task, event_kind=event_kind)
         if event_kind in {"input_required", "auth_required"}
         else None
     )
@@ -409,6 +483,9 @@ def _task_to_observation_kwargs(  # noqa: C901
         text = f"[Generated file: {', '.join(generated_file_descriptions)}]"
     if text:
         content.append({"kind": "text", "text": text})
+    error_code, error_message = (
+        _agent_error(task) if status in {"failed", "rejected"} else (None, None)
+    )
 
     return {
         "observation_id": stable_id,
@@ -426,8 +503,8 @@ def _task_to_observation_kwargs(  # noqa: C901
         "inline_artifacts": inline_artifacts,
         "artifact_refs": list(dict.fromkeys(artifact_refs)),
         "interaction_spec": interaction_spec,
-        "error_code": None,
-        "error_message": None,
+        "error_code": error_code,
+        "error_message": error_message,
         "cursor": cursor,
     }
 
@@ -1005,7 +1082,21 @@ class OrchestratorDirectA2AClient:
     def _build_continuation_message(
         self, command: _ContinuationCommand, *, address: DirectCallAddress
     ) -> dict[str, Any]:
-        text = _continuation_text(command.answers)
+        free_text = _is_free_text_interaction(command.interaction_id)
+        text = _continuation_text(command.answers, bare=free_text)
+        if free_text:
+            # The Agent asked through plain A2A ``input-required``; it gets a
+            # plain A2A reply. Hybro answer metadata would make an Agent that
+            # reads it treat the reply as a typed answer to a question it
+            # never declared.
+            return {
+                "role": "user",
+                "message_id": command.command_id,
+                "task_id": address.task_id,
+                "context_id": address.context_id,
+                "parts": [{"kind": "text", "text": text}],
+                "metadata": {"agent_id": address.agent_id},
+            }
         typed_answers = [
             answer.model_dump(mode="json")
             if hasattr(answer, "model_dump")
@@ -1600,10 +1691,15 @@ class OrchestratorDirectA2AClient:
         )
 
 
-def _continuation_text(answers: list[Any]) -> str:
+def _continuation_text(answers: list[Any], *, bare: bool = False) -> str:
+    """Render answers as the A2A text part; ``bare`` omits question ids.
+
+    Free-text interactions derived from plain ``input-required`` use ``bare``
+    so the agent receives exactly what the user typed.
+    """
     parts: list[str] = []
     for answer in answers:
-        question_id = getattr(answer, "question_id", None)
+        question_id = None if bare else getattr(answer, "question_id", None)
         value = getattr(answer, "answer", None)
         text = _answer_text(value)
         if text:

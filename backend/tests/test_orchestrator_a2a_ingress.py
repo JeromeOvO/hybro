@@ -1398,3 +1398,58 @@ async def test_absent_interaction_abandon_is_idempotent_noop():
     assert (await inbox.load(item.observation_id)).state == "completed"
     assert sink.values[-1][1].outcome.status == "canceled"
     assert hitl.read_interaction_for_test("interaction-1") is None
+
+
+def test_resumed_call_observation_carries_the_users_answers():
+    from common.dto.hitl import HITLQuestionAnswer
+    from execution.orchestrator.a2a_runtime.ingress import _to_tool_observation
+    from execution.orchestrator.a2a_runtime.models import A2AContinuationCommand
+
+    record = ledger_record()
+    result = ToolResult(
+        call_id=record.invocation_id,
+        tool_name="agent",
+        status="completed",
+        content=[TextPart(text="Drafts signed by Morgan Reyes")],
+        artifact_refs=[],
+    )
+    plain = _to_tool_observation(
+        record.model_copy(update={"terminal_result": result}), observation()
+    )
+    assert plain.interaction_answers is None
+
+    command = A2AContinuationCommand(
+        command_id="continuation-1",
+        transport_kind="direct",
+        call_record_id=record.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        answer_digest="digest",
+        answers=[
+            HITLQuestionAnswer.model_validate(
+                {
+                    "question_id": "agent_question",
+                    "answer": {"kind": "text", "text": "Morgan Reyes, CEO"},
+                }
+            )
+        ],
+        binding_id=record.binding_id,
+        binding_digest=record.binding_digest,
+        requesting_subject_digest=record.requesting_subject_digest,
+        task_id="task-1",
+        context_id="context-1",
+        conversation_id=record.conversation_id,
+        room_epoch=record.room_epoch,
+        created_at=NOW,
+    )
+    resumed = _to_tool_observation(
+        record.model_copy(
+            update={"terminal_result": result, "continuation_command": command}
+        ),
+        observation(),
+    )
+    assert resumed.interaction_answers is not None
+    assert resumed.interaction_answers.interaction_id == "interaction-1"
+    assert [
+        (item.question_id, item.answer) for item in resumed.interaction_answers.answers
+    ] == [("agent_question", "Morgan Reyes, CEO")]

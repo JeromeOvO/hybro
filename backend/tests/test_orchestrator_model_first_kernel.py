@@ -360,6 +360,104 @@ async def test_model_first_join_routes_and_emits_answered_from_context():
 
 
 @pytest.mark.asyncio
+async def test_model_reply_join_ends_consumed_parent_tool_before_turn_end():
+    """Regression: the parked parent's Tool end must precede the turn_end.
+
+    The join's terminal result terminalizes the parent entry of an earlier
+    batch; folds reject a turn_end whose inventory lists an open Tool.
+    """
+
+    runtime = InteractionRuntime()
+    runtime.suspensions["call-1"] = _interaction_suspension("call-1")
+    runtime.model_replies["call-2"] = ToolResult(
+        call_id="call-2",
+        tool_name="fake_agent_pause",
+        status="completed",
+        content=[TextPart(text="done")],
+        artifact_refs=[],
+    )
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(("call-1", "fake_agent_pause", '{"status":"input_required"}')),
+            tool_events(("call-2", "fake_agent_pause", '{"status":"input_required"}')),
+            final_events("done"),
+        ],
+        tool_runtime=runtime,
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        events.append((event_type, payload))
+
+    result = await kernel.run(
+        next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
+    )
+
+    assert result.outcome == "final_answer"
+    turn_end_index = next(
+        index for index, (kind, _) in enumerate(events) if kind == "turn_completed"
+    )
+    listed = events[turn_end_index][1]["tool_call_ids"]
+    assert len(listed) == 2
+    ended_before = [
+        payload["public_call_id"]
+        for kind, payload in events[:turn_end_index]
+        if kind == "tool_execution_completed"
+    ]
+    assert sorted(ended_before) == sorted(listed)
+    assert not [
+        payload
+        for kind, payload in events[turn_end_index:]
+        if kind == "tool_execution_completed" and payload["public_call_id"] in listed
+    ]
+
+    from delivery.snapshot import RoomEventFold
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    translator = PublicProjectionTranslator()
+    fold = RoomEventFold()
+    room_seq = 0
+    for sequence, (event_type, payload) in enumerate(
+        [("run_started", {"mode": "ultimate"}), *events], start=1
+    ):
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=result.run.session_id,
+                run_id=result.run.run_id,
+                causation_id=result.run.request.user_message_id,
+                sequence=sequence,
+                timestamp=NOW,
+                payload=payload,
+                conversation_id=result.run.conversation_id,
+                user_message_id=result.run.request.user_message_id,
+                client_request_id=result.run.client_request_id,
+            ),
+            catalog=result.run.tool_catalog,
+        )
+        if projected is None:
+            continue
+        room_seq += 1
+        assert fold.apply(
+            {
+                "room_id": result.run.conversation_id,
+                "room_seq": room_seq,
+                "kind": "run_event",
+                "ts": NOW.isoformat(),
+                "payload_public": {
+                    "event_id": projected.event_id,
+                    "run_id": projected.run_id,
+                    "seq": projected.seq,
+                    "type": projected.kind,
+                    "payload": projected.payload,
+                    "correlation_id": projected.client_request_id,
+                },
+            }
+        ), (event_type, payload)
+
+
+@pytest.mark.asyncio
 async def test_model_first_per_fingerprint_bound_emits_no_progress():
     runtime = InteractionRuntime()
     runtime.suspensions["call-1"] = _interaction_suspension("call-1")

@@ -14,9 +14,17 @@ from .models import (
     ModelToolResultPart,
     SessionNotice,
     TextPart,
+    ToolInteractionAnswers,
     ToolInteractionMessage,
     ToolResultMessage,
     UserMessage,
+)
+
+_ROOM_FILE_REF_PREFIX = "/api/v1/files/"
+# The model receives only a file's name and reference, never its bytes.
+_UNREAD_FILES_NOTE = (
+    "[platform note: Hybro has not read the contents of the referenced files; "
+    "describe them only from what the Agent reported above]"
 )
 
 
@@ -43,6 +51,17 @@ def agent_messages_to_model(
         message.call_id
         for message in messages
         if isinstance(message, (ToolResultMessage, ToolInteractionMessage))
+    }
+    result_call_ids = {
+        message.call_id
+        for message in messages
+        if isinstance(message, ToolResultMessage)
+    }
+    user_answers = {
+        answered.interaction_id: answered
+        for message in messages
+        if isinstance(message, (ToolResultMessage, ToolInteractionMessage))
+        for answered in message.interaction_answers
     }
     for message in messages:
         if isinstance(message, UserMessage):
@@ -84,6 +103,12 @@ def agent_messages_to_model(
             )
             if refs:
                 text = f"{text}\n{refs}".strip()
+            if any(
+                ref.startswith(_ROOM_FILE_REF_PREFIX) for ref in message.artifact_refs
+            ):
+                text = f"{text}\n{_UNREAD_FILES_NOTE}".strip()
+            if message.error_code:
+                text = f"{text}\n[agent error code: {message.error_code}]".strip()
             if message.error_message:
                 text = f"{text}\n{message.error_message}".strip()
             if prepare_orchestration_context:
@@ -120,7 +145,17 @@ def agent_messages_to_model(
                         ModelToolResultPart(
                             call_id=message.call_id,
                             tool_name=message.tool_name,
-                            content=[ModelTextPart(text=_interaction_text(message))],
+                            content=[
+                                ModelTextPart(
+                                    text=_interaction_text(
+                                        message,
+                                        resolved=message.call_id in result_call_ids,
+                                        answers=user_answers.get(
+                                            message.interaction_id
+                                        ),
+                                    )
+                                )
+                            ],
                             is_error=False,
                         )
                     ],
@@ -255,11 +290,20 @@ def unresolved_call_ids(messages: list[object]) -> set[str]:
     return calls - results
 
 
-def _interaction_text(message: ToolInteractionMessage) -> str:
+def _interaction_text(
+    message: ToolInteractionMessage,
+    *,
+    resolved: bool,
+    answers: ToolInteractionAnswers | None,
+) -> str:
     """Render an executable, provider-neutral private interaction observation.
 
     The model must receive the exact platform presentation target and typed
     question inventory. Public projections never use this transcript text.
+    Once the call has a result, the request is history: labelling it resolved
+    keeps the model from asking an already answered question again. The user's
+    own answers are included so the model can tell user-supplied facts in the
+    Agent's result from guesses.
     """
 
     payload = {
@@ -279,8 +323,27 @@ def _interaction_text(message: ToolInteractionMessage) -> str:
         ],
         "artifact_refs": list(message.artifact_refs),
     }
+    if answers is not None:
+        payload["user_answers"] = [
+            {"question_id": item.question_id, "answer": item.answer}
+            for item in answers.answers
+        ]
+        header = (
+            "[agent input request; the user answered it in user_answers and the "
+            "answers were sent to the Agent; do not ask it again]"
+        )
+    elif resolved:
+        header = (
+            "[agent input request; already answered, the Agent's result follows; "
+            "do not ask it again]"
+        )
+    else:
+        header = (
+            "[agent input request; answer it from existing evidence, or ask the user]"
+        )
     return (
-        "[agent input request; answer it from existing evidence, or ask the user]\n"
+        header
+        + "\n"
         + json.dumps(
             payload,
             ensure_ascii=False,

@@ -267,6 +267,49 @@ def test_canonical_agent_execution_end_marks_private_detail_available():
     assert "Clear, 22C" not in str(public.payload)
 
 
+@pytest.mark.parametrize(
+    ("status", "code", "expected"),
+    [
+        (
+            "failed",
+            "llm_quota_exceeded",
+            {"error_code": "llm_quota_exceeded", "error_message": "Quota exceeded"},
+        ),
+        ("failed", "bad code", {}),
+        ("completed", "llm_quota_exceeded", {}),
+    ],
+)
+def test_canonical_agent_execution_end_exposes_agent_error_only_when_failed(
+    status, code, expected
+):
+    public = PublicProjectionTranslator().translate(
+        _canonical_tool_event(
+            "tool_execution_completed",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_weather_0001",
+                "tool_name": "agent_weather",
+                "agent_label": "Weather Agent - Forecast",
+                "result_status": status,
+                "result_is_error": status == "failed",
+                "result_text": "",
+                "result_error_code": code,
+                "result_error_message": "Quota exceeded",
+                "duration_ms": 120,
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+    assert public is not None
+    details = {
+        key: public.payload[key]
+        for key in ("error_code", "error_message")
+        if key in public.payload
+    }
+    assert details == expected
+
+
 def test_canonical_unknown_tool_is_plain_tool_execution_without_target():
     translator = PublicProjectionTranslator()
     public = translator.translate(

@@ -148,7 +148,10 @@ async def park_call_for_interaction(
     """Park a call on an interaction observation.
 
     Typed specs → ``input_required`` / ``auth_required`` with activated HITL.
-    Missing spec → silent completed tool result (cyber untyped recovery).
+    The A2A adapter derives a free-text spec from a plain ``input-required``
+    status message, so those questions take the typed path too.
+    Missing spec (plain ``auth-required``, or no question text) → completed
+    tool result carrying whatever the Agent sent.
     Invalid spec → fail-closed failed terminal.
     """
     raw_spec = observation.interaction_spec

@@ -36,6 +36,7 @@ from .models import (
     ToolCall,
     ToolCallBatch,
     ToolDefinition,
+    ToolInteractionAnswers,
     ToolInteractionMessage,
     ToolInteractionQuestion,
     ToolInvocation,
@@ -1821,6 +1822,9 @@ class OrchestratorKernel:
                     *entry.processed_observation_ids,
                     observation.observation_id,
                 ],
+                "interaction_answers": _with_interaction_answers(
+                    entry.interaction_answers, observation.interaction_answers
+                ),
                 **interaction_update,
             }
         )
@@ -2495,6 +2499,7 @@ class OrchestratorKernel:
                     questions=entry.interaction_questions,
                     artifact_refs=[],
                     agent_label=self._tool_label(run, entry.tool_name),
+                    interaction_answers=entry.interaction_answers,
                     created_at=now,
                 )
                 existing_index = next(
@@ -2576,6 +2581,8 @@ class OrchestratorKernel:
                     "internal_turn_id": internal_turn_id,
                     "status": result.status,
                     "result_status": result.status,
+                    "result_error_code": result.error_code,
+                    "result_error_message": result.error_message,
                     "tool_name": entry.tool_name,
                     "agent_label": self._tool_label(run, entry.tool_name),
                     "duration_ms": 0,
@@ -2596,6 +2603,31 @@ class OrchestratorKernel:
                 result=result,
                 public_terminal_emitted=True,
                 command=f"public-tool-end:{entry.call_id}",
+            )
+        return run
+
+    async def _publish_consumed_parent_terminals(
+        self,
+        run: OrchestratorRunState,
+        batch_index: int,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> OrchestratorRunState:
+        """Publish Tool ends that a join's three-way consumption checkpointed.
+
+        A model-reply join terminalizes the parked parent entry in an earlier
+        batch. Its public ``tool_execution_end`` must precede any ``turn_end``
+        whose inventory lists it.
+        """
+
+        for other_index in range(len(run.tool_batches)):
+            if other_index == batch_index:
+                continue
+            run = await self._publish_checkpointed_tool_terminals(
+                run,
+                other_index,
+                lifecycle=lifecycle,
+                internal_turn_id=_batch_internal_turn_id(run.tool_batches[other_index]),
             )
         return run
 
@@ -3372,6 +3404,9 @@ class OrchestratorKernel:
                 lifecycle=lifecycle,
                 internal_turn_id=run.active_internal_turn_id or assistant.message_id,
             )
+            run = await self._publish_consumed_parent_terminals(
+                run, batch_index, lifecycle=lifecycle
+            )
             batch = run.tool_batches[batch_index]
             for entry in batch.entries:
                 await self._emit(
@@ -3449,6 +3484,9 @@ class OrchestratorKernel:
             batch_index,
             lifecycle=lifecycle,
             internal_turn_id=run.active_internal_turn_id or assistant.message_id,
+        )
+        run = await self._publish_consumed_parent_terminals(
+            run, batch_index, lifecycle=lifecycle
         )
         run = await self._publish_checkpointed_suspensions(
             run,
@@ -4985,6 +5023,8 @@ class OrchestratorKernel:
                         "internal_turn_id": owner,
                         "status": result.status,
                         "result_status": result.status,
+                        "result_error_code": result.error_code,
+                        "result_error_message": result.error_message,
                         "tool_name": entry.tool_name,
                         "agent_label": self._tool_label(run, entry.tool_name),
                         "duration_ms": 0,
@@ -5534,6 +5574,18 @@ def _tool_error(call: ToolCall, code: str, message: str) -> ToolResult:
     )
 
 
+def _with_interaction_answers(
+    known: list[ToolInteractionAnswers],
+    observed: ToolInteractionAnswers | None,
+) -> list[ToolInteractionAnswers]:
+    """Record one round's answers once; observations replay the latest round."""
+    if observed is None or any(
+        item.interaction_id == observed.interaction_id for item in known
+    ):
+        return known
+    return [*known, observed]
+
+
 def _flush_batch(
     transcript: list[object], batch: ToolCallBatch, created_at: datetime
 ) -> tuple[list[object], ToolCallBatch]:
@@ -5559,6 +5611,7 @@ def _flush_batch(
                 is_error=result.status != "completed",
                 error_code=result.error_code,
                 error_message=result.error_message,
+                interaction_answers=entry.interaction_answers,
                 created_at=created_at,
             )
         )

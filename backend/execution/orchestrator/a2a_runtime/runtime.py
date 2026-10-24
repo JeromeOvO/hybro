@@ -730,9 +730,12 @@ class A2AAgentToolRuntime:
         ``auth_required``, and return ``ToolSuspension`` so the kernel waits
         for the user answer + continuation.
 
-        Missing spec (cyber silent recovery): record the request text as a
-        completed tool result so the next model turn can continue without a
-        UI challenge.
+        Plain A2A ``input-required`` with question text arrives here with a
+        free-text spec derived by the adapter, so it follows the typed path.
+
+        Missing spec (plain ``auth-required``, or no question text): record
+        the request as a completed tool result so the next model turn can
+        continue without a UI challenge.
 
         Invalid spec: fail closed as a terminal failed tool result.
         """

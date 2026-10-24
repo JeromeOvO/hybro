@@ -103,6 +103,14 @@ card inspection, routing suggestions, and the caller-bound agent-network service
 Registered Remote agents can be removed; Local agents stay under `local_agents`
 discovery.
 
+`POST /api/v1/agent/registerAgent` is unique per normalized Agent URL.
+Registering a URL held by an ownerless discovery record that discovery has
+marked inactive takes that record over in place (same `agent_id`, now owned by
+the requester with `source=cloud`). Any other existing record returns HTTP 409
+with `detail: {"code", "message"}`, where `code` is `already_registered` (the
+requester owns it), `owned_by_another_provider`, or `active_local_discovery`.
+The default-agent registrar treats a 409 as already registered.
+
 - Main types: `AgentFacade` (registry), `AgentCatalogService` (the `/agent/*`
   routes), `AgentMatcher`, `AgentSelectionService`, `AgentHealthService`,
   `AgentLivenessService`, `AgentInspectionService`,
@@ -461,7 +469,10 @@ agents: the Compose backend receives the matching
 `LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS` list generated from
 `default_agents/agents.yaml`, so it never rediscovers an agent the one-shot
 registrar already registered. Scheduled discovery marks an agent inactive after
-three successful cycles in which it is absent; the authenticated
+three successful cycles in which it is absent and records `inactive_since`;
+every cycle then deletes ownerless `source=local` records that have been
+inactive for seven days (`LOCAL_AGENT_INACTIVE_RETENTION`; records without
+`inactive_since` use `updated_at`). The authenticated
 `POST /api/v1/local-agents/discovery` refresh reconciles missing agents at once
 and upgrades any in-flight cycle to a manual refresh. Discovery coordination and
 miss counters are process-local, which fits the single-process Compose backend.
@@ -1666,8 +1677,14 @@ input" or processing meanwhile. Ordinary recovery polls do not wake an
 ### Model-first HITL decision
 
 A typed A2A interaction (`hybro.ai/a2a/interaction`) parks the call in
-`input_required` / `auth_required`; an untyped `input_required` completes as a
-silent tool result. A parked interaction is not immediately user-facing: the
+`input_required` / `auth_required`. A plain A2A `input-required` without that
+metadata is treated as one required free-text question: the adapter derives an
+interaction (`a2a-input-required:<digest of task id and status message id>`,
+question id `agent_question`) whose prompt is the status message text, and the
+answer resumes the same task as a plain A2A message: exactly the answer text,
+without `hybro.ai/a2a/interaction-answer` metadata.
+An untyped `input-required` with no status text, and an untyped
+`auth-required`, still complete as a silent tool result. A parked interaction is not immediately user-facing: the
 runtime parks the call durably without emitting `hitl_request` or
 `run_waiting_input` and returns a `ToolSuspension` carrying a private typed
 interaction inventory. The kernel writes a `tool_interaction` transcript message
@@ -1678,13 +1695,24 @@ turn. The model either answers the Agent from existing evidence (a
 continuation join through `A2AModelReplyCommand` on the same task/context, with
 the durable `command_id` as the remote message id, bounded per interaction
 fingerprint and per Run) or forwards the exact questions with
-`surface_agent_questions`. A singleton presentation makes that tool
+`surface_agent_questions`. A terminal join result also terminalizes the parked
+parent call; the kernel publishes that call's `tool_execution_end` before the
+`turn_end` whose inventory lists it. A singleton presentation makes that tool
 argument-free; several presentations expose an enum of current private IDs. A
 distinct continuation challenge returns through durable inbox recovery with the
 CAS-winning call record, exact interaction and fingerprint, and complete question
 inventory. Presentation IDs, interaction aliases, fingerprints, and question IDs
 never enter public payloads. `model_decision` folds into `kind:"decision"`
-activity in the Turn Trace.
+activity in the Turn Trace. Once the call has its ToolResult, the model view
+labels the folded request as already answered, so a later turn does not ask the
+user the same question again. When the user answered it, the observation that
+ingress builds from the call ledger carries the `continuation_command` answers
+(choice values; sign-in results read only "Signed in"). The batch entry records
+them once per interaction round, and they are written to the call's
+`ToolResultMessage` (and to a follow-up round's `ToolInteractionMessage`). The
+model view renders them as `user_answers` on the matching request, so the model
+can tell facts the user supplied from guesses. Public projections never carry
+them.
 
 During an in-flight HITL continuation, a missing interaction spec does not take
 the untyped-complete path (the server can clear `status.message` while the state
@@ -2287,9 +2315,21 @@ owner's session page renders the record through them and answers approvals there
 
 External agent contract: publish a standard Agent Card and be registered; return
 `input-required` with typed `hybro.ai/a2a/interaction` metadata to ask the owner
-(an untyped `input-required` completes as an ordinary reply); support
+(an untyped `input-required` with status text is asked as one free-text
+question); on `failed` or `rejected`, optionally put
+`{"code": "<identifier>", "message": "<short reason>"}` under
+`hybro.ai/a2a/error` in `status.message.metadata` (code
+`[A-Za-z][A-Za-z0-9_.:-]{0,63}`, message capped at 500 characters); support
 `tasks/get`; accept a best-effort remote cancel meaning "stop; this request will
 not proceed", sent on owner reject and on client close.
+
+A failed call's `hybro.ai/a2a/error` code and message reach the model transcript
+(`[agent error code: …]`) and the public `tool_execution_end` payload and
+snapshot Tool row as optional `error_code`/`error_message` (failed outcome only;
+the message passes the public-text sanitizer). When a tool result references a
+room file (`/api/v1/files/…`), the model transcript adds a platform note that
+Hybro has not read the file's contents, so the model describes it only from what
+the Agent reported.
 
 ## Context Memory Workflow
 

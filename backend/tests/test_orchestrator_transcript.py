@@ -9,6 +9,8 @@ from execution.orchestrator.models import (
     SessionNotice,
     TextPart,
     ToolCall,
+    ToolInteractionAnswer,
+    ToolInteractionAnswers,
     ToolInteractionMessage,
     ToolInteractionQuestion,
     ToolResultMessage,
@@ -127,6 +129,35 @@ def test_orchestration_context_marks_failed_results_as_diagnostic_only():
     )
 
 
+def test_room_file_results_tell_the_model_contents_were_not_read():
+    with_file = result().model_copy(
+        update={"artifact_refs": ["/api/v1/files/file-1"], "content": []}
+    )
+    without_file = result()
+
+    converted = agent_messages_to_model([assistant(), with_file])
+    plain = agent_messages_to_model([assistant(), without_file])
+
+    assert "has not read the contents" in converted[1].content[0].content[0].text
+    assert "has not read the contents" not in plain[1].content[0].content[0].text
+
+
+def test_failed_result_shows_the_agent_error_code_to_the_model():
+    failed = result().model_copy(
+        update={
+            "status": "failed",
+            "is_error": True,
+            "error_code": "llm_quota_exceeded",
+            "error_message": "Quota exceeded",
+        }
+    )
+
+    text = agent_messages_to_model([assistant(), failed])[1].content[0].content[0].text
+
+    assert "[agent error code: llm_quota_exceeded]" in text
+    assert "Quota exceeded" in text
+
+
 def test_unresolved_calls_are_reported_and_orphan_results_rejected():
     assert unresolved_call_ids([assistant()]) == {"call-1"}
     with pytest.raises(TranscriptCorruptionError, match="orphan"):
@@ -167,6 +198,7 @@ def test_tool_interaction_presents_then_resolves_with_single_result():
     assert converted[1].content[0].call_id == "call-1"
     observation = converted[1].content[0].content[0].text
     assert "agent input request" in observation
+    assert "or ask the user" in observation
     assert '"presentation_id":"prs_123"' in observation
     assert '"interaction_id":"interaction-1"' in observation
     assert '"interaction_fingerprint":"fp"' in observation
@@ -181,6 +213,62 @@ def test_tool_interaction_presents_then_resolves_with_single_result():
     final_text = final[1].content[0].content[0].text
     assert "agent input request" in final_text
     assert "artifact-1" in final_text
+    # Once the call has its result the question is history, not a live
+    # instruction; the model must not ask the user again.
+    assert "already answered" in final_text
+    assert "or ask the user" not in final_text
+
+
+def test_resolved_interaction_shows_the_users_answer():
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-1:fp",
+        call_id="call-1",
+        tool_name="echo",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="agent_question",
+                prompt="Who signs the emails?",
+                answer_kind="text",
+            )
+        ],
+        created_at=NOW,
+    )
+    answered = result().model_copy(
+        update={
+            "interaction_answers": [
+                ToolInteractionAnswers(
+                    interaction_id="interaction-1",
+                    answers=[
+                        ToolInteractionAnswer(
+                            question_id="agent_question",
+                            answer="Morgan Reyes, CEO",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+    text = agent_messages_to_model([assistant(), interaction, answered])[1]
+    text = text.content[0].content[0].text
+    # The model must see the user's own answer, or it treats the Agent's use
+    # of it as a guess and asks the user again.
+    assert "the user answered it" in text
+    assert '"user_answers":[{"answer":"Morgan Reyes, CEO"' in text
+    assert "or ask the user" not in text
+    # Answers on a different interaction round are not attributed here.
+    other = answered.model_copy(
+        update={
+            "interaction_answers": [
+                ToolInteractionAnswers(interaction_id="interaction-0", answers=[])
+            ]
+        }
+    )
+    text = agent_messages_to_model([assistant(), interaction, other])[1]
+    text = text.content[0].content[0].text
+    assert "user_answers" not in text
+    assert "already answered" in text
 
 
 def test_multi_round_hitl_transcript_folding_strips_surface_questions_and_reconciles_turns():

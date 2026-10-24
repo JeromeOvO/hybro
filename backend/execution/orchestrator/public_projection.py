@@ -13,6 +13,7 @@ generated short summaries and metadata only.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -294,6 +295,8 @@ class PublicProjectionTranslator:
             }
             if failure_reason is not None:
                 payload["failure_reason"] = failure_reason
+            if outcome == "failed":
+                payload.update(_public_agent_error(raw))
             return payload
         if kind == "turn_end":
             return {
@@ -393,6 +396,21 @@ def _as_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+_PUBLIC_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}")
+
+
+def _public_agent_error(raw: dict[str, Any]) -> dict[str, str]:
+    """Expose a failed call's own error code and sanitized short message."""
+    code = raw.get("result_error_code")
+    if not isinstance(code, str) or not _PUBLIC_ERROR_CODE.fullmatch(code):
+        return {}
+    details = {"error_code": code}
+    message = raw.get("result_error_message")
+    if isinstance(message, str) and message.strip():
+        details["error_message"] = sanitize_public_text(message.strip())[:500]
+    return details
 
 
 def _public_request_summary(arguments: Any, limit: int) -> str:

@@ -532,3 +532,26 @@ def test_readable_answers_never_expose_references(question, value, text):
         {"question_id": "q", "prompt": "?", **question}
     )
     assert public_answer_text(spec, answer("q", value).answer, secret_values=()) == text
+
+
+def test_model_answer_text_keeps_choice_values_and_hides_references():
+    from execution.orchestrator.a2a_runtime.hitl_prompt import model_answer_text
+
+    assert (
+        model_answer_text(
+            answer("q", {"kind": "multi_choice", "choices": ["a"], "other": "b"}).answer
+        )
+        == "a, b"
+    )
+    assert (
+        model_answer_text(
+            answer(
+                "q",
+                {
+                    "kind": "authorization_result",
+                    "authorization_reference": "authref:a1",
+                },
+            ).answer
+        )
+        == "Signed in"
+    )

@@ -361,3 +361,65 @@ async def test_snapshot_stops_at_first_gap():
     # The fold advanced past the tombstone and folded m3.
     assert snapshot["room_seq"] == 3
     assert [message["message_id"] for message in snapshot["messages"]] == ["m1", "m3"]
+
+
+def test_fold_keeps_failed_agent_error_code_on_the_tool_item():
+    fold = RoomEventFold()
+    events = [
+        (
+            "run_started",
+            {
+                "hybro_turn_id": "run-1",
+                "user_message_id": "user-1",
+                "started_at": NOW.isoformat(),
+                "mode": "fast",
+            },
+        ),
+        ("turn_start", {"internal_turn_id": "turn-1", "attempt": 1}),
+        (
+            "tool_execution_start",
+            {
+                "internal_turn_id": "turn-1",
+                "tool_call_id": "inv_abcdefgh",
+                "tool_name": "Weather Agent",
+                "input": {"task": "weather"},
+            },
+        ),
+        (
+            "tool_execution_end",
+            {
+                "internal_turn_id": "turn-1",
+                "tool_call_id": "inv_abcdefgh",
+                "tool_name": "Weather Agent",
+                "outcome": "failed",
+                "result": "",
+                "is_error": True,
+                "duration_ms": 2,
+                "failure_reason": "execution",
+                "error_code": "llm_quota_exceeded",
+                "error_message": "Quota exceeded",
+            },
+        ),
+    ]
+    for seq, (kind, payload) in enumerate(events, start=1):
+        assert fold.apply(
+            _record(
+                "run_event",
+                {
+                    "run_id": "run-1",
+                    "event_id": f"event-{seq}",
+                    "seq": seq,
+                    "type": kind,
+                    "payload": payload,
+                    "correlation_id": "cr-1",
+                },
+                room_seq=seq,
+            )
+        )
+
+    tool = fold.state(room_seq=len(events))["turns"][0]["activity"][0]
+    assert (tool["status"], tool["error_code"], tool["error_message"]) == (
+        "failed",
+        "llm_quota_exceeded",
+        "Quota exceeded",
+    )
