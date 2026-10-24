@@ -149,12 +149,13 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   }, [adapter.conversationId, selectedMessageId, entities, orderedIds, streamBuffer])
 
   // Canonical Agent Cards are folded from execution events, not MessageStore
-  // entities. When the card has no legacy entity (the canonical-only path),
-  // build the detail shell from the Turn projection so the private detail
-  // fetch still opens the pane with the durable request/status facts.
+  // entities. Build the detail shell from the Turn projection so the private
+  // detail fetch opens the pane with the durable request/status facts. It
+  // wins over a MessageStore entity with the same id: snapshot HITL recovery
+  // anchors questions on a status-less shell entity under the card id.
   const canonicalTurns = useCanonicalTurns(adapter.conversationId)
   const canonicalCardDetail = useMemo<AgentResponseDetail | null>(() => {
-    if (!selectedMessageId || baseDetail) return null
+    if (!selectedMessageId) return null
     const identity = parseCanonicalCardIdentity(selectedMessageId)
     if (!identity) return null
     for (const turn of canonicalTurns) {
@@ -197,7 +198,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       }
     }
     return null
-  }, [baseDetail, canonicalTurns, entities, selectedMessageId])
+  }, [canonicalTurns, entities, selectedMessageId])
 
   const canonicalCardTerminal = useMemo(() => {
     if (!selectedMessageId) return false
@@ -211,7 +212,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     return item != null && ['completed', 'failed', 'canceled'].includes(item.status)
   }, [canonicalTurns, selectedMessageId])
 
-  const effectiveBaseDetail = baseDetail ?? canonicalCardDetail
+  const effectiveBaseDetail = canonicalCardDetail ?? baseDetail
   const canonicalTerminal = parseCanonicalCardIdentity(selectedMessageId ?? '') != null
     && (canonicalCardTerminal
       || (baseDetail?.taskStatus != null && isTerminalState(baseDetail.taskStatus)))

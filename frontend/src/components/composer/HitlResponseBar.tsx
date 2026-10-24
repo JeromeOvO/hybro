@@ -398,14 +398,19 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const ordered = useMemo(() => sortHitls(hitls), [hitls])
   const interactionId = ordered[0]?.interactionId
   const interactionKey = `${interactionId ?? 'none'}:${ordered.map(hitl => hitl.hitlId).join(',')}`
+  const draftKey = JSON.stringify([
+    interactionId,
+    ordered.map(hitl => [hitl.hitlId, hitl.prompt, hitl.promptType]),
+  ])
   const seed = useMemo(() => ({
     interactionKey,
+    draftKey,
     firstRequestId: ordered[0]?.hitlId ?? null,
     answers: ordered.map(hitl => ({
       requestId: hitl.hitlId,
       answer: hitl.answer,
     })),
-  }), [interactionKey, ordered])
+  }), [draftKey, interactionKey, ordered])
   const { state: controller, dispatch } = useHitlInteractionController(seed)
   const {
     currentId,

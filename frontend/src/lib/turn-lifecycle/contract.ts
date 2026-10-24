@@ -78,6 +78,18 @@ function validExecutionIdentity(value: Record<string, unknown>): boolean {
   return value.target === undefined || value.target === null
 }
 
+const AGENT_ERROR_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/
+
+/** An Agent's own failure reason may appear only on a failed execution. */
+function validAgentError(value: Record<string, unknown>, failed: boolean): boolean {
+  const absent = (field: unknown) => field === undefined || field === null
+  if (absent(value.error_code) && absent(value.error_message)) return true
+  return failed
+    && typeof value.error_code === 'string'
+    && AGENT_ERROR_CODE.test(value.error_code)
+    && (absent(value.error_message) || text(value.error_message, 500))
+}
+
 function validatePayload(type: CanonicalRunEventType, value: unknown): boolean {
   if (!record(value)) return false
   switch (type) {
@@ -152,7 +164,7 @@ function validatePayload(type: CanonicalRunEventType, value: unknown): boolean {
         && text(value.partial_result, 1_000)
         && validExecutionIdentity(value)
     case 'tool_execution_end': {
-      if (!exactKeys(value, ['internal_turn_id', 'tool_call_id', 'tool_name', 'outcome', 'result', 'is_error', 'duration_ms'], ['failure_reason', 'execution_kind', 'target', 'detail_available'])
+      if (!exactKeys(value, ['internal_turn_id', 'tool_call_id', 'tool_name', 'outcome', 'result', 'is_error', 'duration_ms'], ['failure_reason', 'execution_kind', 'target', 'detail_available', 'error_code', 'error_message'])
         || !id(value.internal_turn_id)
         || typeof value.tool_call_id !== 'string'
         || !TOOL_CALL_ID.test(value.tool_call_id)
@@ -164,6 +176,7 @@ function validatePayload(type: CanonicalRunEventType, value: unknown): boolean {
         || !oneOf(value.outcome, ['completed', 'failed', 'canceled'])
         || typeof value.is_error !== 'boolean'
         || (value.detail_available !== undefined && typeof value.detail_available !== 'boolean')
+        || !validAgentError(value, value.outcome === 'failed')
         || !validExecutionIdentity(value)) return false
       if (value.outcome === 'completed') {
         return value.is_error === false && (value.failure_reason === undefined || value.failure_reason === null)
@@ -313,15 +326,30 @@ export function validateCanonicalRunEventData(value: unknown): CanonicalRunEvent
   return { canonical: true, valid: true, data: value as CanonicalRunEventData }
 }
 
+// The backend translator always sends the presentation fields (required,
+// allow_other) and the sanitized owner answer; they are public UI data.
 const REQUEST_OPTIONAL = [
   ...META_KEYS,
   'choices',
   'agent_label',
+  'header',
+  'required',
+  'allow_other',
+  'choice_options',
 ] as const
 const RESPONSE_OPTIONAL = [
   ...META_KEYS,
   'answer_ref',
+  'answer_text',
 ] as const
+
+function choiceOption(value: unknown): boolean {
+  return record(value)
+    && exactKeys(value, ['value'], ['label', 'description'])
+    && text(value.value, 500)
+    && (value.label === undefined || value.label === null || text(value.label, 200))
+    && (value.description === undefined || value.description === null || text(value.description, 500))
+}
 
 export function isCanonicalHITLRequestData(value: unknown): value is CanonicalHITLRequestData {
   if (!record(value) || !Object.prototype.hasOwnProperty.call(value, 'run_id')) return false
@@ -344,6 +372,12 @@ export function isCanonicalHITLRequestData(value: unknown): value is CanonicalHI
     && oneOf(value.source, ['agent', 'supervisor', 'system'])
     && (value.choices === undefined || value.choices === null || (Array.isArray(value.choices) && value.choices.every((choice) => text(choice, 1_000))))
     && (value.agent_label === undefined || value.agent_label === null || text(value.agent_label, 160))
+    && (value.header === undefined || value.header === null || text(value.header, 40))
+    && (value.required === undefined || typeof value.required === 'boolean')
+    && (value.allow_other === undefined || typeof value.allow_other === 'boolean')
+    && (value.choice_options === undefined || value.choice_options === null
+      || (Array.isArray(value.choice_options) && value.choice_options.length <= 20
+        && value.choice_options.every(choiceOption)))
     && (value.room_event_id === undefined || id(value.room_event_id))
     && (value.parent_event_id === undefined || id(value.parent_event_id))
     && (value.delivery_id === undefined || id(value.delivery_id))
@@ -370,6 +404,7 @@ export function isCanonicalHITLResponseData(value: unknown): value is CanonicalH
     && value.source.length > 0
     && oneOf(value.status, ['responded', 'expired', 'canceled', 'error'])
     && (value.answer_ref === undefined || value.answer_ref === null || id(value.answer_ref))
+    && (value.answer_text === undefined || value.answer_text === null || text(value.answer_text, 1_000))
     && (value.room_event_id === undefined || id(value.room_event_id))
     && (value.parent_event_id === undefined || id(value.parent_event_id))
     && (value.delivery_id === undefined || id(value.delivery_id))
@@ -400,7 +435,7 @@ function snapshotActivity(value: unknown): value is RoomSnapshotActivityItem {
       && integer(value.order)
   }
   if (value.kind === 'tool') {
-    if (!exactKeys(value, ['kind', 'id', 'internal_turn_id', 'tool_call_id', 'label', 'input', 'partial_result', 'result', 'is_error', 'duration_ms', 'status', 'update_index', 'order'], ['failure_reason', 'execution_kind', 'target_name', 'request_summary', 'detail_available'])
+    if (!exactKeys(value, ['kind', 'id', 'internal_turn_id', 'tool_call_id', 'label', 'input', 'partial_result', 'result', 'is_error', 'duration_ms', 'status', 'update_index', 'order'], ['failure_reason', 'execution_kind', 'target_name', 'request_summary', 'detail_available', 'error_code', 'error_message'])
       || !id(value.id)
       || !id(value.internal_turn_id)
       || typeof value.tool_call_id !== 'string'
@@ -415,7 +450,8 @@ function snapshotActivity(value: unknown): value is RoomSnapshotActivityItem {
       || (value.execution_kind !== undefined && !oneOf(value.execution_kind, ['agent', 'tool']))
       || (value.target_name !== undefined && value.target_name !== null && !text(value.target_name, 160))
       || (value.request_summary !== undefined && !text(value.request_summary, 1_000))
-      || (value.detail_available !== undefined && typeof value.detail_available !== 'boolean')) return false
+      || (value.detail_available !== undefined && typeof value.detail_available !== 'boolean')
+      || !validAgentError(value, value.status === 'failed')) return false
     const failureReasonValid = value.failure_reason === undefined
       || value.failure_reason === null
       || oneOf(value.failure_reason, ['rejected', 'expired', 'validation', 'authorization', 'execution'])

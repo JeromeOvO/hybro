@@ -1052,6 +1052,22 @@
   overflow-wrap: anywhere;
 }
 
+.canonical-failed-agent-notice {
+  border-color: var(--conversation-danger-border);
+  color: var(--conversation-text-secondary);
+  line-height: 21px;
+}
+
+.canonical-failed-agent-notice strong {
+  color: var(--conversation-danger);
+  font-weight: 600;
+}
+
+.canonical-failed-agent-notice p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @keyframes canonical-assistant-cursor {
   50% { opacity: 0; }
 }

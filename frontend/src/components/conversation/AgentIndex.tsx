@@ -99,6 +99,7 @@ function IndexRow({
       compact
       statusSuffix={statusSuffix}
       lifecycleStatus={result.executionStatus}
+      failureDetail={result.failureDetail}
     />
   )
 }

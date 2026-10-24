@@ -434,6 +434,10 @@ function foldRunEvent(
     tool.durationMs = payload.duration_ms
     tool.detailAvailable = payload.detail_available === true
     if ('failure_reason' in payload && payload.failure_reason) tool.failureReason = payload.failure_reason
+    if (payload.outcome === 'failed') {
+      tool.errorCode = payload.error_code ?? undefined
+      tool.errorMessage = payload.error_message ?? undefined
+    }
     return changed(turns, turn)
   }
 
@@ -679,6 +683,8 @@ export function snapshotTurnToProjection(conversationId: string, value: RoomSnap
         targetName: item.target_name ?? undefined,
         requestSummary: item.request_summary ?? '',
         detailAvailable: item.detail_available === true,
+        errorCode: item.error_code ?? undefined,
+        errorMessage: item.error_message ?? undefined,
         order: item.order,
       }
     }),

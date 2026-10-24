@@ -179,6 +179,8 @@ export interface AgentResultViewModel {
   artifacts: ArtifactData[]
   /** Task-level status hint (for terminal/interactive states). */
   taskStatusMessage?: string | null
+  /** The failing Agent's own reason, shown on its card. */
+  failureDetail?: string
   hitlHistory?: { prompt: string; answer: string }[]
   /** Whether this agent is a summary-family system agent. */
   isSummaryAgent: boolean

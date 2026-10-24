@@ -17,6 +17,7 @@ import { canonicalArtifactData } from '@/lib/api/agent-call-detail'
 import type { ArtifactData } from '@/stores/message-store/types'
 import { canonicalAgentCallDetailQueryOptions } from '@/lib/api/canonical-agent-call-detail-query'
 import { Button } from '@/components/ui/button'
+import { failedAddressedAgents, type FailedAddressedAgent } from '@/lib/room-timeline/failed-addressed-agents'
 
 /**
  * Derive Agent Cards from the folded canonical executions.
@@ -54,6 +55,7 @@ function canonicalAgentResults(turn: TurnProjection): AgentResultViewModel[] {
       content: '',
       artifacts: [],
       taskStatusMessage: item.requestSummary || undefined,
+      failureDetail: status === 'failed' ? (item.errorMessage ?? item.errorCode) : undefined,
       isSummaryAgent: false,
       isEphemeral: false,
     }]
@@ -124,7 +126,29 @@ function useCanonicalTurnArtifacts(turn: TurnProjection): {
   }
 }
 
-function CanonicalFinalAnswer({ turn, surfaceRef }: { turn: TurnProjection; surfaceRef?: Ref<HTMLDivElement> }) {
+function FailedAddressedAgentNotice({ agents }: { agents: FailedAddressedAgent[] }) {
+  return (
+    <div className="canonical-failed-agent-notice mb-3 rounded-lg border px-3 py-2 text-sm" role="note" data-failed-addressed-agents>
+      {agents.map((agent) => (
+        <p key={agent.name}>
+          <strong>{agent.name} failed</strong>
+          {agent.reason ? `: ${agent.reason}` : '.'}
+        </p>
+      ))}
+      <p>The reply below is from Hybro, not from {agents.map((agent) => agent.name).join(' or ')}.</p>
+    </div>
+  )
+}
+
+function CanonicalFinalAnswer({
+  turn,
+  userText,
+  surfaceRef,
+}: {
+  turn: TurnProjection
+  userText: string
+  surfaceRef?: Ref<HTMLDivElement>
+}) {
   const { artifacts, loadFailed, retry } = useCanonicalTurnArtifacts(turn)
   // Awaiting-input content lives exclusively in the composer interaction UI.
   // The body area stays empty; the Turn Trace records the event and its
@@ -137,6 +161,7 @@ function CanonicalFinalAnswer({ turn, surfaceRef }: { turn: TurnProjection; surf
     const streaming = assistant?.status === 'streaming'
     // Only a final answer the backend has stored (finalCommitted) is an agent
     // message it accepts as a synthesis quote source; earlier text is not.
+    const failedAgents = failedAddressedAgents(turn, userText)
     const quotable =
       turn.finalCommitted &&
       assistant !== undefined &&
@@ -154,6 +179,7 @@ function CanonicalFinalAnswer({ turn, surfaceRef }: { turn: TurnProjection; surf
         data-streaming={streaming || undefined}
         aria-live={streaming ? 'polite' : undefined}
       >
+        {failedAgents.length > 0 ? <FailedAddressedAgentNotice agents={failedAgents} /> : null}
         {assistant?.text ? (
           <MarkdownContent className="conversation-markdown-body" content={assistant.text} />
         ) : null}
@@ -228,7 +254,11 @@ function CanonicalTurnRendererComponent({
           <Separator className="conversation-trace-separator" />
         ) : null}
         <div data-turn-slot="final">
-          <CanonicalFinalAnswer turn={turn} surfaceRef={primarySurfaceRef} />
+          <CanonicalFinalAnswer
+            turn={turn}
+            userText={userEntity?.messageType === 'user' ? (userEntity.content ?? '') : ''}
+            surfaceRef={primarySurfaceRef}
+          />
         </div>
         {results.length > 0 ? (
           <div data-turn-slot="agents">

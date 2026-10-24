@@ -472,6 +472,13 @@ Its **Work Logs** trigger includes the left-aligned status `Running`,
 `Waiting for input`, or green `Finished`, followed by the whole-Turn duration.
 Failed and canceled terminal Runs also display `Finished`; child action rows
 retain their truthful failure/cancellation state.
+A failed `tool_execution_end` (and its snapshot Tool row) may carry the Agent's
+own `error_code` and `error_message` (null is treated as absent); the fold keeps
+them as `errorCode`/`errorMessage`, and the Agent Card shows the message, or the
+code, under the failed status. When the user mentioned an Agent (`<@id|Name>`
+chips) and every call to that Agent in the Turn failed, the Final Answer is
+preceded by a notice naming the Agent and reason and stating that the reply is
+from Hybro, not that Agent (`failedAddressedAgents`).
 The current Assistant safely renders through `MarkdownContent` in the final slot;
 `message_end(final)` remains provisional until the exact durable response commits
 it. Canonical terminal duration is server-authoritative; live durations tick from the Turn start, while a terminal turn without a
@@ -661,7 +668,10 @@ exact durable identity before their normalized message entities are updated.
 
 Canonical `hitl_request` and `hitl_response` require exact `run_id`,
 `client_request_id`, related User-message roots, the opaque public Tool message
-ID, and durable interaction/request/question identities. The ordered
+ID, and durable interaction/request/question identities. They also accept
+the public presentation fields the translator always sends (`header`,
+`required`, `allow_other`, `choice_options`) and the sanitized `answer_text` on
+a response; any other key is a protocol violation. The ordered
 `run_waiting_input` and `run_resumed` controls make the interaction and Turn
 state change explicit; they reconstruct Turn-owned HITL history without recency
 or REST inference. The producer persists responses and `run_resumed` before it
@@ -741,7 +751,9 @@ parts are renderable when they carry a durable `file_id` or a URI. Canonical
 artifact events and synthetic terminal `${messageId}-parts` projections are
 reconciled by stable part identity (`file_id`, then SHA-256, URI, or canonical
 data), so live detail matches post-refresh hydration without collapsing distinct
-same-name files. `file_unavailable` data renders as a safe unavailable-output
+same-name files. `ArtifactList` numbers repeated display names within one list
+("report (2).docx", `withDistinctFileNames`); file ids and download URLs are
+unchanged. `file_unavailable` data renders as a safe unavailable-output
 notice and is not counted as a file. `PartRenderer` does not create `data:` URLs
 from inline bytes, so stale or malicious SSE cannot surface private file
 content in message state or rendered media.
@@ -939,7 +951,7 @@ segment.
 - `/network`: the Network workspace (see below).
 - `/network/agents/[id]`: AgentCard detail with Chat, Documentation, Share, and
   Remote-only Unregister actions, plus a Subnets section with **Add to subnet**.
-- `/network/agents/new`: Remote agent registration.
+- `/network/agents/new`: Remote agent registration. A 409 conflict toast shows the backend `detail.message` (`registrationConflictMessage`).
 - `/connect/mcp`, `/connect/api`: Connect pages with a scope picker.
 - `/about`, `/pricing`: public pages.
 
@@ -1273,7 +1285,9 @@ it has no selection handler and can never create a Debate request.
 An authoritative open HITL interaction replaces the normal room composer; the UI
 never stacks a second form over a disabled chat input. `selectPendingHitls` groups
 questions by durable `interaction_id`, and `HitlResponseBar` keeps drafts keyed by
-stable `request_id`, presents one question at a time, and submits directly from the
+stable `request_id` (unsent drafts survive a remount of the bar, such as a
+reconnect or snapshot refresh, per `interaction_id` until submitted), presents
+one question at a time, and submits directly from the
 last answer step (no separate review screen). When the open answer surface mounts —
 including after "Applying…" is replaced by a follow-up interaction — the bar
 autofocuses the text/date control (or the prompt heading for choice prompts). While
@@ -1354,4 +1368,7 @@ question content is never duplicated.
 Canonical cards use their opaque message identity only to derive the authenticated
 `run_id + public_call_id` detail request. The detail pane fetches private output from the
 room-authorized backend endpoint and does not reinterpret the opaque card/message ID as
-an Agent profile ID. Public message state remains output-free.
+an Agent profile ID. Public message state remains output-free. The pane's status and
+request text come from the canonical Turn activity whenever it has that call, even if a
+MessageStore entity shares the card id (snapshot HITL recovery anchors an open question
+on a status-less shell entity there); the entity is used only when no activity exists.

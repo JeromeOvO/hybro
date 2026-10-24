@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { HitlResponseBar, type HitlPromptView } from '@/components/composer/HitlResponseBar'
+import { resetUnsentHitlDrafts } from '@/lib/hitl/interaction-controller'
 
 const baseHitl: HitlPromptView = {
   hitlId: 'hitl-1',
@@ -23,8 +24,12 @@ function renderBar(hitls: HitlPromptView[], onSubmit = vi.fn().mockResolvedValue
   )
 }
 
+afterEach(() => {
+  cleanup()
+  resetUnsentHitlDrafts()
+})
+
 describe('HitlResponseBar', () => {
-  afterEach(cleanup)
 
   it('uses one-question focus, preserves drafts by request id, and submits directly', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
@@ -55,6 +60,34 @@ describe('HitlResponseBar', () => {
     ))
     expect(await screen.findByText('Applying your answers')).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
+  })
+
+  it('keeps an unsent draft when the bar remounts, and submits it with Return', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const hitl = {
+      ...baseHitl,
+      interactionId: 'interaction-remount',
+      prompt: 'Who signs the emails?',
+      promptType: 'text' as const,
+    }
+    const first = renderBar([hitl], onSubmit)
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Morgan Reyes' } })
+    // A reconnect or snapshot refresh changes the composer key and remounts.
+    first.unmount()
+    renderBar([hitl], onSubmit)
+    const input = screen.getByPlaceholderText('Type your answer…') as HTMLInputElement
+    expect(input.value).toBe('Morgan Reyes')
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-remount',
+      [{ requestId: 'hitl-1', answer: 'Morgan Reyes' }],
+      undefined,
+    ))
+    // A sent answer is not restored into a later card for the same interaction.
+    cleanup()
+    renderBar([hitl], onSubmit)
+    expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value).toBe('')
   })
 
   it('cancels the exact interaction without submitting an unanswered questionnaire', async () => {
@@ -230,7 +263,6 @@ describe('HitlResponseBar', () => {
 
 
 describe('HitlResponseBar structured questions', () => {
-  afterEach(cleanup)
 
   const destination: HitlPromptView = {
     ...baseHitl,
@@ -340,7 +372,6 @@ describe('HitlResponseBar structured questions', () => {
 
 
 describe('HitlResponseBar decisions', () => {
-  afterEach(cleanup)
 
   it('answers a single approval with one click on Approve', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
@@ -413,7 +444,6 @@ describe('HitlResponseBar decisions', () => {
 
 
 describe('HitlResponseBar optional last question', () => {
-  afterEach(cleanup)
 
   it('sends the earlier answers when the last optional question is skipped', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
@@ -443,7 +473,6 @@ describe('HitlResponseBar optional last question', () => {
 
 
 describe('HitlResponseBar server lifecycle reconciliation', () => {
-  afterEach(cleanup)
 
   it('leaves applying when the authoritative lifecycle reports failed', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)

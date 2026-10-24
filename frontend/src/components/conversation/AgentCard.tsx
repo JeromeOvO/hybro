@@ -27,6 +27,8 @@ interface AgentCardProps {
   /** Appended to status label in compact mode (e.g. artifact count). */
   statusSuffix?: string
   lifecycleStatus?: 'running' | 'awaiting_input' | 'completed' | 'failed' | 'canceled'
+  /** The Agent's own reason for a failed call. */
+  failureDetail?: string
 }
 
 function useAgentFromCatalog(agentId: string | undefined, agentName: string): Agent | undefined {
@@ -94,6 +96,7 @@ export function AgentCard({
   compact = false,
   statusSuffix,
   lifecycleStatus,
+  failureDetail,
 }: AgentCardProps) {
   const catalogAgent = useAgentFromCatalog(agentId, agentName)
   const profileAgentId = agentId ?? catalogAgent?.agent_id
@@ -179,6 +182,15 @@ export function AgentCard({
           </span>
         )}
       </div>
+      {failureDetail && (
+        <p
+          className={cn('conversation-agent-failure-detail truncate text-[12px]', compact ? 'pl-8' : 'pl-[42px]')}
+          style={{ color: 'var(--conversation-danger)' }}
+          title={failureDetail}
+        >
+          {failureDetail}
+        </p>
+      )}
       {!compact && taskDescription && (
         <div className="conversation-agent-task-row flex items-start gap-1.5 pl-[42px]">
           <span className="text-sm leading-none mt-px shrink-0" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>

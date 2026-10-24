@@ -226,6 +226,32 @@ describe('RoomPageShell agent detail pane', () => {
     expect(screen.getAllByText('Weather Agent').length).toBeGreaterThan(0)
   })
 
+  it('uses the canonical card status over a status-less HITL recovery shell entity', async () => {
+    // Snapshot HITL recovery anchors an open question on a shell entity under
+    // the card id. It never receives the call's completion; the Turn does.
+    const messageId = 'orchestrator:run-research:inv_research_0001'
+    const store = useMessageStore.getState()
+    store.removeMessage(messageId)
+    store.upsertMessage({
+      id: messageId,
+      conversationId: 'room-1',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Researcher Alex',
+      timestamp: '2030-01-01T00:00:00.000Z',
+      relatedMessageId: 'user-1',
+      isEphemeral: false,
+    }, 'sse')
+
+    render(<RoomPageShell adapter={{ ...makeAdapter(), getToken: async () => 'token' }} />)
+    act(() => useRoomUiStore.getState().openAgentDetail('room-1', messageId))
+
+    const pane = await screen.findByTestId('agent-response-detail-pane')
+    expect(await within(pane).findByRole('heading', { name: 'Report' })).toBeInTheDocument()
+    expect(within(pane).queryByText('Working on your request…')).not.toBeInTheDocument()
+    expect(within(pane).queryByText('Working')).not.toBeInTheDocument()
+  })
+
   it('shows a private-detail loading state without falling back to public content', () => {
     const messageId = 'orchestrator:run-1:inv_private_0001'
     useMessageStore.getState().upsertMessage(createAgentMessage({
