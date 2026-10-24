@@ -1535,7 +1535,11 @@ dispatch, continuation, and cancellation return to their pre-effect state and
 reuse the frozen command/message ID under `max_transport_attempts`. Background
 `ready_to_dispatch` recovery reloads the exact invocation and re-enters
 `A2AAgentToolRuntime.execute`, so claim, attempt, receipt, observation, backoff,
-and terminal-result accounting match foreground execution. A `401`/`403`/`404`
+and terminal-result accounting match foreground execution. A terminal the
+runtime decides itself (exhausted transport attempts, an invalid Card, a
+rejected dispatch) is recorded as an executor-routed terminal observation
+before the ledger CAS. Recovery discards `execute`'s return value, so ingress
+delivers that observation to the suspended Run. A `401`/`403`/`404`
 or invalid Card becomes the non-retryable `AgentCardContractError` and
 terminalizes the call and its `ToolResult` together; for model-reply
 continuation it also abandons the exact interaction. Sanitized Card exceptions

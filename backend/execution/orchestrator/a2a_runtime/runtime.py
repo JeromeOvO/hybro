@@ -681,23 +681,41 @@ class A2AAgentToolRuntime:
         error_code: str,
     ) -> ToolResult | ToolSuspension:
         result = _result(invocation, status, error_code)
-        terminal = transition_call(
-            record,
-            to_state=status,
-            updated_at=datetime.now(UTC),
-            terminal_result=result,
-            terminal_result_digest=sha256(
-                result.model_dump_json().encode()
-            ).hexdigest(),
-            error_code=error_code,
+        # Record the outcome as evidence like a dispatched terminal. Background
+        # recovery discards the returned result, so ingress must be able to
+        # deliver it to the suspended Run.
+        observation = NormalizedA2AObservation(
+            observation_id=_stable(
+                "runtime-terminal", record.call_record_id, status, error_code
+            ),
+            call_record_id=record.call_record_id,
+            source_kind="inspection",
+            source_identity=f"runtime:{record.call_record_id}:{status}:{error_code}",
+            binding_scope=record.endpoint_scope_digest,
+            event_kind="terminal",
+            observed_at=datetime.now(UTC),
+            task_id=record.a2a_task_id,
+            context_id=record.a2a_context_id,
+            status=status,
+            content=result.content,
+            error_code=result.error_code,
             error_message=result.error_message,
+        )
+        await self.observations.record(observation)
+        terminal = apply_observation(
+            record, observation, recent_limit=self.policy.recent_observation_id_limit
         )
         outcome = await self.ledger.cas(
             terminal, expected_state_version=record.state_version
         )
-        if outcome in {"accepted", "replayed"}:
-            return await self._finalized_terminal_or_suspension(terminal, invocation)
-        return await self._persisted_outcome_or_suspension(invocation)
+        if outcome not in {"accepted", "replayed"} or terminal.terminal_result is None:
+            return await self._persisted_outcome_or_suspension(invocation)
+        assert terminal.terminal_result_digest is not None
+        await self.observations.mark_executor_outcome(
+            observation.observation_id,
+            outcome_digest=terminal.terminal_result_digest,
+        )
+        return await self._finalized_terminal_or_suspension(terminal, invocation)
 
     async def _persisted_outcome_or_suspension(
         self, invocation: ToolInvocation

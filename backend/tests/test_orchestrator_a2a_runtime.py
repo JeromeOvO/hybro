@@ -553,6 +553,42 @@ async def test_production_recovery_cycle_bounds_repeated_card_503():
     assert sdk.card_fetches == terminal.runtime_policy.max_transport_attempts
 
 
+async def test_recovery_exhausted_transport_leaves_terminal_for_suspended_run():
+    """Recovery discards execute()'s result, so the terminal must be recorded
+    as an executor-routed observation that ingress can deliver to the Run."""
+    dispatch, _ = flaky_card_dispatch(
+        [A2AClientFacadeError("unavailable", status_code=503)] * 3
+    )
+    runtime, ledger, _, _, ingress = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+    first = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    assert isinstance(first, ToolSuspension)
+
+    for _ in range(2):
+        await make_call_due(ledger)
+        await _run_production_recovery_cycle(
+            runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+        )
+
+    terminal = await ledger.load("run-1", "call-1")
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.error_code == "agent_card_transport_unavailable"
+    row = await ingress.inbox.load(terminal.recent_observation_ids[-1])
+    assert row is not None
+    assert row.event_kind == "terminal"
+    assert row.observation.status == "failed"
+    assert row.observation.error_code == "agent_card_transport_unavailable"
+    assert row.delivery_route == "executor"
+    assert row.outcome_digest == terminal.terminal_result_digest
+
+
 async def test_production_recovery_cycle_terminalizes_card_404_once():
     dispatch, sdk = flaky_card_dispatch(
         [
