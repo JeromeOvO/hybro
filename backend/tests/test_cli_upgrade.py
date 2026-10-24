@@ -145,3 +145,40 @@ def test_unrecognized_versions_are_refused_rather_than_compared(monkeypatch):
 
     with pytest.raises(RuntimeConfigurationError, match="Unrecognized version"):
         cli_upgrade.run(check=True)
+
+
+@pytest.mark.parametrize(
+    "installed,newest,expected",
+    [
+        ("npm", "0.3.0", "0.3.0"),
+        ("npm", "0.2.15", None),
+        ("archive", "0.2.16", "0.2.16"),
+        ("checkout", "9.9.9", None),
+    ],
+)
+def test_newer_release_names_only_a_newer_version(
+    monkeypatch, installed, newest, expected
+):
+    timeouts = []
+    monkeypatch.setattr(cli_upgrade, "installation", lambda: installed)
+    monkeypatch.setattr(cli_upgrade, "version", lambda: "0.2.15")
+    monkeypatch.setattr(
+        cli_upgrade, "latest", lambda timeout: timeouts.append(timeout) or newest
+    )
+    assert cli_upgrade.newer_release() == expected
+    # The TUI tip is bounded well below the explicit upgrade timeout.
+    assert all(t <= 5 for t in timeouts)
+
+
+@pytest.mark.parametrize("answer", ["offline", "1.0.0\x1b[31m", "latest"])
+def test_newer_release_is_silent_when_the_registry_cannot_answer(monkeypatch, answer):
+    monkeypatch.setattr(cli_upgrade, "installation", lambda: cli_upgrade.NPM)
+    monkeypatch.setattr(cli_upgrade, "version", lambda: "0.2.15")
+
+    def latest(timeout):
+        if answer == "offline":
+            raise RuntimeConfigurationError("Cannot reach the npm registry.")
+        return answer
+
+    monkeypatch.setattr(cli_upgrade, "latest", latest)
+    assert cli_upgrade.newer_release() is None

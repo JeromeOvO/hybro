@@ -31,6 +31,18 @@ def console_with(*choices):
 
 
 @pytest.fixture(autouse=True)
+def saved_setup(tmp_path, monkeypatch):
+    """A saved connection in a private HYBRO_HOME; never the user's ~/.hybro."""
+    from common.config.runtime_store import RuntimeConfigStore
+    from tests.fakes.llm_runtime import oauth_config, oauth_credential
+
+    home = tmp_path / "hybro-home"
+    RuntimeConfigStore(home).save(oauth_config(), oauth_credential(), {})
+    monkeypatch.setenv("HYBRO_HOME", str(home))
+    return home
+
+
+@pytest.fixture(autouse=True)
 def mock_status(monkeypatch):
     reader = Mock(
         return_value=[
@@ -549,3 +561,139 @@ def test_public_gateway_exports_still_resolve_original_classes():
 
     assert LLMGatewayImpl is OriginalGateway
     assert ModelRegistryImpl is OriginalRegistry
+
+
+@pytest.mark.parametrize(
+    "action,arguments",
+    [
+        ("start", ("start", "--build")),
+        ("apply", ("start", "--recreate", "--build")),
+        ("stop", ("stop",)),
+    ],
+)
+def test_source_checkout_starts_build_images_from_the_checkout(action, arguments):
+    """Compose reuses old local images, so a checkout start must rebuild them."""
+    run = Mock(return_value=0)
+    choices = ("services", action, "run") if action == "apply" else ("services", action)
+    assert cli_tui.main(console=console_with(*choices), run=run, build=True) == 130
+    run.assert_called_once_with(arguments)
+
+
+def test_pending_save_is_announced_on_the_services_page(mock_status):
+    screens = []
+    console = console_with("models")
+    original = console.select
+
+    def select(title, options):
+        screens.append(title)
+        return original(title, options)
+
+    console = SetupConsole(select, console.read_secret, console.write, console.pause)
+    assert cli_tui._services_page(console, Mock(), "start", pending_apply=True) == (
+        "start",
+        True,
+        None,
+    )
+    assert "not applied yet" in screens[0].notice
+
+
+def test_start_without_a_saved_connection_explains_instead_of_failing(saved_setup):
+    for name in ("config.json", "auth.json"):
+        (saved_setup / name).unlink()
+    run = Mock(return_value=0)
+    screens = []
+    console = console_with("services", "start", "models")
+    original = console.select
+
+    def select(title, options):
+        screens.append(title)
+        return original(title, options)
+
+    console = SetupConsole(select, console.read_secret, console.write, console.pause)
+    assert cli_tui.main(console=console, run=run) == 130
+    run.assert_not_called()
+    assert "No connection is saved yet" in screens[2].notice
+
+
+def test_upgrade_tells_the_user_to_restart_the_tui():
+    screens = []
+    console = console_with("upgrade", "run", "models")
+    original = console.select
+
+    def select(title, options):
+        screens.append(title)
+        return original(title, options)
+
+    console = SetupConsole(select, console.read_secret, console.write, console.pause)
+    cli_tui._services_page(console, Mock(return_value=0), "start")
+    assert "exit and run hybro again" in screens[-1].notice
+
+
+def test_services_page_announces_the_status_check(mock_status):
+    console = console_with("models")
+    cli_tui._services_page(console, Mock(), "start")
+    console.write.assert_called_once_with("Checking service status...")
+
+
+def _recording(*choices):
+    screens = []
+    console = console_with(*choices)
+    original = console.select
+
+    def select(title, options):
+        screens.append(title)
+        return original(title, options)
+
+    return (
+        SetupConsole(select, console.read_secret, console.write, console.pause),
+        screens,
+    )
+
+
+def test_newer_release_is_checked_once_and_shown_on_services():
+    releases = Mock(return_value="0.3.0")
+    console, screens = _recording("services", "models", "services", "models")
+    assert cli_tui.main(console=console, run=Mock(), releases=releases) == 130
+    releases.assert_called_once_with()
+    services = [s for s in screens if getattr(s, "tab", "") == "services"]
+    assert len(services) == 2
+    assert all("hybro 0.3.0 is available" in s.notice for s in services)
+
+
+def test_no_tip_when_current_and_no_check_before_services():
+    releases = Mock(return_value=None)
+    console, screens = _recording("services", "models")
+    assert cli_tui.main(console=console, run=Mock(), releases=releases) == 130
+    releases.assert_called_once_with()
+    assert not any("is available" in getattr(s, "notice", "") for s in screens)
+
+    untouched = Mock()
+    assert (
+        cli_tui.main(
+            console=console_with("model", "gpt-6.1-sol"), run=Mock(), releases=untouched
+        )
+        == 130
+    )
+    untouched.assert_not_called()
+
+
+@pytest.mark.parametrize("result,cleared", [(0, True), (1, False)])
+def test_tip_clears_only_after_a_finished_upgrade(result, cleared):
+    console, screens = _recording("services", "upgrade", "run", "models")
+    run = Mock(return_value=result)
+    releases = Mock(return_value="0.3.0")
+    assert cli_tui.main(console=console, run=run, releases=releases) == 130
+    run.assert_called_once_with(("upgrade",))
+    last = [s for s in screens if getattr(s, "tab", "") == "services"][-1]
+    assert ("is available" in last.notice) is not cleared
+
+
+def test_checkout_upgrade_explains_git_instead_of_failing():
+    """A checkout cannot upgrade from a release; say how, without a failed run."""
+    console, screens = _recording("services", "upgrade", "models")
+    run = Mock()
+    assert cli_tui.main(console=console, run=run, build=True) == 130
+    run.assert_not_called()
+    console.pause.assert_not_called()
+    last = [s for s in screens if getattr(s, "tab", "") == "services"][-1]
+    assert "git pull" in last.notice

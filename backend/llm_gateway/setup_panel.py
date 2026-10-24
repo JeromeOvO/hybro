@@ -32,13 +32,19 @@ class SetupPanel:
         self.console = console
         self.environment = environment
         self.prepared: _PreparedAuthentication | None = None
-        self.notice = "Not checked: credentials or backend activation."
+        self.notice = ""
         self.focus = "model"
         try:
             if prepare_setup_directory(service.store.home):
                 self.notice = "Corrected runtime directory permissions to 0700."
             self.saved = _read_current_config(service)
-        except (OSError, RuntimeConfigurationError, SetupError):
+            if self.saved is None:
+                self.notice = "Choose Connection to pick a provider and sign in."
+        except SetupError:
+            # A parsed file whose model left the catalog, e.g. a retired model.
+            self.saved = None
+            self.notice = "The saved model is no longer offered. Configure a connection to choose a current model."
+        except (OSError, RuntimeConfigurationError):
             self.saved = None
             self.notice = "Saved configuration is invalid or unreadable. Configure a connection to repair it."
         self.draft = self.saved
@@ -179,8 +185,8 @@ class SetupPanel:
             self.prepared = None
             self.focus = "model"
             self.notice = (
-                "Saved locally; backend was not restarted.\n"
-                "Apply: docker compose up -d --build --no-deps --force-recreate backend"
+                "Saved locally; running services still use the previous settings.\n"
+                "Apply: Services [Tab] > Start services."
             )
             return
         self.notice = "Changes are local until Verify and save; images are not probed."

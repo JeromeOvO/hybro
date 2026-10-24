@@ -430,6 +430,7 @@ def _tui(arguments: list[str]) -> int:
         raise RuntimeConfigurationError("hybro tui does not accept arguments.")
     if not _interactive():
         return _help(arguments)
+    from cli_upgrade import newer_release
     from llm_gateway import cli_tui
 
     return cli_tui.main(
@@ -438,6 +439,8 @@ def _tui(arguments: list[str]) -> int:
         problem=docker_problem,
         version=version(),
         mcp_status=read_mcp_status,
+        build=resolve().checkout,
+        releases=newer_release,
     )
 
 
@@ -551,7 +554,17 @@ def _start(arguments: list[str]) -> int:
         params.append("--build")
     if options.recreate:
         params.append("--force-recreate")
-    return compose(params, start=True, files=options.compose_file)
+    result = compose(params, start=True, files=options.compose_file)
+    if result and result != 130 and not resolve().checkout:
+        # A release whose images were not all published fails here, and Compose
+        # reports it only as "not found" or "manifest unknown".
+        print(
+            f"If Docker reported an image as not found or 'manifest unknown', "
+            f"hybro {version()} was not fully published. Run hybro upgrade, or "
+            "report it at https://github.com/hybroai/hybro/issues.",
+            file=sys.stderr,
+        )
+    return result
 
 
 def _mcp(arguments: list[str]) -> int:

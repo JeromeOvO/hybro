@@ -23,6 +23,8 @@ from common.config.runtime_config import RuntimeConfigurationError
 PACKAGE = "@hybroai/cli"
 REPOSITORY = "hybroai/hybro"
 _NETWORK_TIMEOUT = 15
+# The TUI tip must not hold the Services page for long when offline.
+_TIP_TIMEOUT = 4
 
 # How the CLI was installed. "checkout" is also what cli_stack reports for a
 # source tree, so callers can compare against one spelling.
@@ -63,13 +65,13 @@ def platform_name() -> str:
     return f"{system}-{architecture}"
 
 
-def _npm_latest() -> str:
+def _npm_latest(timeout: float = _NETWORK_TIMEOUT) -> str:
     try:
         result = subprocess.run(
             ["npm", "view", PACKAGE, "version"],
             capture_output=True,
             text=True,
-            timeout=_NETWORK_TIMEOUT,
+            timeout=timeout,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -83,13 +85,13 @@ def _npm_latest() -> str:
     return result.stdout.strip()
 
 
-def _release_latest() -> str:
+def _release_latest(timeout: float = _NETWORK_TIMEOUT) -> str:
     request = urllib.request.Request(
         f"https://api.github.com/repos/{REPOSITORY}/releases/latest",
         headers={"Accept": "application/vnd.github+json", "User-Agent": "hybro-cli"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_NETWORK_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             document = json.load(response)
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         raise RuntimeConfigurationError(
@@ -101,9 +103,9 @@ def _release_latest() -> str:
     return tag.removeprefix("v")
 
 
-def latest() -> str:
+def latest(timeout: float = _NETWORK_TIMEOUT) -> str:
     """The newest published version on this installation's channel."""
-    return _npm_latest() if installation() == NPM else _release_latest()
+    return _npm_latest(timeout) if installation() == NPM else _release_latest(timeout)
 
 
 def _numbered(value: str) -> tuple[int, int, int]:
@@ -112,6 +114,24 @@ def _numbered(value: str) -> tuple[int, int, int]:
     if len(parts) != 3 or not all(part.isdigit() for part in parts):
         raise RuntimeConfigurationError(f"Unrecognized version: {value}.")
     return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def newer_release() -> str | None:
+    """The newest release when it is newer than this CLI, else ``None``.
+
+    Best effort for the TUI tip: a checkout, no network, or an unexpected answer
+    yields ``None`` instead of an error, so the Services page still opens.
+    """
+    try:
+        if installation() == CHECKOUT:
+            return None
+        newest = _numbered(latest(timeout=_TIP_TIMEOUT))
+        if newest <= _numbered(version()):
+            return None
+    except RuntimeConfigurationError:
+        return None
+    # Rebuilt from the parsed numbers, so only digits and dots reach the terminal.
+    return ".".join(map(str, newest))
 
 
 def _install_from_npm() -> None:

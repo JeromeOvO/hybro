@@ -893,14 +893,26 @@ confirmation; Ctrl-C exits without saving.
 
 Services delegates to existing commands through the host CLI's `main`
 dispatcher, not raw Compose. **Start services** starts the full stack, including
-MCP. **MCP connection** shows status, URL, and transport with start, stop, logs,
+MCP. Containers read `config.json` only at startup and Compose cannot detect a
+change inside that mounted file, so the first Start after a verify-and-save in
+the same TUI session runs `start --recreate`; the page says the save is not
+applied yet until that succeeds. Without a saved connection, Start and Reload configuration explain how to
+set one up instead of running. After Upgrade the page asks the user to restart
+`hybro`, because the running process keeps its own version. A failed start on a
+released install adds a hint that a missing image means the release was not
+fully published. **MCP connection** shows status, URL, and transport with start, stop, logs,
 and refresh actions; `hybro mcp start` requires setup and a running backend and
 starts only MCP (`up -d --no-deps mcp`). Status is read on entry, refresh, and
 after actions. The page shows the CLI and stack version (equal by construction)
-and offers Upgrade. When Compose cannot be read, the CLI injects a Docker
+and offers Upgrade. The first Services visit in a session asks the injected
+`cli_upgrade.newer_release` once (bounded to a few seconds, silent on failure, no
+check from a checkout) and names a newer release on the page until Upgrade
+finishes. When Compose cannot be read, the CLI injects a Docker
 diagnosis (missing binary, stopped daemon, or missing Compose plugin). Reload
-configuration recreates containers from saved configuration; the TUI never
-passes `--build`. Removal and forced recreation require Cancel-default
+configuration recreates containers from saved configuration. From a source
+checkout, Start and Reload configuration also pass `--build`, because Compose
+otherwise keeps images built from an older checkout; a released install never
+builds. Removal and forced recreation require Cancel-default
 confirmation.
 
 `./scripts/hybro setup` selects Provider and authentication, acquires

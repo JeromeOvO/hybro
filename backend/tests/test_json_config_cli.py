@@ -155,6 +155,19 @@ def test_released_install_rejects_build_and_the_baked_routing_prefix(
     assert config.backend["log_level"] == "DEBUG"
 
 
+@pytest.mark.parametrize("checkout", [False, True])
+def test_failed_release_start_hints_at_an_unpublished_image(
+    monkeypatch, capsys, released_install, checkout
+):
+    """Compose says only "manifest unknown" when a release image is missing."""
+    if checkout:
+        monkeypatch.setattr(released_install, "checkout_root", lambda: Path("/repo"))
+    monkeypatch.setattr(cli, "compose", lambda *a, **k: 1)
+    assert cli.main(["start"]) == 1
+    hinted = "was not fully published" in capsys.readouterr().err
+    assert hinted is not checkout
+
+
 def test_extra_compose_files_must_exist_beside_the_stack():
     stack = cli.resolve()
     assert cli.compose_files(stack) == [str(stack.compose)]
@@ -270,6 +283,7 @@ def test_migration_rejects_unsafe_explicit_environment_input(
 
 def test_tui_entry_point_injects_host_service_effects(monkeypatch):
     """The gateway TUI never imports the host CLI; the entry point supplies effects."""
+    import cli_upgrade
     from llm_gateway import cli_tui
 
     captured = {}
@@ -282,6 +296,9 @@ def test_tui_entry_point_injects_host_service_effects(monkeypatch):
         "problem": cli.docker_problem,
         "version": cli.version(),
         "mcp_status": cli.read_mcp_status,
+        # A checkout builds on start; a released install never does.
+        "build": cli.resolve().checkout,
+        "releases": cli_upgrade.newer_release,
     }
 
 

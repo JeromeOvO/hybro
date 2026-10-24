@@ -60,7 +60,9 @@ hybro start          # pulls the images published for this CLI's version
 - **MCP Server**: http://127.0.0.1:8001/mcp (Streamable HTTP, same-host clients)
 
 Running `hybro` with no arguments opens the same settings/services interface in
-a terminal. `hybro --version` prints the CLI and stack version.
+a terminal. After **Verify and save** there, **Start services** recreates the
+containers so the saved settings take effect; from a checkout it also rebuilds
+images. `hybro --version` prints the CLI and stack version.
 
 Alternatively, run the CLI without installing it by unpacking a release asset
 (`hybro-<version>-<platform>.tar.gz` from the GitHub Release) and executing

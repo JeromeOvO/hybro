@@ -61,7 +61,7 @@ def test_model_only_edit_reuses_auth_and_does_not_save_until_requested(
     assert signal.getsignal(signal.SIGINT) == previous_signal
     verifier.assert_awaited_once()
     assert store.load({}).config.models.text == "gpt-6.1-sol"
-    assert not panel.dirty and "backend was not restarted" in panel.notice
+    assert not panel.dirty and "Start services" in panel.notice
     assert next(option.value for option in panel.options() if option.current) == "model"
     login.assert_not_awaited()
     console.read_secret.assert_not_called()
@@ -242,3 +242,63 @@ def test_fixed_screen_redraw_current_value_and_restoration(monkeypatch):
     assert text.endswith("\x1b[?25h\x1b[?1049l")
     assert "> B [current]" in text
     assert f"\x1b[{SELECTED_STYLE}m> B [current]" in text
+
+
+def test_start_after_save_recreates_so_the_new_connection_applies(
+    tmp_path, monkeypatch
+):
+    """Compose cannot see config.json changes, so a plain start kept old settings."""
+    monkeypatch.setattr(
+        "llm_gateway.openai_oauth.login",
+        AsyncMock(side_effect=AssertionError("Must reuse stored OAuth")),
+    )
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    service = SetupService(store, model_choices, AsyncMock())
+    run = Mock(return_value=0)
+    console = console_with(
+        "model", "gpt-6.1-sol", "save", "services", "start", "start", "models"
+    )
+    assert main(console=console, run=run, service=service, environment={}) == 130
+    assert store.load({}).config.models.text == "gpt-6.1-sol"
+    # Applied once; the next start in the same session is an ordinary start.
+    assert [c.args[0] for c in run.call_args_list] == [
+        ("start", "--recreate"),
+        ("start",),
+    ]
+    console.write.assert_any_call("Running hybro start --recreate ...")
+
+
+def test_failed_apply_keeps_the_saved_configuration_pending(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "llm_gateway.openai_oauth.login",
+        AsyncMock(side_effect=AssertionError("Must reuse stored OAuth")),
+    )
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    service = SetupService(store, model_choices, AsyncMock())
+    run = Mock(side_effect=[1, 0])
+    console = console_with("save", "services", "start", "start")
+    assert main(console=console, run=run, service=service, environment={}) == 130
+    assert [c.args[0] for c in run.call_args_list] == [
+        ("start", "--recreate"),
+        ("start", "--recreate"),
+    ]
+
+
+def test_retired_saved_model_asks_for_a_current_model(tmp_path):
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    store.save(oauth_config(), oauth_credential(), {})
+    path = store.home / "config.json"
+    path.write_text(path.read_text().replace('"gpt-6-sol"', '"gpt-5.5"'))
+    service = SetupService(store, model_choices, AsyncMock())
+    panel = SetupPanel(service, console_with(), {})
+    assert panel.saved is None and "no longer offered" in panel.notice
+
+
+def test_first_run_notice_says_what_to_do(tmp_path):
+    store = RuntimeConfigStore(tmp_path / "runtime")
+    panel = SetupPanel(
+        SetupService(store, model_choices, AsyncMock()), console_with(), {}
+    )
+    assert panel.saved is None and "Choose Connection" in panel.notice
