@@ -75,17 +75,29 @@ jobs:
           fi
           echo "value=$declared" >> "$GITHUB_OUTPUT"
 
+  # Each architecture builds on its own native runner. Emulated arm64 builds ran
+  # `npm ci` for the frontend under QEMU, which hung until the six-hour job limit
+  # and left v0.2.19 without a frontend image. Every image is pushed by digest
+  # here and gets its version tags in `images-manifest` once both arches exist.
   images:
-    name: Image ${{ matrix.name }}
+    name: Image ${{ matrix.image.name }} ${{ matrix.arch.name }}
     needs: [version]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
       matrix:
-        include:
+        arch:
+          - name: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - name: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+        image:
           - name: backend
             context: ./backend
             dockerfile: ./backend/Dockerfile
@@ -143,8 +155,8 @@ jobs:
       - name: Assemble build args
         id: args
         run: |
-          args="${{ matrix.build-args }}"
-          if [ "${{ matrix.name }}" = "frontend" ]; then
+          args="${{ matrix.image.build-args }}"
+          if [ "${{ matrix.image.name }}" = "frontend" ]; then
             args="${args}
           HYBRO_FRONTEND_CONFIG=$(cat packaging/frontend/public-config.json)"
           fi
@@ -163,21 +175,84 @@ jobs:
 
       # Image names must match default_agents/render_release.py, which is what an
       # installed CLI resolves: <namespace>/hybro-<compose service name>:<version>.
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
           build-args: ${{ steps.args.outputs.value }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/hybro-${{ matrix.name }}:${{ needs.version.outputs.value }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/hybro-${{ matrix.name }}:latest
+          platforms: ${{ matrix.arch.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/hybro-${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
 
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digest"
+          touch "$RUNNER_TEMP/digest/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image.name }}-${{ matrix.arch.name }}
+          path: ${{ runner.temp }}/digest/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Tags a version only when every image exists for both arches, so a partial
+  # build can never publish a version tag that an installed CLI would resolve.
+  images-manifest:
+    name: Tag images
+    needs: [version, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch version tags
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -eu
+          prefix="${REGISTRY}/${IMAGE_NAMESPACE}/hybro-"
+          for name in $(ls | sed -E 's/^digest-(.*)-(amd64|arm64)$/\1/' | sort -u); do
+            refs=""
+            for arch in amd64 arm64; do
+              digest=$(ls "digest-${name}-${arch}")
+              refs="$refs ${prefix}${name}@sha256:${digest}"
+            done
+            # shellcheck disable=SC2086  # $refs is a deliberate list of sources.
+            docker buildx imagetools create \
+              -t "${prefix}${name}:${VERSION}" \
+              -t "${prefix}${name}:latest" \
+              $refs
+            docker buildx imagetools inspect "${prefix}${name}:${VERSION}"
+          done
+
+  # The CLI pins the stack to its own version, so nothing user-installable is
+  # published until every image of that version is tagged.
   cli:
     name: CLI ${{ matrix.platform }}
-    needs: [version]
+    needs: [version, images-manifest]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -313,7 +388,7 @@ jobs:
     name: Verify the published stack resolves
     # Waits for every publisher: a missing npm package or a failed platform
     # build must fail the release rather than pass an images-only check.
-    needs: [version, images, cli, npm-cli]
+    needs: [version, images-manifest, cli, npm-cli]
     runs-on: ubuntu-latest
     permissions:
       contents: read
