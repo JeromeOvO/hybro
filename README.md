@@ -289,6 +289,31 @@ once. A released CLI older than this change rejects a `config.json` that contain
 the CLI: a bare `docker compose` call in a checkout targets `hybro-dev` with the
 release default ports.
 
+A checkout that ran before this split used project `hybro`. Its containers keep
+holding 3000/8000/8001 and its data stays in the `hybro_*` volumes, because
+`./scripts/hybro stop` now stops only `hybro-dev`. Move it once, before the first
+dev start:
+
+```bash
+docker compose -p hybro down
+```
+
+```bash
+for n in mongo_data redis_data room_files; do
+  docker volume create --label com.docker.compose.project=hybro-dev \
+    --label com.docker.compose.volume=$n hybro-dev_$n
+  docker run --rm -v hybro_$n:/from:ro -v hybro-dev_$n:/to alpine cp -a /from/. /to/
+done
+```
+
+```bash
+./scripts/hybro start --build --recreate
+```
+
+Once the dev stack shows your data, the `hybro_*` volumes can be removed. Skip
+this when a released install already uses project `hybro`: those are its own
+containers and volumes.
+
 `docker-compose.release.yml` is generated from `docker-compose.yml` by
 `default_agents/render_release.py`, which swaps every `build:` block for an
 `image:` reference. It is checked in and verified by CI, so the two stacks cannot

@@ -268,7 +268,7 @@ def test_derived_public_values_follow_the_instance():
     assert cli_ports.frontend_origin(dev) == "http://localhost:3100"
 
 
-@pytest.mark.parametrize("host", ["localhost", "127.0.0.1"])
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])
 def test_loopback_public_urls_are_ignored_with_a_warning(host):
     dev = cli_ports.effective_ports(None, "dev", AGENTS)
     public, warnings = cli_ports.derive_public(
@@ -471,7 +471,7 @@ def test_container_origin_keeps_configured_public_entries(
     runtime, get_settings = container_settings
     runtime.update_config(
         ["backend", "frontend_origins"],
-        ["http://127.0.0.1:3000", "https://app.example.org"],
+        ["http://127.0.0.1:3000", "http://[::1]:3000", "https://app.example.org"],
     )
     monkeypatch.setenv("HYBRO_FRONTEND_ORIGIN", "http://localhost:3100")
     assert get_settings().frontend_origins == [

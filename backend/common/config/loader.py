@@ -579,7 +579,7 @@ class FrontendSettings(BaseModel):
 
 _DEFAULT_FRONTEND_ORIGINS = Settings.model_fields["frontend_origins"].default
 # Hosts a configured URL or origin names when it means "this machine".
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _with_local_origin(configured: object, origin: str) -> list[str]:
