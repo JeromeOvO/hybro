@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/hybroai/hybro/compare/v0.2.19...v0.3.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename room_id to conversation_id in code, API, and frontend wire
+* **a2a:** speak A2A 1.0 only and reject pre-1.0 agent cards
+* delete legacy stored-data tolerances
+* **api:** serve rooms from canonical /rooms routes instead of /roomCenter
+* **agent:** return flat AgentView DTOs from /agent routes
+
+### Features
+
+* **a2a:** reach A2A 0.3 agents through the SDK compatibility transport ([4454ced](https://github.com/hybroai/hybro/commit/4454cedf2114d2c963ff9396295db55b2a4f81e6))
+* **a2a:** register authenticated push notifications for canonical calls ([b7da47b](https://github.com/hybroai/hybro/commit/b7da47b87cb7c9157c8b3fb1ec5e343af90705aa))
+* **a2a:** speak A2A 1.0 only and reject pre-1.0 agent cards ([c9d7e02](https://github.com/hybroai/hybro/commit/c9d7e02ebebe12f777a9f9e55c58c2057f1fdfcb))
+* **agent:** return flat AgentView DTOs from /agent routes ([63a285c](https://github.com/hybroai/hybro/commit/63a285cb141502abc74e6ec893223431094873c6))
+* **api:** serve rooms from canonical /rooms routes instead of /roomCenter ([2fffe8d](https://github.com/hybroai/hybro/commit/2fffe8d9494091f4d48c878c65f27bffab319b0b))
+* **cli:** run dev and release instances side by side ([a8ecadf](https://github.com/hybroai/hybro/commit/a8ecadf62758d0468c40f1fa1bb2489a6dfba696))
+* **cli:** run dev and release instances side by side ([cadc520](https://github.com/hybroai/hybro/commit/cadc5207b86192e7e137627776397812eef7c488))
+* **scripts:** add read-only legacy lifecycle readiness report ([29a43fd](https://github.com/hybroai/hybro/commit/29a43fd4f61ef20228489fd8b6f88d2b70679644))
+* **scripts:** add read-only orphan module reachability report ([6343ec8](https://github.com/hybroai/hybro/commit/6343ec84e8c768a1f68d8fe8b880f6be63cf7121))
+
+
+### Bug Fixes
+
+* **agent:** resolve registration URL conflicts with typed 409 codes ([e3af01c](https://github.com/hybroai/hybro/commit/e3af01cd24bd7ef4dea2c9fa52bbf9f27188bf87))
+* **cli:** make the TUI a complete path from setup to running services ([13d5c52](https://github.com/hybroai/hybro/commit/13d5c5219161d6e3b6eae2ee3b87c864a4f7191f))
+* **context_memory:** drop the retired turn_notes_text index at startup ([0147b28](https://github.com/hybroai/hybro/commit/0147b28d248ce233bad9c766be36f9f46e416b92))
+* **execution:** gate compaction sweep on canonical runs and share run status sets ([d9e51ee](https://github.com/hybroai/hybro/commit/d9e51ee9d0fd0d581de8852460b08f715c9e73e2))
+* **execution:** keep a canceling Run's recovery claim from blocking recovery ([d49d34d](https://github.com/hybroai/hybro/commit/d49d34db92a961f8330614c50992f334aa47619c))
+* fence registration takeover and validate runs with the recovery row ([19b78ad](https://github.com/hybroai/hybro/commit/19b78ad6d90af07591e81fcee81b10d1cebc9490))
+* **llm_gateway:** offer current ChatGPT/Codex subscription models ([64f3a1a](https://github.com/hybroai/hybro/commit/64f3a1a9c860001d86f764ebd446f29f265cfb0f))
+* **orchestrator:** carry earlier files and HITL answers into follow-up turns ([4ea5807](https://github.com/hybroai/hybro/commit/4ea58076e6e84da8df812d5715e1fd034232e295))
+* **orchestrator:** deliver runtime-decided call terminals to suspended runs ([27a8756](https://github.com/hybroai/hybro/commit/27a8756843655dfc0f6a6f69c09e17dee8363cdd))
+* **orchestrator:** surface agent errors and keep HITL answers in the transcript ([c639778](https://github.com/hybroai/hybro/commit/c6397786e8be043456d784bd2ff85856fa5ca356))
+* **quotes:** send structured quotes only and make answers quotable ([440551d](https://github.com/hybroai/hybro/commit/440551d37fdb9c6bb884532cfa2ca6dabc67f4b0))
+* **room:** show agent failures and keep HITL drafts across refresh ([ab44715](https://github.com/hybroai/hybro/commit/ab447154f17e69ae7b34e3f022c693ea6d8db7d0))
+* treat IPv6 loopback as local and document the dev stack move ([5f0f15a](https://github.com/hybroai/hybro/commit/5f0f15aaf250e7f114c993b40f13a8fb96e60e61))
+
+
+### Code Refactoring
+
+* delete legacy stored-data tolerances ([cbabe83](https://github.com/hybroai/hybro/commit/cbabe8394d852cfa018d090b06afa6a559177b8d))
+* rename room_id to conversation_id in code, API, and frontend wire ([99fb23d](https://github.com/hybroai/hybro/commit/99fb23d1beb0f45f6f40d20eafafdb3446421ea8))
+
 ## [0.2.19](https://github.com/hybroai/hybro/compare/v0.2.18...v0.2.19) (2026-10-17)
 
 
