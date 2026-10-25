@@ -281,25 +281,36 @@ def test_migration_rejects_unsafe_explicit_environment_input(
     assert not (runtime.home / "config.json").exists()
 
 
-def test_tui_entry_point_injects_host_service_effects(monkeypatch):
+def test_tui_entry_point_injects_host_service_effects(monkeypatch, tmp_path):
     """The gateway TUI never imports the host CLI; the entry point supplies effects."""
     import cli_upgrade
     from llm_gateway import cli_tui
 
+    # Before setup there is no config.json; the TUI must still open.
+    monkeypatch.setenv("HYBRO_HOME", str(tmp_path / "absent"))
     captured = {}
     monkeypatch.setattr(cli, "_interactive", lambda: True)
     monkeypatch.setattr(cli_tui, "main", lambda **kwargs: captured.update(kwargs) or 0)
     assert cli.main([]) == 0
+    instance = captured.pop("instance")
     assert captured == {
         "status": cli.service_status,
         "run": cli.main,
         "problem": cli.docker_problem,
         "version": cli.version(),
-        "mcp_status": cli.read_mcp_status,
+        "mcp_status": cli.instance_mcp_status,
         # A checkout builds on start; a released install never does.
         "build": cli.resolve().checkout,
         "releases": cli_upgrade.newer_release,
     }
+    assert instance.name == "dev"
+    assert instance.save is cli.set_port
+    snapshot = instance.read()
+    assert snapshot.frontend_url == "http://localhost:3100"
+    assert snapshot.mcp_url == "http://127.0.0.1:8101/mcp"
+    assert ("frontend", 3100) in {(e.field, e.port) for e in snapshot.entries}
+    assert all(entry.default for entry in snapshot.entries)
+    assert not (tmp_path / "absent").exists()
 
 
 def test_tui_without_a_terminal_prints_help_instead_of_opening(monkeypatch, capsys):
@@ -349,12 +360,21 @@ def test_mcp_stop_and_logs_do_not_load_credentials(monkeypatch, action, expected
 
 
 @pytest.mark.parametrize("status", ["ready", "unavailable", "unsupported_auth"])
-def test_mcp_status_is_read_only_and_explains_auth(monkeypatch, capsys, status):
-    monkeypatch.setattr(cli, "read_mcp_status", lambda: status)
-    monkeypatch.setattr(cli, "store", lambda: pytest.fail("must not read credentials"))
+def test_mcp_status_is_read_only_and_explains_auth(
+    monkeypatch, tmp_path, capsys, status
+):
+    # It reads the instance's port from config.json, never credentials.
+    monkeypatch.setenv("HYBRO_HOME", str(configured(tmp_path).home))
+    for name in ("load", "read_service_credentials", "ensure_service_credentials"):
+        monkeypatch.setattr(
+            RuntimeConfigStore,
+            name,
+            lambda *a, **k: pytest.fail("must not read credentials"),
+        )
+    monkeypatch.setattr(cli, "read_mcp_status", lambda port: status)
     assert cli.main(["mcp", "status"]) == (0 if status == "ready" else 1)
     output = capsys.readouterr().out
-    assert "http://127.0.0.1:8001/mcp" in output
+    assert "http://127.0.0.1:8101/mcp" in output
     assert "Streamable HTTP" in output
     assert cli.STATUS_LABELS[status] in output
 

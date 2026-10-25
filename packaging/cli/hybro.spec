@@ -9,10 +9,11 @@
 # a single executable with no links and unpacks itself at run time.
 #
 # Onefile normally risks Compose treating each run as a changed project, because
-# it extracts to a fresh temporary directory. That does not apply here: both
-# Compose files pin `name: hybro`, so the project identity is fixed regardless of
-# where the stack file lands. `_frozen_root()` in backend/cli_stack.py reads
-# sys._MEIPASS, which is that extraction directory.
+# it extracts to a fresh temporary directory. That does not apply here: the
+# released Compose file pins `name: hybro` (a checkout's pins `hybro-dev`), so
+# the project identity is fixed regardless of where the stack file lands.
+# `_frozen_root()` in backend/cli_stack.py reads sys._MEIPASS, which is that
+# extraction directory.
 #
 # The static analysis follows the lazy imports inside functions, including
 # `llm_gateway.cli_tui`, `llm_gateway.setup_cli`, and the providers they reach.

@@ -223,10 +223,10 @@ jobs:
         run: |
           ./scripts/hybro start --build --compose-file docker-compose.ci.yml
           echo "Waiting for backend health check..."
-          timeout 180s bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
+          timeout 180s bash -c 'until curl -sf http://localhost:8100/health; do sleep 2; done'
           echo "Backend container is healthy and ready!"
           echo "Waiting for agents registration..."
-          timeout 90s bash -c 'until curl -sf http://localhost:8000/api/v1/agent/getAllAgents?active_only=true | grep -qi "Travel Planner"; do sleep 2; done'
+          timeout 90s bash -c 'until curl -sf http://localhost:8100/api/v1/agent/getAllAgents?active_only=true | grep -qi "Travel Planner"; do sleep 2; done'
           echo "Agents successfully registered!"
 
       - name: Verify default MCP startup and tools
@@ -238,11 +238,11 @@ jobs:
 
           async def check():
               async with httpx.AsyncClient(timeout=5) as http:
-                  health = await http.get("http://127.0.0.1:8001/health")
+                  health = await http.get("http://127.0.0.1:8101/health")
                   assert health.json() == {"service": "hybro-mcp", "status": "ready"}
-                  panel = await http.get("http://localhost:3000/hybro-mcp")
+                  panel = await http.get("http://localhost:3100/hybro-mcp")
                   assert panel.json() == health.json()
-              async with Client("http://127.0.0.1:8001/mcp") as client:
+              async with Client("http://127.0.0.1:8101/mcp") as client:
                   tools = await client.list_tools()
                   assert {tool.name for tool in tools.tools} == {
                       "list_subnets",
@@ -284,14 +284,15 @@ jobs:
       - name: Run Backend Functional Tests Against Live Containers
         working-directory: backend
         env:
-          HYBRO_API_URL: http://localhost:8000/api/v1
+          HYBRO_API_URL: http://localhost:8100/api/v1
           HYBRO_FORCE_FUNCTIONAL_TESTS: "1"
         run: uv run pytest tests/functional/ -v --tb=short
 
       - name: Run Frontend Playwright Functional E2E Against Live Containers
         working-directory: frontend
         env:
-          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8100/api/v1
+          PLAYWRIGHT_BASE_URL: http://localhost:3100
         run: npx playwright test tests/e2e/functional-hitl-workflow.spec.ts tests/e2e/sessions.spec.ts
 
       - name: Dump Container Logs on Failure

@@ -4,6 +4,7 @@
 # Differences from the development stack:
 #   - every service runs a published image instead of a local build
 #   - image tags come from the hybro CLI that starts this stack
+#   - the Compose project is `hybro`, not the checkout's `hybro-dev`
 # Build arguments are absent, so a released stack never rebuilds anything.
 name: hybro
 services:
@@ -17,7 +18,7 @@ services:
     - '27017'
     - --quiet
     ports:
-    - 27017:27017
+    - ${HYBRO_PORT_MONGO:-27017}:27017
     volumes:
     - mongo_data:/data/db
     healthcheck:
@@ -42,17 +43,18 @@ services:
   redis:
     image: redis:7.0-alpine
     ports:
-    - 6379:6379
+    - ${HYBRO_PORT_REDIS:-6379}:6379
     volumes:
     - redis_data:/data
     restart: always
   backend:
     ports:
-    - 8000:8000
+    - ${HYBRO_PORT_BACKEND:-8000}:8000
     environment:
     - HYBRO_CONTAINER=1
     - HYBRO_HOME=/var/lib/hybro/runtime
-    - LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS=7001,6002,7002,7003
+    - HYBRO_FRONTEND_ORIGIN=${HYBRO_FRONTEND_ORIGIN:-}
+    - LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS=${HYBRO_DISCOVERY_EXCLUDED_PORTS:-7001,6002,7002,7003}
     volumes:
     - room_files:/var/lib/hybro/files
     - ${HYBRO_HOME:-${HOME}/.hybro}:/var/lib/hybro/runtime
@@ -77,7 +79,7 @@ services:
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-backend:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   mcp:
     ports:
-    - 127.0.0.1:8001:8001
+    - 127.0.0.1:${HYBRO_PORT_MCP:-8001}:8001
     environment:
     - HYBRO_MCP_CONFIG=${HYBRO_MCP_CONFIG:-}
     depends_on:
@@ -97,7 +99,7 @@ services:
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-mcp:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   frontend:
     ports:
-    - 3000:3000
+    - ${HYBRO_PORT_FRONTEND:-3000}:3000
     environment:
     - HYBRO_BACKEND_URL=http://backend:8000
     - HYBRO_MCP_URL=http://mcp:8001
@@ -118,7 +120,7 @@ services:
     - SERVER_DOMAIN=weather-agent
     - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
-    - 7001:7001
+    - ${HYBRO_PORT_WEATHER_AGENT:-7001}:7001
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-weather-agent:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   image-generator-agent:
     restart: always
@@ -130,7 +132,7 @@ services:
     - SERVER_DOMAIN=image-generator-agent
     - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
-    - 6002:6002
+    - ${HYBRO_PORT_IMAGE_GENERATOR_AGENT:-6002}:6002
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-image-generator-agent:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   travel-planner-agent:
     restart: always
@@ -142,7 +144,7 @@ services:
     - SERVER_DOMAIN=travel-planner-agent
     - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
-    - 7002:7002
+    - ${HYBRO_PORT_TRAVEL_PLANNER_AGENT:-7002}:7002
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-travel-planner-agent:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   story-agent:
     restart: always
@@ -154,7 +156,7 @@ services:
     - SERVER_DOMAIN=story-agent
     - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
-    - 7003:7003
+    - ${HYBRO_PORT_STORY_AGENT:-7003}:7003
     image: ${HYBRO_IMAGE_REGISTRY:-ghcr.io/hybroai}/hybro-story-agent:${HYBRO_STACK_TAG:?the hybro CLI sets the stack version}
   registrar:
     environment:

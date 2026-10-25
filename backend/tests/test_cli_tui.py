@@ -151,6 +151,7 @@ def test_status_is_inline_refreshes_and_menu_is_minimal(mock_status):
             "apply",
             "logs",
             "mcp",
+            "ports",
             "upgrade",
             "models",
         }
@@ -697,3 +698,112 @@ def test_checkout_upgrade_explains_git_instead_of_failing():
     console.pause.assert_not_called()
     last = [s for s in screens if getattr(s, "tab", "") == "services"][-1]
     assert "git pull" in last.notice
+
+
+def _instance_view(save=None, notice=None):
+    entries = (
+        cli_tui.PortEntry("frontend", 3100, default=True),
+        cli_tui.PortEntry("backend", 8200, default=False),
+        cli_tui.PortEntry("agents.weather-agent", 7101, default=True),
+    )
+    return cli_tui.InstanceView(
+        name="dev",
+        read=lambda: cli_tui.InstanceSnapshot(
+            entries=entries,
+            frontend_url="http://localhost:3100",
+            mcp_url="http://127.0.0.1:8101/mcp",
+            notice=notice,
+        ),
+        save=save or Mock(return_value="Saved."),
+    )
+
+
+def _port_console(console, lines=()):
+    screens = []
+    pending = iter(lines)
+    original = console.select
+
+    def select(title, options):
+        screens.append((title, options))
+        return original(title, options)
+
+    def read_line(prompt):
+        screens.append((prompt, ()))
+        return next(pending)
+
+    return (
+        SetupConsole(
+            select, console.read_secret, console.write, console.pause, read_line
+        ),
+        screens,
+    )
+
+
+def test_services_page_names_the_instance_and_its_frontend():
+    console, screens = _port_console(console_with("models"))
+    cli_tui._services_page(console, Mock(), "start", instance=_instance_view())
+    screen = screens[0][0]
+    assert "dev instance" in screen.notice
+    assert "http://localhost:3100" in screen.notice
+
+
+def test_ports_page_lists_effective_ports_and_marks_defaults():
+    console, screens = _port_console(console_with("back"))
+    cli_tui._ports_page(console, _instance_view())
+    title, options = screens[0]
+    labels = {option.value: option.label for option in options}
+    assert "3100" in labels["frontend"] and "default" in labels["frontend"]
+    assert "8200" in labels["backend"] and "default" not in labels["backend"]
+    assert "7101" in labels["agents.weather-agent"]
+    assert "Reload configuration" in title.notice
+
+
+def test_ports_page_saves_one_port_and_shows_the_result():
+    save = Mock(return_value="Saved; applies after Reload configuration.")
+    console, screens = _port_console(console_with("frontend", "back"), lines=["3200"])
+    cli_tui._ports_page(console, _instance_view(save))
+    save.assert_called_once_with("frontend", 3200)
+    assert "applies after Reload configuration" in screens[-1][0].notice
+
+
+@pytest.mark.parametrize("line", ["", "abc", "3.5", "80", "70000"])
+def test_ports_page_ignores_blank_or_non_numeric_input(line):
+    save = Mock()
+    console, screens = _port_console(console_with("frontend", "back"), lines=[line])
+    cli_tui._ports_page(console, _instance_view(save))
+    save.assert_not_called()
+    if line:
+        assert "whole number" in screens[-1][0].notice
+
+
+def test_ports_page_shows_validation_errors_inline():
+    save = Mock(
+        side_effect=RuntimeConfigurationError(
+            "instances.dev.ports.frontend: 3000 is already used by "
+            "instances.release.ports.frontend"
+        )
+    )
+    console, screens = _port_console(console_with("frontend", "back"), lines=["3000"])
+    cli_tui._ports_page(console, _instance_view(save))
+    assert "already used" in screens[-1][0].notice
+
+
+def test_ports_page_shows_a_fallback_notice():
+    console, screens = _port_console(console_with("back"))
+    cli_tui._ports_page(
+        console, _instance_view(notice="config.json is invalid; showing defaults.")
+    )
+    assert "showing defaults" in screens[0][0].notice
+
+
+def test_services_menu_opens_ports_without_running_commands():
+    run = Mock()
+    console, _ = _port_console(console_with("ports", "back", "models"))
+    cli_tui._services_page(console, run, "start", instance=_instance_view())
+    run.assert_not_called()
+
+
+def test_mcp_page_shows_the_instance_mcp_url():
+    console, screens = _port_console(console_with("back"))
+    cli_tui._mcp_page(console, Mock(), lambda: "ready", _instance_view())
+    assert "http://127.0.0.1:8101/mcp" in screens[0][0].notice

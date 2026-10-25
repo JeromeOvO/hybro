@@ -16,8 +16,11 @@ projections:
 ./scripts/hybro start --build
 ```
 
-The API is available at <http://localhost:8000> and its health endpoint is
-<http://localhost:8000/health>.
+A source checkout runs the `hybro-dev` instance, so the API is available at
+<http://localhost:8100> and its health endpoint is <http://localhost:8100/health>.
+A released install (`hybro` instance) uses port 8000. Host ports for either
+instance are set under `instances.<release|dev>.ports` or in the TUI's **Ports**
+page.
 
 ### Run the backend directly
 
@@ -83,6 +86,9 @@ protocol version, provider, documentation and icon URLs, capabilities, default
 modes, and skills without per-skill `security`). Endpoint URLs, interfaces, and
 security data stay inside Hybro; clients reach agents by `agent_id`. Secrets
 embedded in those kept fields are not detected.
+
+The `curl` examples below use the release backend port 8000; against a source
+checkout's dev instance, use 8100.
 
 ### Discover stored active agents
 
@@ -348,7 +354,8 @@ rules.
 `hybro start` and the TUI's **Start services** start MCP as an ordinary default
 Compose service. Its own `MCP/Dockerfile` builds the adapter; released stacks use
 the version-pinned `hybro-mcp` image. Host access is published only on
-`127.0.0.1:8001:8001`. Use a trusted backend in `backend.auth_mode="mock"`.
+loopback: `127.0.0.1:8001` for the release instance and `127.0.0.1:8101` for a
+source checkout's dev instance (`instances.<name>.ports.mcp`). Use a trusted backend in `backend.auth_mode="mock"`.
 
 For independent control, use `hybro mcp start|stop|status|logs` or **Services >
 MCP connection** in the TUI. Standalone start requires setup and an already
@@ -362,6 +369,8 @@ Add a **Streamable HTTP** server manually to your MCP client using:
 ```text
 http://127.0.0.1:8001/mcp
 ```
+
+For a source checkout's dev instance, use `http://127.0.0.1:8101/mcp`.
 
 This URL is for clients on the machine running Hybro, not a remote browser's
 machine. **Connect** (`/connect/mcp`) in the app copies the URL and per-assistant
@@ -448,7 +457,7 @@ containing only `api_prefix`; it connects to `backend:8000` and listens on
 `0.0.0.0:8001` inside Docker. Explicit Host/Origin DNS-rebinding checks remain
 active in both modes. MCP receives no auth store or Provider credentials.
 
-`GET http://127.0.0.1:8001/health` makes a read-only backend `agents/discovery`
+`GET http://127.0.0.1:8001/health` (8101 for the dev instance) makes a read-only backend `agents/discovery`
 request with a two-second deadline and returns only `service: "hybro-mcp"` and
 `status: "ready" | "unavailable" | "unsupported_auth"`. It never executes
 agents or exposes Cards. A rejected authentication probe (`401`/`403`) reports

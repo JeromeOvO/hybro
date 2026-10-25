@@ -48,6 +48,14 @@ Configuration:
             ./scripts/hybro config set backend.log_level '"DEBUG"'
             ./scripts/hybro config set frontend.max_message_length 12000
         Use setup, not config set, for Provider/model changes.
+        Host ports are per instance (a source checkout is dev, an install is
+        release) under instances.<dev|release>.ports: frontend, backend, mcp,
+        mongo, redis, agents.<service>. Defaults: release 3000/8000/8001/27017/
+        6379 and the manifest agent ports; dev adds 100 to each. Example:
+            ./scripts/hybro config set instances.dev.ports.frontend 3200
+        No port may repeat within or across the two instances. A released hybro
+        older than this one rejects config.json with instances; upgrade it first.
+        The TUI Services tab has a Ports page for the same settings.
     config secret <name>
         Set a service credential using hidden terminal input.
     config migrate [--from-env <legacy-file>]
@@ -103,7 +111,8 @@ Services:
         A source checkout is updated with git pull, not by this command.
 
 MCP connection:
-    URL: http://127.0.0.1:8001/mcp — Streamable HTTP, same-host clients only.
+    URL: http://127.0.0.1:8001/mcp (release) or :8101 (dev) by default, or the
+    instance's configured mcp port — Streamable HTTP, same-host clients only.
     In the app, Connect (/connect/mcp) copies the URL and client snippets.
     The Overview Gateway tile shows MCP status.
     Add the server manually; there is no automatic client discovery/registration.

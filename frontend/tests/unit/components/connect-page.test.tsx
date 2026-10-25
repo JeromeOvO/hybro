@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '../../utils/test-utils'
 import userEvent from '@testing-library/user-event'
 import { ConnectPage } from '@/components/connect/connect-page'
-import { MCP_CONFIG, MCP_URL } from '@/lib/mcp'
+import { buildMcpConfig } from '@/lib/mcp'
 
-vi.mock('@/lib/config', () => ({ publicConfig: () => ({ api_base_url: 'https://hybro.example', api_prefix: '/api/v1' }) }))
+// A dev instance publishes MCP on its own port; the page must show that one.
+const MCP_URL = 'http://127.0.0.1:8101/mcp'
+const MCP_CONFIG = buildMcpConfig(MCP_URL)
+vi.mock('@/lib/config', () => ({ publicConfig: () => ({ api_base_url: 'https://hybro.example', api_prefix: '/api/v1', mcp_url: 'http://127.0.0.1:8101/mcp' }) }))
 const push = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
 

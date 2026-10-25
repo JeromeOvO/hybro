@@ -69,6 +69,11 @@ def _env_line(key: str, default: str) -> str:
     return f"      - {key}=${{{key}:-{default}}}"
 
 
+def host_port_variable(service: str) -> str:
+    """The CLI's per-instance host-port variable for one agent service."""
+    return "HYBRO_PORT_" + service.upper().replace("-", "_")
+
+
 def load_enabled_agents(manifest_path: Path = MANIFEST_PATH) -> dict[str, dict]:
     """Return enabled agents from the manifest, preserving file order."""
     data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
@@ -112,7 +117,7 @@ def render_region(agents: dict[str, dict]) -> str:
         lines += [_env_line(key, default) for key, default in AGENT_ENV_INTERPOLATIONS]
         lines += [
             "    ports:",
-            f'      - "{port}:{port}"',
+            f'      - "${{{host_port_variable(spec["service"])}:-{port}}}:{port}"',
         ]
 
     lines += [
@@ -151,14 +156,16 @@ def render_ports_region(agents: dict[str, dict]) -> str:
     every enabled agent's port there, so the scanner finds the stack's own
     agents served over ``host.docker.internal``. Nothing else can occupy those
     ports (the stack already binds them), so excluding them loses no real host
-    agent.
+    agent. The CLI supplies the agent ports of both the dev and the release
+    instance; the manifest ports are the default for a bare Compose call.
     """
     ports = ",".join(str(spec["port"]) for spec in agents.values())
+    excluded = f"${{HYBRO_DISCOVERY_EXCLUDED_PORTS:-{ports}}}"
     return (
         "      # Every agent below publishes its host port, so discovery over\n"
         "      # host.docker.internal would find this stack's own agents and register a\n"
         "      # second copy of each under its host URL.\n"
-        f"      - LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS={ports}"
+        f"      - LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS={excluded}"
     )
 
 

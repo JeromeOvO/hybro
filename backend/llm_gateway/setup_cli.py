@@ -80,6 +80,10 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _no_line(prompt: str) -> str:
+    raise SetupError("This console cannot read a line of input.")
+
+
 @dataclass(frozen=True, slots=True)
 class SetupConsole:
     select: Callable[[str | SetupScreen, tuple[SetupOption, ...]], str]
@@ -87,6 +91,8 @@ class SetupConsole:
     write: Callable[[str], None]
     # Only the lifecycle menu pauses; injected/headless setup consoles need not.
     pause: Callable[[], None] = lambda: None
+    # One visible line, such as a port number; only the TUI's Ports page asks.
+    read_line: Callable[[str], str] = _no_line
 
 
 @contextmanager
@@ -118,6 +124,13 @@ def _terminal_console(
         def select(title: str | SetupScreen, options: tuple[SetupOption, ...]) -> str:
             return select_option(reader, writer, title, options, screen=screen)
 
+        def read_line(prompt: str) -> str:
+            # The terminal is in canonical mode between selections, so the line
+            # echoes and edits normally; show the cursor the menus hide.
+            writer.write(f"\x1b[?25h{prompt}")
+            writer.flush()
+            return reader.readline().strip()
+
         try:
             if screen:
                 writer.write("\x1b[?1049h")
@@ -129,6 +142,7 @@ def _terminal_console(
                     message, file=writer if screen else output, flush=True
                 ),
                 lambda: wait_for_enter(reader, writer, screen=screen),
+                read_line,
             )
         finally:
             if screen:

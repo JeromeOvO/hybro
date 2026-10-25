@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// A checkout's dev instance serves on 3100; set this to target it.
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000'
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
@@ -11,7 +14,7 @@ export default defineConfig({
     ['list']
   ],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -23,7 +26,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:3000',
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 120 * 1000,
   },

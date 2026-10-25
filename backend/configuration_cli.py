@@ -19,16 +19,22 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
-from cli_mcp import MCP_URL, STATUS_LABELS
+import cli_ports
+from cli_mcp import STATUS_LABELS, mcp_url
 from cli_mcp import read_status as read_mcp_status
 from cli_stack import HELP, MANIFEST, RENDERER, Stack, data_file, resolve, version
 from common.config.loader import (
+    DERIVED_FRONTEND_FIELDS,
     PRIVATE_FIELDS,
     ROUTE_FIELDS,
     FrontendSettings,
     Settings,
 )
-from common.config.runtime_config import RuntimeConfigurationError, resolve_credential
+from common.config.runtime_config import (
+    RuntimeConfig,
+    RuntimeConfigurationError,
+    resolve_credential,
+)
 from common.config.runtime_store import (
     SERVICE_KEYS,
     RuntimeConfigStore,
@@ -77,6 +83,9 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
         "COMPOSE_PROJECT_NAME",
     ):
         env.pop(key, None)
+    # Host ports and the values derived from them come only from this CLI.
+    for key in [key for key in env if cli_ports.is_transport_variable(key)]:
+        del env[key]
     env["HYBRO_HOME"] = str(runtime.home)
     # The released stack file pins every published image to this CLI's version.
     env["HYBRO_STACK_TAG"] = version()
@@ -103,9 +112,16 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
     )
     if backend.auth_mode == "clerk" and not backend.clerk_secret_key:
         raise RuntimeConfigurationError("Clerk mode requires credentials in auth.json.")
-    public = FrontendSettings.model_validate(
-        {"api_prefix": backend.api_prefix, **state.config.frontend}
+    running, other = cli_ports.validate_ports(
+        state.config, resolve().instance, cli_ports.manifest_agents()
     )
+    derived, warnings = cli_ports.derive_public(state.config.frontend, running)
+    for warning in warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    public = FrontendSettings.model_validate(
+        {"api_prefix": backend.api_prefix, **state.config.frontend, **derived}
+    )
+    env.update(cli_ports.transport_environment(running, other))
     env.update(
         {
             "HYBRO_API_PREFIX": backend.api_prefix,
@@ -194,6 +210,59 @@ def compose(
     ).returncode
 
 
+def instance_ports() -> tuple[cli_ports.Ports, str | None]:
+    """The running instance's ports for status and display; never raises."""
+    return cli_ports.instance_ports(
+        resolve().instance, store(), cli_ports.manifest_agents()
+    )
+
+
+def instance_mcp_status() -> str:
+    """Probe this instance's MCP port; reads config.json, never credentials."""
+    return read_mcp_status(instance_ports()[0].services["mcp"])
+
+
+def _validate_ports(config: RuntimeConfig) -> None:
+    cli_ports.validate_ports(config, resolve().instance, cli_ports.manifest_agents())
+
+
+# The CLI cannot see the other install's version, so it warns on every first
+# write rather than guess.
+_INSTANCES_SKEW = (
+    "Note: a released hybro older than this one rejects config.json with "
+    "instances; upgrade it before starting it."
+)
+
+
+def _has_instances(runtime: RuntimeConfigStore) -> bool:
+    """Whether config.json already has instances, even if one value is invalid.
+
+    Read raw, so a write can still repair a bad hand-edited port.
+    """
+    with runtime._locked():
+        data = runtime._read("config.json")
+    if data is None:
+        raise RuntimeConfigurationError("Missing config.json; run hybro setup.")
+    try:
+        return "instances" in json.loads(data)
+    except ValueError:
+        return False
+
+
+def set_port(field: str, port: int) -> str:
+    """Save one host port of the running instance; the TUI's write path."""
+    runtime = store()
+    instance = resolve().instance
+    first = not _has_instances(runtime)
+    runtime.update_config(
+        ["instances", instance, "ports", *field.split(".")],
+        port,
+        validate=_validate_ports,
+    )
+    notice = f"Saved instances.{instance}.ports.{field} = {port}."
+    return f"{notice} {_INSTANCES_SKEW}" if first else notice
+
+
 def service_status() -> list[dict[str, object]]:
     """Read only Compose container metadata; never load application credentials."""
     runtime = store()
@@ -258,7 +327,10 @@ def _import_environment(config, auth, values):
                 backend[key] = normalized
         elif name.startswith("NEXT_PUBLIC_"):
             field = name.removeprefix("NEXT_PUBLIC_").lower()
-            if field in FrontendSettings.model_fields:
+            if (
+                field in FrontendSettings.model_fields
+                and field not in DERIVED_FRONTEND_FIELDS
+            ):
                 parsed = FrontendSettings.model_validate({field: value}, strict=False)
                 public[field] = getattr(parsed, field)
     return backend, public, services
@@ -433,14 +505,29 @@ def _tui(arguments: list[str]) -> int:
     from cli_upgrade import newer_release
     from llm_gateway import cli_tui
 
+    def snapshot() -> cli_tui.InstanceSnapshot:
+        ports, notice = instance_ports()
+        return cli_tui.InstanceSnapshot(
+            entries=tuple(
+                cli_tui.PortEntry(field, port, default=field in ports.from_defaults)
+                for field, port in ports.fields()
+            ),
+            frontend_url=cli_ports.frontend_origin(ports),
+            mcp_url=cli_ports.mcp_url(ports),
+            notice=notice,
+        )
+
     return cli_tui.main(
         status=service_status,
         run=main,
         problem=docker_problem,
         version=version(),
-        mcp_status=read_mcp_status,
+        mcp_status=instance_mcp_status,
         build=resolve().checkout,
         releases=newer_release,
+        instance=cli_tui.InstanceView(
+            name=resolve().instance, read=snapshot, save=set_port
+        ),
     )
 
 
@@ -451,6 +538,32 @@ def _passthrough(*prefix: str) -> Callable[[list[str]], int]:
         return compose([*prefix, *arguments])
 
     return run
+
+
+def _config_set(runtime: RuntimeConfigStore, path: list[str], value: object) -> None:
+    # The published frontend serves browser settings at runtime, but its
+    # server-side API rewrite is built into the image with the projection
+    # prefix. Changing the prefix would leave that route behind, so a
+    # released install refuses it instead of breaking API calls silently.
+    if path in (["backend", "api_prefix"], ["frontend", "api_prefix"]) and (
+        not resolve().checkout
+    ):
+        raise RuntimeConfigurationError(
+            "The API prefix is built into the published frontend image, so it "
+            "cannot change on this install. Use a source checkout and "
+            "hybro start --build to change it."
+        )
+    if path[0] == "instances":
+        first = not _has_instances(runtime)
+        runtime.update_config(path, value, validate=_validate_ports)
+        if first:
+            print(_INSTANCES_SKEW)
+    else:
+        runtime.update_config(path, value)
+    print(
+        "Configuration saved. Apply it with hybro start --recreate; no rebuild "
+        "is needed."
+    )
 
 
 def config_command(arguments: list[str]) -> int:
@@ -472,24 +585,7 @@ def config_command(arguments: list[str]) -> int:
     if args.command == "migrate":
         migrate(runtime, args.from_env)
     elif args.command == "set":
-        path = args.path.split(".")
-        # The published frontend serves browser settings at runtime, but its
-        # server-side API rewrite is built into the image with the projection
-        # prefix. Changing the prefix would leave that route behind, so a
-        # released install refuses it instead of breaking API calls silently.
-        if path in (["backend", "api_prefix"], ["frontend", "api_prefix"]) and (
-            not resolve().checkout
-        ):
-            raise RuntimeConfigurationError(
-                "The API prefix is built into the published frontend image, so it "
-                "cannot change on this install. Use a source checkout and "
-                "hybro start --build to change it."
-            )
-        runtime.update_config(path, json.loads(args.value))
-        print(
-            "Configuration saved. Apply it with hybro start --recreate; no rebuild "
-            "is needed."
-        )
+        _config_set(runtime, args.path.split("."), json.loads(args.value))
     elif args.command == "secret":
         if not sys.stdin.isatty():
             raise RuntimeConfigurationError(
@@ -529,7 +625,12 @@ def config_command(arguments: list[str]) -> int:
     elif args.command == "show":
         print(runtime.read_config().model_dump_json(indent=2))
     else:
-        runtime.load({})
+        state = runtime.load({})
+        running, _ = cli_ports.validate_ports(
+            state.config, resolve().instance, cli_ports.manifest_agents()
+        )
+        for warning in cli_ports.derive_public(state.config.frontend, running)[1]:
+            print(f"Warning: {warning}", file=sys.stderr)
         print("Configuration and credential structure valid; no Provider request made.")
     return 0
 
@@ -555,6 +656,17 @@ def _start(arguments: list[str]) -> int:
     if options.recreate:
         params.append("--force-recreate")
     result = compose(params, start=True, files=options.compose_file)
+    if result and result != 130:
+        # Docker names a taken port itself; this says how to move this stack's.
+        ports, _ = instance_ports()
+        instance = resolve().instance
+        listed = ", ".join(f"{field} {port}" for field, port in ports.fields())
+        print(
+            f"If a port was already allocated, the {instance} instance uses: "
+            f"{listed}. Change one with hybro config set "
+            f"instances.{instance}.ports.<name> <port>.",
+            file=sys.stderr,
+        )
     if result and result != 130 and not resolve().checkout:
         # A release whose images were not all published fails here, and Compose
         # reports it only as "not found" or "manifest unknown".
@@ -578,9 +690,13 @@ def _mcp(arguments: list[str]) -> int:
         return compose(["stop", "mcp"])
     if action == "logs":
         return compose(["logs", "-f", "--tail", "100", "mcp"])
-    status = read_mcp_status()
+    ports, notice = instance_ports()
+    if notice:
+        print(notice, file=sys.stderr)
+    status = read_mcp_status(ports.services["mcp"])
     print(
-        f"MCP: {STATUS_LABELS[status]}\nServer URL: {MCP_URL}\nTransport: Streamable HTTP"
+        f"MCP: {STATUS_LABELS[status]}\nServer URL: {mcp_url(ports.services['mcp'])}"
+        "\nTransport: Streamable HTTP"
     )
     print("For clients on the machine running Hybro.")
     return 0 if status == "ready" else 1

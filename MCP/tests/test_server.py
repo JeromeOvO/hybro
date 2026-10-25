@@ -653,3 +653,33 @@ def test_invalid_container_configuration_fails_safely(monkeypatch, raw):
     with pytest.raises(ValueError, match="start with hybro") as error:
         server.connection_config(container=True)
     assert "private" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("host", "allowed"),
+    [
+        ("127.0.0.1:8101", True),
+        ("localhost:8101", True),
+        ("mcp:8001", True),
+        ("attacker.test:8101", False),
+        ("mcp:8101", False),
+    ],
+)
+async def test_any_published_host_port_passes_the_host_guard(host, allowed):
+    """The dev instance publishes MCP on another host port; the name stays pinned."""
+    # /health runs behind the same guard and returns at once; /mcp would stream.
+    async with httpx.AsyncClient(
+        base_url=server.BACKEND_API_URL,
+        transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+    ) as backend:
+        app = create_server(backend).streamable_http_app(
+            stateless_http=True,
+            host="0.0.0.0",
+            transport_security=server.TRANSPORT_SECURITY,
+        )
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8001"
+            ) as client:
+                response = await client.get("/health", headers={"host": host})
+    assert (response.status_code != 421) is allowed

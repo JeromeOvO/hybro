@@ -2,6 +2,7 @@ export interface PublicConfig {
   api_base_url: string
   api_prefix: string
   server_url: string
+  mcp_url: string
   clerk_publishable_key: string
   clerk_sign_in_url: string
   clerk_sign_up_url: string
@@ -13,7 +14,7 @@ export interface PublicConfig {
 }
 
 const stringKeys = [
-  'api_base_url', 'api_prefix', 'server_url', 'clerk_publishable_key',
+  'api_base_url', 'api_prefix', 'server_url', 'mcp_url', 'clerk_publishable_key',
   'clerk_sign_in_url', 'clerk_sign_up_url',
   'clerk_sign_in_fallback_redirect_url', 'clerk_sign_up_fallback_redirect_url',
 ] as const
@@ -32,7 +33,7 @@ export function parsePublicConfig(serialized: string | undefined): Readonly<Publ
   if (stringKeys.some(key => typeof record[key] !== 'string')) throw failure()
   if (numberKeys.some(key => typeof record[key] !== 'number' || !Number.isSafeInteger(record[key]) || (record[key] as number) <= 0)) throw failure()
   if (typeof record.enable_waitlist !== 'boolean') throw failure()
-  for (const key of ['api_base_url', 'server_url'] as const) {
+  for (const key of ['api_base_url', 'server_url', 'mcp_url'] as const) {
     try {
       const url = new URL(record[key] as string)
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw failure()

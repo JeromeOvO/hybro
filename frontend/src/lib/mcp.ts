@@ -1,11 +1,15 @@
-export const MCP_URL = 'http://127.0.0.1:8001/mcp'
+import { publicConfig } from '@/lib/config'
+
+/** This instance's MCP address; the CLI derives it from the instance's host port. */
+export function mcpUrl(): string {
+  return publicConfig().mcp_url
+}
+
 export function buildMcpConfig(url: string): string {
   return JSON.stringify({
     mcpServers: { hybro: { type: 'http', url } }
   }, null, 2)
 }
-
-export const MCP_CONFIG = buildMcpConfig(MCP_URL)
 
 export type McpStatus = 'ready' | 'unavailable' | 'unsupported_auth'
 

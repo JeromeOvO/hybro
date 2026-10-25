@@ -9,6 +9,7 @@ import subprocess
 import sys
 import termios
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import TextIO
 
 from pydantic import ValidationError
@@ -30,6 +31,7 @@ _SERVICE_ACTIONS = (
     ),
     SetupOption("logs", "View logs"),
     SetupOption("mcp", "MCP connection"),
+    SetupOption("ports", "Ports", hint="Host ports of this instance."),
     SetupOption(
         "upgrade",
         "Upgrade hybro",
@@ -63,6 +65,40 @@ StatusReader = Callable[[], list[dict[str, object]]]
 ProblemReader = Callable[[], str | None]
 # Newest release when newer than this CLI, else None; never raises.
 ReleaseReader = Callable[[], str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class PortEntry:
+    """One host port; ``field`` is its name under ``instances.<name>.ports``."""
+
+    field: str
+    port: int
+    default: bool
+
+
+@dataclass(frozen=True, slots=True)
+class InstanceSnapshot:
+    entries: tuple[PortEntry, ...]
+    frontend_url: str
+    mcp_url: str
+    # Set when config.json could not be read and defaults are shown.
+    notice: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InstanceView:
+    """Host capability: this instance's ports. ``read`` never raises.
+
+    ``save`` validates and writes one port, returning its notice, and raises
+    RuntimeConfigurationError naming the field when the port is rejected.
+    """
+
+    name: str
+    read: Callable[[], InstanceSnapshot]
+    save: Callable[[str, int], str]
+
+
+_APPLY_PORTS = "Changes apply after Reload configuration."
 
 
 def _read_status() -> list[dict[str, object]]:
@@ -254,10 +290,53 @@ def _lifecycle_action(
     return notice, pending_apply and action not in {"start", "apply"}
 
 
+def _ports_page(console: SetupConsole, instance: InstanceView) -> None:
+    """List this instance's host ports and change one at a time."""
+    notice = ""
+    while True:
+        snapshot = instance.read()
+        try:
+            choice = console.select(
+                SetupScreen(
+                    f"Ports: {instance.name} instance",
+                    notice="\n".join(
+                        filter(None, (snapshot.notice, notice, _APPLY_PORTS))
+                    ),
+                ),
+                (
+                    *(
+                        SetupOption(
+                            entry.field,
+                            f"{entry.field}  {entry.port}"
+                            + ("  (default)" if entry.default else ""),
+                        )
+                        for entry in snapshot.entries
+                    ),
+                    SetupOption("back", "Back"),
+                ),
+            )
+        except SelectionCancelled:
+            return
+        if choice == "back":
+            return
+        line = console.read_line(f"New host port for {choice} (blank cancels): ")
+        if not line:
+            notice = ""
+            continue
+        if not re.fullmatch(r"[0-9]{1,5}", line) or not 1024 <= int(line) <= 65535:
+            notice = "Enter a whole number between 1024 and 65535."
+            continue
+        try:
+            notice = instance.save(choice, int(line))
+        except RuntimeConfigurationError as exc:
+            notice = str(exc)
+
+
 def _mcp_page(
     console: SetupConsole,
     run: Callable[[tuple[str, ...]], int],
     read: Callable[[], str] | None = None,
+    instance: InstanceView | None = None,
 ) -> None:
     labels = {
         "ready": "Ready",
@@ -266,13 +345,14 @@ def _mcp_page(
     }
     while True:
         state = read() if read else "unavailable"
+        url = instance.read().mcp_url if instance else "http://127.0.0.1:8001/mcp"
         try:
             action = console.select(
                 SetupScreen(
                     "MCP connection",
                     status=labels.get(state, labels["unavailable"]),
                     notice=(
-                        "Server URL: http://127.0.0.1:8001/mcp\n"
+                        f"Server URL: {url}\n"
                         "Transport: Streamable HTTP\n"
                         "For clients on the machine running Hybro."
                     ),
@@ -297,6 +377,23 @@ def _mcp_page(
             return
 
 
+def _instance_page(
+    console: SetupConsole,
+    run: Callable[[tuple[str, ...]], int],
+    action: str,
+    mcp_status: Callable[[], str] | None,
+    instance: InstanceView | None,
+) -> str:
+    """Open the MCP or Ports page; return the Services notice."""
+    if action == "mcp":
+        _mcp_page(console, run, mcp_status, instance)
+    elif instance is None:
+        return "Ports are available through the hybro CLI entry point."
+    else:
+        _ports_page(console, instance)
+    return ""
+
+
 def _services_page(
     console: SetupConsole,
     run: Callable[[tuple[str, ...]], int],
@@ -310,6 +407,7 @@ def _services_page(
     build: bool = False,
     configured: bool = True,
     newer: str | None = None,
+    instance: InstanceView | None = None,
 ) -> tuple[str, bool, str | None]:
     """Run service actions.
 
@@ -323,6 +421,11 @@ def _services_page(
     version_line = f"CLI and stack {version}" if version else ""
     notice = ""
     while True:
+        instance_line = (
+            f"{instance.name} instance at {instance.read().frontend_url}"
+            if instance
+            else ""
+        )
         # A cold Docker daemon can take seconds to answer; say why it is quiet.
         console.write("Checking service status...")
         status, rows = _status_snapshot(read, problem)
@@ -337,6 +440,7 @@ def _services_page(
                         filter(
                             None,
                             (
+                                instance_line,
                                 version_line,
                                 f"hybro {newer} is available; choose Upgrade hybro."
                                 if newer
@@ -364,8 +468,8 @@ def _services_page(
         try:
             if action == "logs":
                 _logs_page(console, run, read, problem)
-            elif action == "mcp":
-                _mcp_page(console, run, mcp_status)
+            elif action in {"mcp", "ports"}:
+                notice = _instance_page(console, run, action, mcp_status, instance)
             elif blocked := _unavailable(action, configured=configured, build=build):
                 notice = blocked
             else:
@@ -391,6 +495,7 @@ def _menu(
     mcp_status: Callable[[], str] | None = None,
     build: bool = False,
     releases: ReleaseReader | None = None,
+    instance: InstanceView | None = None,
 ) -> int:
     panel = SetupPanel(service, console, environment)
     service_focus = "start"
@@ -421,6 +526,7 @@ def _menu(
                 build=build,
                 configured=panel.saved is not None,
                 newer=newer,
+                instance=instance,
             )
             continue
         try:
@@ -450,6 +556,7 @@ def main(
     mcp_status: Callable[[], str] | None = None,
     build: bool = False,
     releases: ReleaseReader | None = None,
+    instance: InstanceView | None = None,
 ) -> int:
     output = output if output is not None else sys.stdout
     try:
@@ -475,6 +582,7 @@ def main(
                 mcp_status,
                 build,
                 releases,
+                instance,
             )
         with _terminal_console(output, screen=True) as terminal:
             return _menu(
@@ -488,6 +596,7 @@ def main(
                 mcp_status,
                 build,
                 releases,
+                instance,
             )
     except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         print("Hybro closed; unsaved changes discarded.", file=output)

@@ -185,6 +185,14 @@ def parse_config(data: bytes) -> RuntimeConfig:
                 "backend",
                 "frontend",
                 "image_size",
+                "instances",
+                "release",
+                "dev",
+                "ports",
+                "mcp",
+                "mongo",
+                "redis",
+                "agents",
             }
         )
         errors = []
@@ -379,9 +387,11 @@ class RuntimeConfigStore:
                 config, parse_credential(auth_data), environment
             ).credential
             # Compare field data only: which retired keys a parse dropped is not
-            # a selection change.
+            # a selection change, and host ports mean nothing to the backend, so
+            # editing them from the other instance must not break refresh here.
             if (
-                config.model_dump() != expected.model_dump()
+                config.model_dump(exclude={"instances"})
+                != expected.model_dump(exclude={"instances"})
                 or not isinstance(credential, OAuthCredential)
                 or credential.account_id != account
             ):
@@ -524,8 +534,20 @@ class RuntimeConfigStore:
                 self._replace("auth.json", updated)
             return services
 
-    def update_config(self, path: list[str], value: object) -> None:
-        if not path or path[0] not in {"backend", "frontend", "image_size"}:
+    def update_config(
+        self,
+        path: list[str],
+        value: object,
+        *,
+        validate: Callable[[RuntimeConfig], None] | None = None,
+    ) -> None:
+        """Set one value; ``validate`` sees the candidate before it is written."""
+        if not path or path[0] not in {
+            "backend",
+            "frontend",
+            "image_size",
+            "instances",
+        }:
             raise RuntimeConfigurationError(
                 "Use hybro setup to change Provider/model selection."
             )
@@ -554,7 +576,9 @@ class RuntimeConfigStore:
             if isinstance(backend, dict):
                 document["backend"], _ = strip_removed_fields(backend)
             encoded = (json.dumps(document, indent=2, allow_nan=False) + "\n").encode()
-            parse_config(encoded)
+            candidate = parse_config(encoded)
+            if validate is not None:
+                validate(candidate)
             self._replace("config.json", encoded)
 
     def read_stored_credential(self) -> StoredCredential | None:
@@ -615,6 +639,7 @@ class RuntimeConfigStore:
                             "backend": previous.backend,
                             "frontend": previous.frontend,
                             "image_size": previous.image_size,
+                            "instances": previous.instances,
                         }
                     )
                 if (

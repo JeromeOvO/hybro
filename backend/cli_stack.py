@@ -3,9 +3,11 @@
 A source checkout runs ``docker-compose.yml`` in place, where ``--build`` and
 regeneration from ``default_agents/agents.yaml`` are meaningful. Any other
 install (frozen binary or npm package) has no checkout, so it runs the published
-Compose file bundled beside the CLI. Both files pin the same Compose project
-name, so container identities do not depend on where the CLI is installed --
-which is what lets a single-file bundle extract somewhere new on every run.
+Compose file bundled beside the CLI. Each file pins its own Compose project
+name -- ``hybro-dev`` for a checkout, ``hybro`` for a release -- so container
+identities do not depend on where the CLI is installed, which is what lets a
+single-file bundle extract somewhere new on every run, and the two stacks can
+run side by side.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from common.config.runtime_config import RuntimeConfigurationError
 
@@ -23,6 +26,8 @@ RENDERER = "default_agents/render_compose.py"
 HELP = "scripts/hybro-help.txt"
 VERSION = "VERSION"
 
+Instance = Literal["release", "dev"]
+
 
 @dataclass(frozen=True, slots=True)
 class Stack:
@@ -31,6 +36,11 @@ class Stack:
     root: Path
     compose: Path
     checkout: bool
+
+    @property
+    def instance(self) -> Instance:
+        """A source checkout is the dev instance; any install is the release."""
+        return "dev" if self.checkout else "release"
 
 
 def _frozen_root() -> Path | None:

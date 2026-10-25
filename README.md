@@ -59,6 +59,10 @@ hybro start          # pulls the images published for this CLI's version
 - **API Server**: http://localhost:8000
 - **MCP Server**: http://127.0.0.1:8001/mcp (Streamable HTTP, same-host clients)
 
+A source checkout (`./scripts/hybro start`) is the dev instance and serves on
+3100, 8100, and 8101 instead; see
+[Development and released stacks](#development-and-released-stacks).
+
 Running `hybro` with no arguments opens the same settings/services interface in
 a terminal. After **Verify and save** there, **Start services** recreates the
 containers so the saved settings take effect; from a checkout it also rebuilds
@@ -233,6 +237,9 @@ automatically discover or register MCP clients.
 }
 ```
 
+That is the released install's URL. A source checkout runs the dev instance,
+whose MCP URL is `http://127.0.0.1:8101/mcp`.
+
 The **Streamable HTTP** URL is for clients on the machine running Hybro. If you
 open the app remotely, loopback in your client still refers to that client's
 machine, not the Hybro host. MCP has no authentication or user isolation and
@@ -257,15 +264,55 @@ See [MCP tools, health, and native startup](backend/README.md#local-mcp-access).
 
 ### Development and released stacks
 
-The CLI runs one of two Compose files, both pinned to the `hybro` project name so
-containers keep their identity across install locations:
+The CLI runs one of two Compose files. Each pins its own project name, so
+containers keep their identity across install locations and the two stacks never
+share containers or volumes:
 
 | | Source checkout | Released install |
 |---|---|---|
+| Instance | `dev` | `release` |
+| Compose project | `hybro-dev` | `hybro` |
+| Default host ports (app, API, MCP) | 3100, 8100, 8101 | 3000, 8000, 8001 |
 | Stack file | `docker-compose.yml` | `docker-compose.release.yml` |
 | Services come from | local `build:` | published `image:` |
 | Version | the working tree | the CLI's own `VERSION` |
 | Rebuild | `start --build` | not possible; install a newer CLI |
+
+Both instances read the same `~/.hybro/config.json` and `auth.json`, so the
+Provider and models are set once and either TUI can change them. Only host ports
+differ per instance: every release default (Mongo 27017, Redis 6379, and each
+default agent included) moves up by 100 for dev, and any of them can be set under
+`instances.<dev|release>.ports` with `hybro config set` or the TUI **Ports** page.
+No port may repeat within or across instances, because both stacks can run at
+once. A released CLI older than this change rejects a `config.json` that contains
+`instances`, so upgrade the release before setting overrides. Run Compose through
+the CLI: a bare `docker compose` call in a checkout targets `hybro-dev` with the
+release default ports.
+
+A checkout that ran before this split used project `hybro`. Its containers keep
+holding 3000/8000/8001 and its data stays in the `hybro_*` volumes, because
+`./scripts/hybro stop` now stops only `hybro-dev`. Move it once, before the first
+dev start:
+
+```bash
+docker compose -p hybro down
+```
+
+```bash
+for n in mongo_data redis_data room_files; do
+  docker volume create --label com.docker.compose.project=hybro-dev \
+    --label com.docker.compose.volume=$n hybro-dev_$n
+  docker run --rm -v hybro_$n:/from:ro -v hybro-dev_$n:/to alpine cp -a /from/. /to/
+done
+```
+
+```bash
+./scripts/hybro start --build --recreate
+```
+
+Once the dev stack shows your data, the `hybro_*` volumes can be removed. Skip
+this when a released install already uses project `hybro`: those are its own
+containers and volumes.
 
 `docker-compose.release.yml` is generated from `docker-compose.yml` by
 `default_agents/render_release.py`, which swaps every `build:` block for an
@@ -345,7 +392,7 @@ Build the CLI locally with `packaging/cli/build.sh`, then stage it for npm with
 ship a PyInstaller **onefile** executable: a single binary with no symbolic
 links, because npm's packer drops links and a macOS onedir bundle depends on
 four of them. The bundle extracts to a new temporary directory per run, which is
-why both Compose files pin `name: hybro`.
+why the released Compose file pins `name: hybro`.
 
 ## Architecture
 This repository is the source of truth for the product. Its frontend and backend

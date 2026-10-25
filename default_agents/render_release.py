@@ -38,6 +38,7 @@ HEADER = """\
 # Differences from the development stack:
 #   - every service runs a published image instead of a local build
 #   - image tags come from the hybro CLI that starts this stack
+#   - the Compose project is `hybro`, not the checkout's `hybro-dev`
 # Build arguments are absent, so a released stack never rebuilds anything.
 """
 
@@ -64,6 +65,9 @@ def render(source_text: str) -> str:
         raise ValueError("docker-compose.yml has no services mapping")
     # The anchor only exists to share the development build block between agents.
     document.pop("x-agent", None)
+    # A checkout runs project hybro-dev; a released install keeps hybro, so its
+    # volumes and containers stay separate from a developer's stack.
+    document["name"] = "hybro"
     for name, service in document["services"].items():
         if not isinstance(service, dict):
             raise ValueError(f"service '{name}' is not a mapping")
