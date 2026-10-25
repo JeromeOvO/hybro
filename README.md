@@ -237,6 +237,9 @@ automatically discover or register MCP clients.
 }
 ```
 
+That is the released install's URL. A source checkout runs the dev instance,
+whose MCP URL is `http://127.0.0.1:8101/mcp`.
+
 The **Streamable HTTP** URL is for clients on the machine running Hybro. If you
 open the app remotely, loopback in your client still refers to that client's
 machine, not the Hybro host. MCP has no authentication or user isolation and

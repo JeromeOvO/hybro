@@ -1201,7 +1201,8 @@ agent_network_routes
 ### Local MCP adapter
 
 The repository-root `MCP/server.py` is a standalone API client, not another
-execution owner. It serves Streamable HTTP at `http://127.0.0.1:8001/mcp` and
+execution owner. It serves Streamable HTTP at `http://127.0.0.1:<mcp port>/mcp` (8001 for
+the release instance, 8101 for the dev instance) and
 exposes seven tools: `list_subnets` (`agents/groups`), `find_agents`
 (`agents/search`), `get_agent` (`agents/{agent_id}/profile`), `discover_agents`
 (`agents/discovery`), `send_message` (`sessions/messages`), `check_session`
@@ -1211,7 +1212,9 @@ call saved groups subnets (`subnet_id`) and translate to `group_id`;
 dependencies, lockfile, and Dockerfile live under `MCP/`; releases publish the
 version-pinned `hybro-mcp` image.
 
-MCP is a default Compose service, published only on `127.0.0.1:8001:8001`.
+MCP is a default Compose service, published only on loopback at the instance's
+MCP host port (`127.0.0.1:8001` release, `127.0.0.1:8101` dev; container port
+8001).
 Container mode requires `HYBRO_MCP_CONFIG` (only `api_prefix`) and connects to
 `http://backend:8000`, listening on `0.0.0.0:8001`. Native startup keeps fixed
 loopback endpoints and `/api/v1`. Host/Origin DNS-rebinding checks stay enabled.
