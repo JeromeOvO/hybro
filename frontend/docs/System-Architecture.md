@@ -68,7 +68,11 @@ module processing.
 Frontend settings originate in the `frontend` section of the same
 `~/.hybro/config.json` used by backend (`HYBRO_HOME` overrides the directory).
 `hybro start` validates the document and supplies an allowlisted public JSON
-projection to the frontend container as `HYBRO_FRONTEND_CONFIG`.
+projection to the frontend container as `HYBRO_FRONTEND_CONFIG`. Its
+`api_base_url`, `server_url`, and `mcp_url` are derived by the CLI from the
+running instance's host ports (a source checkout is the dev instance on 3100 and
+8100, an install the release on 3000 and 8000), so two instances on one machine
+each point the browser at their own backend and MCP server.
 
 The projection is **deployment configuration, not build input**. One published
 frontend image serves every install:
@@ -1138,7 +1142,7 @@ that node's `fx/fy` until release. Node positions are transient and not persiste
 MCP / API tab that navigates between the two routes. The page is deliberately
 minimal and written for a non-technical reader.
 
-The MCP tab shows the MCP address (the bundled `MCP_URL`) with one primary
+The MCP tab shows the MCP address (`mcpUrl()`, the projection's `mcp_url`) with one primary
 **Copy address** button, then "Add Hybro to your assistant" with tabs for
 Claude Code, Cursor, Codex, VS Code, and Other. Each assistant tab holds only
 one snippet with a hint of where it goes and a copy button (a `claude mcp add`

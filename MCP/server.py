@@ -35,8 +35,10 @@ MCP_PORT = 8001
 # default) before answering; allow a generously configured wait to arrive.
 REQUEST_TIMEOUT_SECONDS = 610.0
 HEALTH_TIMEOUT_SECONDS = 2.0
+# Host names stay pinned against DNS rebinding. The loopback port is any port,
+# because each instance publishes this container's 8001 on its own host port.
 TRANSPORT_SECURITY = TransportSecuritySettings(
-    allowed_hosts=["127.0.0.1:8001", "localhost:8001", "mcp:8001"],
+    allowed_hosts=["127.0.0.1:*", "localhost:*", "mcp:8001"],
     allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
 )
 

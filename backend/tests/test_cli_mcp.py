@@ -32,8 +32,8 @@ def test_status_validates_identity_and_state(monkeypatch, body, expected):
         return factory(transport=httpx.MockTransport(handler), **kwargs)
 
     monkeypatch.setattr(cli_mcp.httpx, "Client", client)
-    assert cli_mcp.read_status() == expected
-    assert str(calls[0].url) == "http://127.0.0.1:8001/health"
+    assert cli_mcp.read_status(8101) == expected
+    assert str(calls[0].url) == "http://127.0.0.1:8101/health"
     assert calls[0].method == "GET"
     assert "authorization" not in calls[0].headers
 
@@ -42,6 +42,7 @@ def test_mcp_probe_is_in_wheel_module_inventory():
     metadata = Path(__file__).resolve().parents[1] / "pyproject.toml"
     document = tomllib.loads(metadata.read_text(encoding="utf-8"))
     assert "cli_mcp" in document["tool"]["setuptools"]["py-modules"]
+    assert "cli_ports" in document["tool"]["setuptools"]["py-modules"]
 
 
 def test_connection_failure_is_safe(monkeypatch):
@@ -49,4 +50,8 @@ def test_connection_failure_is_safe(monkeypatch):
         raise httpx.ConnectError("private diagnostics")
 
     monkeypatch.setattr(cli_mcp.httpx, "Client", failed)
-    assert cli_mcp.read_status() == "unavailable"
+    assert cli_mcp.read_status(8001) == "unavailable"
+
+
+def test_mcp_url_names_the_instance_port():
+    assert cli_mcp.mcp_url(8101) == "http://127.0.0.1:8101/mcp"

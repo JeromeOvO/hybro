@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GET } from '@/app/hybro-mcp/route'
-import { MCP_CONFIG, MCP_URL, parseMcpStatus } from '@/lib/mcp'
+import { buildMcpConfig, mcpUrl, parseMcpStatus } from '@/lib/mcp'
+import fixture from '../../fixtures/public-config.json'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -9,7 +10,11 @@ afterEach(() => {
 
 describe('MCP connection status', () => {
   it('copies an explicit HTTP configuration rather than a stdio entry', () => {
-    expect(JSON.parse(MCP_CONFIG)).toEqual({ mcpServers: { hybro: { type: 'http', url: MCP_URL } } })
+    expect(JSON.parse(buildMcpConfig(mcpUrl()))).toEqual({ mcpServers: { hybro: { type: 'http', url: fixture.mcp_url } } })
+  })
+
+  it('reads the address the CLI derived for this instance', () => {
+    expect(mcpUrl()).toBe(fixture.mcp_url)
   })
 
   it.each([null, [], { status: 'ready' }, { service: 'other', status: 'ready' }, { service: 'hybro-mcp', status: 'unknown' }])('rejects an invalid status payload', (body) => {

@@ -4,7 +4,6 @@ from typing import Literal
 
 import httpx
 
-MCP_URL = "http://127.0.0.1:8001/mcp"
 MCPStatus = Literal["ready", "unavailable", "unsupported_auth"]
 STATUS_LABELS: dict[MCPStatus, str] = {
     "ready": "Ready",
@@ -13,12 +12,17 @@ STATUS_LABELS: dict[MCPStatus, str] = {
 }
 
 
-def read_status() -> MCPStatus:
+def mcp_url(port: int) -> str:
+    """The instance's MCP address; it is published on loopback only."""
+    return f"http://127.0.0.1:{port}/mcp"
+
+
+def read_status(port: int) -> MCPStatus:
     try:
         with httpx.Client(
             timeout=4.0, trust_env=False, follow_redirects=False
         ) as client:
-            response = client.get("http://127.0.0.1:8001/health")
+            response = client.get(f"http://127.0.0.1:{port}/health")
         response.raise_for_status()
         body = response.json()
         if isinstance(body, dict) and body.get("service") == "hybro-mcp":

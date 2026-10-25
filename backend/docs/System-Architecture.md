@@ -889,8 +889,56 @@ other install runs `docker-compose.release.yml`, generated from
 `docker-compose.yml` by `default_agents/render_release.py`, which replaces each
 `build:` block with an `image:` reference. The CLI supplies `HYBRO_STACK_TAG`
 from its own `VERSION`, so an install always runs the images published for the
-CLI that started it, and both files pin `name: hybro` so container identities do
-not depend on the install location. `render_compose.py` runs in-process.
+CLI that started it. `docker-compose.yml` pins `name: hybro-dev` and the
+generated release file pins `name: hybro`, so container identities do not depend
+on the install location and a checkout's stack never touches a release's
+containers or volumes. `render_compose.py` runs in-process.
+
+#### Dev and release instances
+
+`Stack.instance` is `dev` for a source checkout and `release` for any install.
+Both read one `HYBRO_HOME`; only host ports differ. `cli_ports` owns them:
+
+- **Schema.** `config.json` may hold `instances.<release|dev>.ports` with
+  `frontend`, `backend`, `mcp`, `mongo`, `redis` and `agents.<service>`.
+  `RuntimeConfig` validates structure only (known keys, integers in
+  1024..65535), because the backend container parses the same file and has no
+  agent manifest.
+- **Effective ports.** Missing values use the defaults: release 3000, 8000,
+  8001, 27017, 6379 and the manifest agent ports; dev adds 100 to each.
+  `validate_ports` rejects a port that repeats within or across instances and,
+  for the running instance only, an agent key the bundled manifest does not
+  define. It runs at `hybro start`, `config check`, and inside the store lock
+  on `config set instances...` and the TUI **Ports** page (the `validate`
+  callback of `RuntimeConfigStore.update_config`), so a rejected port is never
+  written. Status and display paths (`mcp status`, the TUI header, MCP and
+  Ports pages) use `instance_ports`, which falls back to the defaults when
+  config.json is missing or invalid, so the TUI still opens before setup.
+- **Transport.** `compose_environment(start=True)` exports `HYBRO_PORT_*` for
+  each host port, `HYBRO_FRONTEND_ORIGIN`, and `HYBRO_DISCOVERY_EXCLUDED_PORTS`
+  (the agent ports of both instances, so neither backend registers the other's
+  agents as discovered). Inherited values of these names are removed. The
+  Compose files interpolate them with the release defaults; container ports do
+  not change. Other commands export none of them.
+- **Derived values.** The public projection's `api_base_url`, `server_url`, and
+  `mcp_url` come from the running instance's ports. A configured loopback
+  `api_base_url` or `server_url` is ignored with a warning to delete it; another
+  host is kept as an explicit public URL for both instances. `mcp_url` is
+  derived only and rejected in config.json. In the container, `get_settings`
+  replaces loopback entries of `frontend_origins` with `HYBRO_FRONTEND_ORIGIN`
+  and keeps public ones, so CORS and Clerk accept the instance's own frontend.
+- **Shared store.** `RuntimeConfigStore.save` keeps `instances` across setup,
+  and `resolve_oauth` ignores `instances` when comparing its snapshot, so a port
+  edit from one instance does not stop token refresh in the other.
+- **Version skew.** Both instances parse one file and unknown keys are
+  rejected, so any new `config.json` field used from dev must reach an
+  installed release first. A release older than this change rejects
+  `instances`; `config set instances...` and the Ports page warn on the first
+  write. Such a release also excludes only its own agent ports from discovery.
+
+MCP accepts the Host header `127.0.0.1:*` and `localhost:*` (plus `mcp:8001`
+inside the stack), so each instance's published port passes the DNS-rebinding
+guard while other host names are still refused.
 
 `./scripts/hybro` in a terminal (or `hybro tui`) opens a fixed-screen settings
 panel with Models and Services tabs, capped at 72 columns. Current connection and

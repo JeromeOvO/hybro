@@ -24,6 +24,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 ProviderId = Literal["openai", "deepseek", "anthropic"]
 AuthMethod = Literal["api_key", "oauth"]
@@ -64,6 +65,32 @@ class RuntimeModels(_StrictModel):
     image: ModelId | None = None
 
 
+# Host ports only. Effective values (defaults, the agent manifest, overlap across
+# instances) are the CLI's concern: the backend container has no manifest.
+HostPort = Annotated[int, Field(ge=1024, le=65535)]
+AgentService = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
+
+
+class InstancePorts(_StrictModel):
+    frontend: HostPort | None = None
+    backend: HostPort | None = None
+    mcp: HostPort | None = None
+    mongo: HostPort | None = None
+    redis: HostPort | None = None
+    agents: dict[AgentService, HostPort] = Field(default_factory=dict)
+
+
+class InstanceSettings(_StrictModel):
+    ports: InstancePorts = Field(default_factory=InstancePorts)
+
+
+class RuntimeInstances(_StrictModel):
+    """Per-instance overrides; a source checkout is `dev`, an install `release`."""
+
+    release: InstanceSettings | None = None
+    dev: InstanceSettings | None = None
+
+
 class RuntimeConfig(_StrictModel):
     version: Literal[1] = 1
     provider: RuntimeProvider
@@ -71,6 +98,7 @@ class RuntimeConfig(_StrictModel):
     backend: dict[str, object] = Field(default_factory=dict)
     frontend: dict[str, object] = Field(default_factory=dict)
     image_size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "1024x1024"
+    instances: RuntimeInstances | None = None
     _removed_backend_fields: tuple[str, ...] = PrivateAttr(default=())
 
     @model_validator(mode="wrap")
@@ -103,8 +131,14 @@ class RuntimeConfig(_StrictModel):
     @field_validator("frontend")
     @classmethod
     def validate_frontend_settings(cls, value: dict[str, object]) -> dict[str, object]:
-        from common.config.loader import FrontendSettings
+        from common.config.loader import DERIVED_FRONTEND_FIELDS, FrontendSettings
 
+        # The CLI derives these from the instance ports; none is a user setting.
+        if DERIVED_FRONTEND_FIELDS.intersection(value):
+            raise PydanticCustomError(
+                "derived_from_instance_ports",
+                "The MCP URL is derived from the instance ports",
+            )
         FrontendSettings.model_validate(value)
         return value
 

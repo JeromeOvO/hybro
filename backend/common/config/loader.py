@@ -535,11 +535,16 @@ def validate_backend(values: dict[str, object]) -> Settings:
     return Settings.model_validate(values)
 
 
+# Public projection fields the CLI derives per instance; config.json may not set them.
+DERIVED_FRONTEND_FIELDS = frozenset({"mcp_url"})
+
+
 class FrontendSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     api_base_url: str = "http://localhost:8000"
     api_prefix: str = "/api/v1"
     server_url: str = "http://localhost:3000"
+    mcp_url: str = "http://127.0.0.1:8001/mcp"
     clerk_publishable_key: str = ""
     clerk_sign_in_url: str = "/sign-in"
     clerk_sign_up_url: str = "/sign-up"
@@ -549,7 +554,7 @@ class FrontendSettings(BaseModel):
     max_message_length: int = Field(default=10000, gt=0)
     inspection_timeout_ms: int = Field(default=300000, gt=0)
 
-    @field_validator("api_base_url", "server_url")
+    @field_validator("api_base_url", "server_url", "mcp_url")
     @classmethod
     def validate_url(cls, value: str) -> str:
         parsed = urlsplit(value)
@@ -570,6 +575,23 @@ class FrontendSettings(BaseModel):
         if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value) or value.endswith("/"):
             raise ValueError("Expected an absolute API path without a trailing slash")
         return value
+
+
+_DEFAULT_FRONTEND_ORIGINS = Settings.model_fields["frontend_origins"].default
+# Hosts a configured URL or origin names when it means "this machine".
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def _with_local_origin(configured: object, origin: str) -> list[str]:
+    entries = Settings.parse_frontend_origins(configured)
+    if not isinstance(entries, list) or not all(
+        isinstance(entry, str) for entry in entries
+    ):
+        raise ValueError("frontend_origins must be a string or a list of strings")
+    public = [
+        entry for entry in entries if urlsplit(entry).hostname not in LOOPBACK_HOSTS
+    ]
+    return [origin, *public]
 
 
 @lru_cache(maxsize=1)
@@ -605,6 +627,14 @@ def get_settings() -> Settings:
             ),
         }.items():
             values.setdefault(key, value)
+        # The CLI derives this instance's own frontend origin from its ports. It
+        # replaces loopback entries, so a dev frontend on another port is allowed,
+        # and keeps public entries such as a deployed domain.
+        origin = os.environ.get("HYBRO_FRONTEND_ORIGIN")
+        if origin:
+            values["frontend_origins"] = _with_local_origin(
+                values.get("frontend_origins", _DEFAULT_FRONTEND_ORIGINS), origin
+            )
     settings = Settings.model_validate(values)
     if settings.auth_mode == "clerk" and not settings.clerk_secret_key:
         raise ValueError("Clerk authentication requires auth.json credentials")

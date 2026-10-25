@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { publicConfig } from '@/lib/config'
-import { MCP_URL } from '@/lib/mcp'
+import { mcpUrl } from '@/lib/mcp'
 import { routes } from '@/lib/routes'
 import { buildAccessMaterial, type AccessKind } from './access-material'
 import { clientSetups } from './client-setups'
@@ -99,10 +99,11 @@ function AddressCard({ label, url, copy }: { label: string; url: string; copy: R
 
 function McpPanel() {
   const copy = useCopy()
-  const setups = clientSetups(MCP_URL)
+  const url = mcpUrl()
+  const setups = clientSetups(url)
   return (
     <div className="flex flex-col gap-8">
-      <AddressCard label="MCP address" url={MCP_URL} copy={copy} />
+      <AddressCard label="MCP address" url={url} copy={copy} />
       <section aria-labelledby="setup-heading" className="flex flex-col gap-3">
         <h2 id="setup-heading" className="text-[15px] font-semibold">Add Hybro to your assistant</h2>
         <Tabs defaultValue={setups[0].id} className="gap-3">

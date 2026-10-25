@@ -50,9 +50,23 @@ def test_compose_matches_manifest() -> None:
     # Discovery would otherwise re-register each agent under its host URL.
     published_ports = ",".join(str(spec["port"]) for spec in agents.values())
     assert (
-        f"LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS={published_ports}"
+        "LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS="
+        f"${{HYBRO_DISCOVERY_EXCLUDED_PORTS:-{published_ports}}}"
         in backend_environment
     )
+    assert (
+        "HYBRO_FRONTEND_ORIGIN=${HYBRO_FRONTEND_ORIGIN:-}" in backend_environment
+    )
+    # Each host port is transport from the CLI; the release default stays.
+    for spec in agents.values():
+        variable = "HYBRO_PORT_" + spec["service"].upper().replace("-", "_")
+        assert services[spec["service"]]["ports"] == [
+            f"${{{variable}:-{spec['port']}}}:{spec['port']}"
+        ]
+    assert services["frontend"]["ports"] == ["${HYBRO_PORT_FRONTEND:-3000}:3000"]
+    assert services["backend"]["ports"] == ["${HYBRO_PORT_BACKEND:-8000}:8000"]
+    assert services["mongo"]["ports"] == ["${HYBRO_PORT_MONGO:-27017}:27017"]
+    assert services["redis"]["ports"] == ["${HYBRO_PORT_REDIS:-6379}:6379"]
     assert "env_file" not in services["backend"]
     assert not any(
         "DEFAULT_AGENT_LLM_TOKEN" in value
@@ -71,7 +85,7 @@ def test_mcp_is_default_loopback_only_and_has_no_credentials() -> None:
     services = yaml.safe_load(source.read_text(encoding="utf-8"))["services"]
     mcp = services["mcp"]
     assert "profiles" not in mcp
-    assert mcp["ports"] == ["127.0.0.1:8001:8001"]
+    assert mcp["ports"] == ["127.0.0.1:${HYBRO_PORT_MCP:-8001}:8001"]
     assert mcp["depends_on"] == {"backend": {"condition": "service_healthy"}}
     assert mcp["environment"] == ["HYBRO_MCP_CONFIG=${HYBRO_MCP_CONFIG:-}"]
     assert not mcp.get("volumes")
@@ -94,7 +108,12 @@ def test_release_stack_matches_development_stack() -> None:
 
     dev = yaml.safe_load(source.read_text(encoding="utf-8"))
     release = yaml.safe_load(expected)
-    assert release["name"] == dev["name"] == "hybro"
+    # Distinct projects keep a checkout's stack and a released stack apart.
+    assert dev["name"] == "hybro-dev"
+    assert release["name"] == "hybro"
+    assert release["services"]["frontend"]["ports"] == dev["services"]["frontend"][
+        "ports"
+    ]
     assert set(release["services"]) == set(dev["services"])
     # The released stack is what users run, so it must carry the exclusion too.
     assert any(
