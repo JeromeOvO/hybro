@@ -11,7 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ⚠ BREAKING CHANGES
 
 * rename room_id to conversation_id in code, API, and frontend wire
-* **a2a:** speak A2A 1.0 only and reject pre-1.0 agent cards
 * delete legacy stored-data tolerances
 * **api:** serve rooms from canonical /rooms routes instead of /roomCenter
 * **agent:** return flat AgentView DTOs from /agent routes
@@ -20,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * **a2a:** reach A2A 0.3 agents through the SDK compatibility transport ([4454ced](https://github.com/hybroai/hybro/commit/4454cedf2114d2c963ff9396295db55b2a4f81e6))
 * **a2a:** register authenticated push notifications for canonical calls ([b7da47b](https://github.com/hybroai/hybro/commit/b7da47b87cb7c9157c8b3fb1ec5e343af90705aa))
-* **a2a:** speak A2A 1.0 only and reject pre-1.0 agent cards ([c9d7e02](https://github.com/hybroai/hybro/commit/c9d7e02ebebe12f777a9f9e55c58c2057f1fdfcb))
 * **agent:** return flat AgentView DTOs from /agent routes ([63a285c](https://github.com/hybroai/hybro/commit/63a285cb141502abc74e6ec893223431094873c6))
 * **api:** serve rooms from canonical /rooms routes instead of /roomCenter ([2fffe8d](https://github.com/hybroai/hybro/commit/2fffe8d9494091f4d48c878c65f27bffab319b0b))
 * **cli:** run dev and release instances side by side ([a8ecadf](https://github.com/hybroai/hybro/commit/a8ecadf62758d0468c40f1fa1bb2489a6dfba696))
