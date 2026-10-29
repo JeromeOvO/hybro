@@ -44,6 +44,7 @@ Hybro AI allows developers and teams to deploy, coordinate, and inspect clusters
 - [uv](https://docs.astral.sh/uv/) for host-side `hybro setup` from a checkout
 - Node.js 20.19+ (if running the frontend outside of Docker)
 - Python 3.12+ and MongoDB 4.2+ (if running the backend outside of Docker; Docker Compose uses MongoDB 7.0)
+- Redis 7 (optional for a single backend process outside of Docker; required for multi-worker deployments)
 
 ### Quick Start (Docker)
 
