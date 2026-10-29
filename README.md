@@ -164,8 +164,9 @@ agent, or **Create subnet** to group agents.
   <img src="assets/screenshots/network.png" alt="The Network page with two agent teams" width="800">
 </p>
 
-The bundled agents are **Weather**, **Story**, **Travel Planner**, and
-**Image Generator**. The **Travel Planner** and **Story & Image Creator** cards
+The bundled agents are **Weather Agent**, **Story Agent**,
+**Travel Planner Agent**, and **Image Generator Agent**. The **Travel Planner**
+and **Story & Image Creator** cards
 on the Chats page start a ready-made multi-agent chat.
 
 ### 5. Connect an MCP client
@@ -178,6 +179,9 @@ your client; Hybro does not automatically discover or register MCP clients.
 
 <p align="center">
   <img src="assets/screenshots/connect.png" alt="The Connect page with the MCP address and client setup commands" width="800">
+  <br />
+  <em>Captured from a source checkout, so it shows the dev MCP URL on port 8101.
+  A released install shows port 8001.</em>
 </p>
 
 ```json
