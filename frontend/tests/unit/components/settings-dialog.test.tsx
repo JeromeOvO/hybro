@@ -20,6 +20,10 @@ vi.mock('@/components/settings/sessions-section', () => ({
   SessionsSection: () => <div data-testid="sessions-section">Sessions</div>,
 }))
 
+vi.mock('@/components/settings/model-provider-section', () => ({
+  ModelProviderSection: () => <div data-testid="model-provider-section">Model provider</div>,
+}))
+
 vi.mock('@/components/settings/danger-zone-section', () => ({
   DangerZoneSection: () => <div data-testid="danger-zone-section">Danger Zone</div>,
 }))
@@ -42,6 +46,7 @@ describe('SettingsDialog', () => {
   it('shows account settings without a My Hub entry', () => {
     render(<SettingsDialog open={true} onOpenChange={vi.fn()} />)
 
+    expect(screen.getByTestId('model-provider-section')).toBeInTheDocument()
     expect(screen.getByTestId('profile-section')).toBeInTheDocument()
     expect(screen.getByTestId('password-section')).toBeInTheDocument()
     expect(screen.getByTestId('sessions-section')).toBeInTheDocument()

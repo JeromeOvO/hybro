@@ -16,7 +16,7 @@ from llm_gateway.model_registry import ModelInfo
 def isolate_registry_provider_unit_layer(monkeypatch):
     # These tests exercise injected registry/provider behavior, not application
     # startup. Required JSON setup is covered by the configuration boundary tests.
-    monkeypatch.setattr("llm_gateway.gateway.load_optional_setup", lambda _: None)
+    monkeypatch.setattr("llm_gateway.gateway.load_provider_runtime", lambda: None)
 
 
 class FakeRegistry:

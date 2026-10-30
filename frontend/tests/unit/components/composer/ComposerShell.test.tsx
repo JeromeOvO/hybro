@@ -15,11 +15,16 @@ import {
   hitlRequestKey,
 } from '@/lib/hitl/hitl-message-projection'
 
+let setupNotice: { code: string; message: string; blocking: boolean } | null = null
+vi.mock('@/hooks/useSetupStatus', () => ({ useSetupNotice: () => setupNotice }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/room/test-room' }))
+
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
     <div
       data-testid="room-chat-input"
       data-disabled={props.disableSend}
+      data-editor-disabled={props.disabled ? 'true' : 'false'}
       data-processing={props.processing}
       data-has-top-slot={props.topSlot ? 'true' : 'false'}
       data-target-mode={props.selectedGroupDispatch?.message_target_mode}
@@ -397,6 +402,32 @@ describe('ComposerShell', () => {
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByTestId('room-chat-input')).toBeDefined()
     expect(screen.getByTestId('room-chat-input').getAttribute('data-target-mode')).toBe('room_default')
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-editor-disabled')).toBe('false')
+    expect(screen.queryByTestId('setup-banner')).toBeNull()
+  })
+
+  it('disables the composer and links to settings while no provider works', () => {
+    setupNotice = { code: 'unconfigured', message: 'No model provider is set up.', blocking: true }
+    try {
+      render(<ComposerShell adapter={mockAdapter} />)
+      expect(screen.getByTestId('setup-banner')).toHaveTextContent('No model provider is set up.')
+      expect(screen.getByRole('link', { name: 'Open model provider settings' })).toHaveAttribute('href', '/room/test-room?settings=model-provider')
+      expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
+      expect(screen.getByTestId('room-chat-input').getAttribute('data-editor-disabled')).toBe('true')
+    } finally {
+      setupNotice = null
+    }
+  })
+
+  it('keeps the composer usable for a non-blocking notice', () => {
+    setupNotice = { code: 'config_invalid', message: 'config.json or auth.json is invalid.', blocking: false }
+    try {
+      render(<ComposerShell adapter={mockAdapter} />)
+      expect(screen.getByTestId('setup-banner')).toBeDefined()
+      expect(screen.getByTestId('room-chat-input').getAttribute('data-editor-disabled')).toBe('false')
+    } finally {
+      setupNotice = null
+    }
   })
 
   it('keeps active legacy processing authoritative after a canonical Turn completed', () => {

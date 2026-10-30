@@ -134,7 +134,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
     expected_snippets = [
-        "generation_provider=llm_gateway_config.generation_provider,",
+        "provider_runtime=_provider_runtime,",
         "settings_obj=runtime.settings,",
         "agent_selection_llm_service = AgentSelectionLLMService(",
     ]

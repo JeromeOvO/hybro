@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import hashlib
-import io
 import json
 import time
 import traceback
@@ -16,8 +15,6 @@ import pytest
 from common.config.runtime_config import RuntimeConfigurationError
 from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway import openai_oauth as oauth
-from llm_gateway.catalog import model_choices, validate_models
-from llm_gateway.setup_cli import SetupConsole, main
 from tests.fakes.llm_runtime import oauth_config, oauth_credential, runtime_state
 
 
@@ -417,79 +414,6 @@ async def test_refresh_detects_noncooperating_write_during_network(tmp_path):
     with pytest.raises(RuntimeConfigurationError):
         await store.resolve_oauth(config, initial.account_id, {}, refresh)
     assert store.read_stored_credential() == initial
-
-
-def test_cli_oauth_login_verify_save_noop_and_no_image_or_base_url(
-    tmp_path, monkeypatch
-):
-    credential, reports = oauth_credential(), []
-    login = AsyncMock(return_value=credential)
-    monkeypatch.setattr(oauth, "login", login)
-    verifier = AsyncMock()
-    args = [
-        "--provider",
-        "openai",
-        "--auth",
-        "oauth",
-        "--text-model",
-        "gpt-6-sol",
-        "--image-model",
-        "none",
-    ]
-    kwargs = dict(
-        environment={
-            "HOME": str(tmp_path),
-            "OPENAI_BASE_URL": "https://untrusted.invalid",
-        },
-        catalog=model_choices,
-        verifier=verifier,
-        console=SetupConsole(
-            lambda title, options: pytest.fail(title),
-            lambda: pytest.fail("secret"),
-            reports.append,
-        ),
-    )
-    assert main(args, **kwargs) == 0
-    assert main(args, **kwargs) == 0
-    login.assert_awaited_once()
-    assert verifier.await_args.args[2] is None
-    state = RuntimeConfigStore(tmp_path / ".hybro").load({})
-    assert (
-        state.authentication.credential == credential
-        and state.config.models.image is None
-    )
-    assert "Unchanged; no files rewritten." in reports
-    assert not model_choices(oauth_config().provider).image
-    assert validate_models(oauth_config()).model_id == "gpt-6-sol"
-
-
-@pytest.mark.parametrize("failure", [asyncio.CancelledError, RuntimeConfigurationError])
-def test_cli_login_failure_saves_nothing(tmp_path, monkeypatch, failure):
-    monkeypatch.setattr(oauth, "login", AsyncMock(side_effect=failure))
-    error = io.StringIO()
-    result = main(
-        [
-            "--provider",
-            "openai",
-            "--auth",
-            "oauth",
-            "--text-model",
-            "gpt-6-sol",
-            "--image-model",
-            "none",
-        ],
-        environment={"HOME": str(tmp_path)},
-        catalog=model_choices,
-        verifier=AsyncMock(),
-        console=SetupConsole(
-            lambda title, options: pytest.fail(title),
-            lambda: pytest.fail("secret"),
-            lambda _: None,
-        ),
-        error_output=error,
-    )
-    assert result == (130 if failure is asyncio.CancelledError else 1)
-    assert not (tmp_path / ".hybro/config.json").exists()
 
 
 async def test_async_lock_wait_is_cancelable_and_off_event_loop(tmp_path, monkeypatch):

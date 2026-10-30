@@ -57,8 +57,22 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ getToken: vi.fn() }),
 }))
 
+// Mock the setup status; undefined means not loaded yet.
+let setupStatus: Record<string, unknown> | undefined
+vi.mock("@/hooks/useSetupStatus", () => ({
+  useSetupStatus: () => ({ data: setupStatus }),
+}))
+
+// The full agent catalog; undefined means not loaded yet.
+let catalogAgents: Agent[] | undefined
+vi.mock("@/hooks/room/useAgentCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/room/useAgentCatalog")>()),
+  useAgentCatalog: () => ({ allAgentsData: catalogAgents }),
+}))
+
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/chat",
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn() }),
 }))
@@ -75,6 +89,8 @@ beforeEach(async () => {
   cleanup()
   vi.clearAllMocks()
   useRoomUiStore.setState({ pendingChatHandoff: null })
+  setupStatus = undefined
+  catalogAgents = undefined
   gmState = {
     availableAgents: agents,
     loadingAgents: false,
@@ -100,6 +116,60 @@ beforeEach(async () => {
   }
   const mod = await import("@/app/(portal)/chat/page")
   ChatPage = mod.default
+})
+
+describe("Chat page — model provider gating", () => {
+  const configured = { state: "configured", provider: "openai", auth: "api_key", text_model: "gpt-5-mini", image_model: "gpt-image-1", image_size: "auto", last_error: null }
+
+  const story = createAgent({ agent_id: "s1", name: "Story Agent", source: "bundled" })
+  const image = (status: "active" | "inactive", reason: Agent["inactive_reason"] = null) =>
+    createAgent({ agent_id: "i1", name: "Image Generator Agent", source: "bundled", status, inactive_reason: reason })
+
+  it("disables the image use case while the Image Generator waits for an image model", async () => {
+    setupStatus = { ...configured, image_model: null }
+    catalogAgents = [...agents, story, image("inactive", "image_model_not_configured")]
+    render(<ChatPage />)
+    const card = (await screen.findByText("Story & Image Creator")).closest("button")!
+    expect(card).toBeDisabled()
+    expect(card).toHaveTextContent("Needs an image model. Choose one in Settings, Model provider.")
+    expect(screen.getByText("Travel Planner").closest("button")).not.toBeDisabled()
+    expect(screen.queryByTestId("setup-banner")).toBeNull()
+  })
+
+  it("enables the image use case once the Image Generator is active", async () => {
+    setupStatus = configured
+    catalogAgents = [...agents, story, image("active")]
+    render(<ChatPage />)
+    expect((await screen.findByText("Story & Image Creator")).closest("button")).not.toBeDisabled()
+  })
+
+  it("keeps a use case enabled when its agent is only offline", async () => {
+    setupStatus = configured
+    catalogAgents = [...agents, story, image("inactive")]
+    render(<ChatPage />)
+    const card = (await screen.findByText("Story & Image Creator")).closest("button")!
+    expect(card).not.toHaveTextContent("Needs")
+  })
+
+  it("starts a use case with agents from the full catalog", async () => {
+    setupStatus = configured
+    catalogAgents = [...agents, story, image("active")]
+    gmState = { ...gmState, availableAgents: agents }
+    render(<ChatPage />)
+    fireEvent.click(await screen.findByText("Story & Image Creator"))
+    await waitFor(() => expect(mockEnsureUseCaseTeam).toHaveBeenCalledWith(expect.objectContaining({
+      catalog: [...agents, story, image("active")],
+    })))
+  })
+
+  it("shows the permanent banner and disables the composer when unconfigured", async () => {
+    setupStatus = { state: "unconfigured", image_size: "auto" }
+    const { container } = render(<ChatPage />)
+    expect(await screen.findByTestId("setup-banner")).toHaveTextContent("No model provider is set up.")
+    expect(screen.getByRole("link", { name: "Open model provider settings" })).toHaveAttribute("href", "/chat?settings=model-provider")
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull()
+    expect(container.querySelector('[contenteditable="false"]')).not.toBeNull()
+  })
 })
 
 describe("Chat page — Use Case Cards integration", () => {
