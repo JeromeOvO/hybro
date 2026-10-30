@@ -19,7 +19,7 @@ from llm_gateway.image_types import (
     GatewayImageRequest,
     ImageContractError,
 )
-from llm_gateway.providers.openai_images import OpenAIImageProvider
+from llm_gateway.providers.openai_images import IMAGE_MODELS, OpenAIImageProvider
 from tests.fakes.llm_runtime import runtime_state
 
 
@@ -47,12 +47,10 @@ class Body(httpx.AsyncByteStream):
         self.closed = True
 
 
-def image_state():
+def image_state(model="gpt-image-1"):
     state = runtime_state()
     config = state.config.model_copy(
-        update={
-            "models": state.config.models.model_copy(update={"image": "gpt-image-1"})
-        }
+        update={"models": state.config.models.model_copy(update={"image": model})}
     )
     return type(state)(config, state.authentication)
 
@@ -60,14 +58,18 @@ def image_state():
 def test_image_selection_is_optional_and_provider_specific():
     state = image_state()
     assert validate_models(state.config).model_id == "gpt-4o-mini"
-    assert model_choices(state.config.provider).image == ("gpt-image-1",)
+    assert model_choices(state.config.provider).image == (
+        "gpt-image-1",
+        "gpt-image-1-mini",
+    )
     assert runtime_state().config.models.image is None
     for provider in ("deepseek", "anthropic"):
         assert not model_choices(RuntimeProvider(id=provider, auth="api_key")).image
 
 
+@pytest.mark.parametrize("model", IMAGE_MODELS)
 @pytest.mark.parametrize("editing", [False, True])
-async def test_gateway_selected_image_generation_and_edit(monkeypatch, editing):
+async def test_gateway_selected_image_generation_and_edit(monkeypatch, editing, model):
     encoded = png()
     body = Body(json.dumps({"created": 1, "data": [{"b64_json": encoded}]}).encode())
     calls = []
@@ -90,7 +92,7 @@ async def test_gateway_selected_image_generation_and_edit(monkeypatch, editing):
         "llm_gateway.providers.openai_images.OpenAIImageProvider", factory
     )
     gateway = LLMGatewayImpl.__new__(LLMGatewayImpl)
-    gateway._setup = image_state()
+    gateway._setup = image_state(model)
     gateway._image_base_url = "https://provider.test/custom/v1"
     reference = GatewayImage(mime_type="image/png", data_base64=encoded)
     request = GatewayImageRequest(
@@ -106,7 +108,10 @@ async def test_gateway_selected_image_generation_and_edit(monkeypatch, editing):
         "edits" if editing else "generations"
     )
     assert calls[0].headers["authorization"] == "Bearer test-only-key"
-    assert b"gpt-image-1" in calls[0].content
+    if editing:
+        assert b'name="model"\r\n\r\n' + model.encode() + b"\r\n" in calls[0].content
+    else:
+        assert json.loads(calls[0].content)["model"] == model
     assert body.closed and created[0]._client.is_closed()
 
 

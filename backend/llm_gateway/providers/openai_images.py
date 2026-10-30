@@ -22,6 +22,8 @@ from llm_gateway.image_types import (
 )
 
 MAX_IMAGE_ERROR_BYTES = 64 * 1024
+# Both models accept the same generate/edit fields, sizes, and quality values.
+IMAGE_MODELS = ("gpt-image-1", "gpt-image-1-mini")
 
 
 class OpenAIImageProvider:
@@ -52,7 +54,7 @@ class OpenAIImageProvider:
     async def generate_image_once(
         self, request: GatewayImageRequest, *, model: str
     ) -> GatewayImageResult:
-        if model != "gpt-image-1":
+        if model not in IMAGE_MODELS:
             raise ImageContractError("Unsupported image model")
         options = dict(
             model=model,
