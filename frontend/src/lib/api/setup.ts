@@ -66,7 +66,8 @@ export function getSetupModels(provider: ProviderId, auth: AuthMethod, signal?: 
   return apiGet<SetupModels>(`${url('models')}?${query}`, undefined, signal)
 }
 
-export function saveApiKey(body: { provider: ProviderId; api_key: string; text_model: string; image_model: string | null }): Promise<SetupSaved> {
+/** `api_key: null` reuses the saved key for this Provider to change models only. */
+export function saveApiKey(body: { provider: ProviderId; api_key: string | null; text_model: string; image_model: string | null }): Promise<SetupSaved> {
   return apiPost<SetupSaved>(url('api-key'), body)
 }
 

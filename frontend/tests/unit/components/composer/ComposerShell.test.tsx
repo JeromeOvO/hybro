@@ -15,7 +15,9 @@ import {
   hitlRequestKey,
 } from '@/lib/hitl/hitl-message-projection'
 
-let setupNotice: { code: string; message: string; blocking: boolean } | null = null
+import { setupNotice as realSetupNotice, type SetupNotice } from '@/lib/setup-notice'
+
+let setupNotice: SetupNotice | null = null
 vi.mock('@/hooks/useSetupStatus', () => ({ useSetupNotice: () => setupNotice }))
 vi.mock('next/navigation', () => ({ usePathname: () => '/room/test-room' }))
 
@@ -25,6 +27,7 @@ vi.mock('@/components/room-chat-input', () => ({
       data-testid="room-chat-input"
       data-disabled={props.disableSend}
       data-editor-disabled={props.disabled ? 'true' : 'false'}
+      data-placeholder={props.placeholder}
       data-processing={props.processing}
       data-has-top-slot={props.topSlot ? 'true' : 'false'}
       data-target-mode={props.selectedGroupDispatch?.message_target_mode}
@@ -407,20 +410,21 @@ describe('ComposerShell', () => {
   })
 
   it('disables the composer and links to settings while no provider works', () => {
-    setupNotice = { code: 'unconfigured', message: 'No model provider is set up.', blocking: true }
+    setupNotice = realSetupNotice({ state: 'unconfigured', image_size: 'auto' })
     try {
       render(<ComposerShell adapter={mockAdapter} />)
-      expect(screen.getByTestId('setup-banner')).toHaveTextContent('No model provider is set up.')
-      expect(screen.getByRole('link', { name: 'Open model provider settings' })).toHaveAttribute('href', '/room/test-room?settings=model-provider')
+      expect(screen.getByTestId('setup-banner')).toHaveTextContent('Room Chat needs a model to plan and answer.')
+      expect(screen.getByRole('link', { name: 'Set up provider' })).toHaveAttribute('href', '/room/test-room?settings=model-provider')
       expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
       expect(screen.getByTestId('room-chat-input').getAttribute('data-editor-disabled')).toBe('true')
+      expect(screen.getByTestId('room-chat-input').getAttribute('data-placeholder')).toBe('Connect a model provider to start a chat')
     } finally {
       setupNotice = null
     }
   })
 
   it('keeps the composer usable for a non-blocking notice', () => {
-    setupNotice = { code: 'config_invalid', message: 'config.json or auth.json is invalid.', blocking: false }
+    setupNotice = realSetupNotice({ state: 'configured', image_size: 'auto', last_error: 'config_invalid' })
     try {
       render(<ComposerShell adapter={mockAdapter} />)
       expect(screen.getByTestId('setup-banner')).toBeDefined()

@@ -1182,7 +1182,7 @@ the client of these routes. `api_gateway/routes/setup_routes.py` is a thin adapt
 |---|---|
 | `GET /status` | Refreshes the `ProviderRuntime`, then returns the state (`configured`, `unconfigured`, `credential_invalid`), Provider, auth method, text and image model, image size, and `last_error` code. Never returns credentials. |
 | `GET /models?provider=&auth=` | Eligible text and image model IDs from the catalog; `text[0]` is the recommendation. |
-| `POST /api-key` | Provider, key, text model, optional image model. Verifies once, saves, reloads. |
+| `POST /api-key` | Provider, key, text model, optional image model. Verifies once, saves, reloads. A `null` key reuses the saved key when it belongs to that Provider, to change models only; otherwise 409 `key_required`. |
 | `POST /oauth/start` | Starts one ChatGPT login: login ID, authorization URL, whether the callback listener is bound, and expiry. |
 | `GET /oauth/{login_id}` | Login state: `pending`, `authenticated`, `failed`, or `expired`. |
 | `POST /oauth/complete` | Login ID and the pasted redirect address, for when the browser could not reach the listener. |
@@ -1204,6 +1204,7 @@ with `{"detail", "code"}` (`SetupErrorBody`): `invalid_selection`,
 `config_conflict`, `credential_unreadable`, `login_pending` (with the pending
 `login_id`),
 `login_not_found`, `login_not_ready`, `login_expired`, `login_required`,
+`key_required`,
 `invalid_callback`, `forbidden`, and `setup_unavailable`.
 
 An `auth.json` that is not valid JSON or does not have mode 0600 cannot be
@@ -1227,7 +1228,12 @@ reach the listener even when `listener` is true, and the paste fallback is the
 working path. The first valid callback, or a pasted
 address, exchanges the code; the listener then closes. A pasted address must be
 exactly `http://localhost:1455` (no user info); its path and query go through
-the same strict `callback_code` state check. A finished login keeps its
+the same strict `callback_code` state check. The listener answers each request
+with one self-contained HTML page (inline CSS, no external requests,
+`Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`): 200
+"Signed in with ChatGPT" for the accepted callback, 400 "Sign-in cancelled" for
+a denial, and 400 "This sign-in link has expired" for any other request,
+including a wrong state or a replay. A finished login keeps its
 credential for five more minutes, until models are saved or it is canceled.
 The backend runs one worker, so pending logins are not shared across processes.
 

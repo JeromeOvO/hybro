@@ -165,9 +165,25 @@ describe("Chat page — model provider gating", () => {
   it("shows the permanent banner and disables the composer when unconfigured", async () => {
     setupStatus = { state: "unconfigured", image_size: "auto" }
     const { container } = render(<ChatPage />)
-    expect(await screen.findByTestId("setup-banner")).toHaveTextContent("No model provider is set up.")
-    expect(screen.getByRole("link", { name: "Open model provider settings" })).toHaveAttribute("href", "/chat?settings=model-provider")
+    const banner = await screen.findByTestId("setup-banner")
+    expect(banner).toHaveTextContent("Connect a model provider")
+    expect(banner).toHaveTextContent("Room Chat needs a model to plan and answer. This stays until a provider works.")
+    expect(banner).toHaveAttribute("data-tone", "warning")
+    expect(screen.getByRole("link", { name: "Set up provider" })).toHaveAttribute("href", "/chat?settings=model-provider")
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull()
+    const editor = container.querySelector('[contenteditable="false"]')
+    expect(editor).toHaveAttribute("data-placeholder", "Connect a model provider to start a chat")
+    expect(screen.getByText("Travel Planner").closest("button")).toBeDisabled()
+  })
+
+  it("shows the red banner and keeps the composer disabled when the ChatGPT sign-in expired", async () => {
+    setupStatus = { ...configured, auth: "oauth", last_error: "oauth_refresh_failed" }
+    const { container } = render(<ChatPage />)
+    const banner = await screen.findByTestId("setup-banner")
+    expect(banner).toHaveTextContent("ChatGPT sign-in expired")
+    expect(banner).toHaveTextContent("Room Chat is paused. Existing chats are kept; sign in again to continue.")
+    expect(banner).toHaveAttribute("data-tone", "error")
+    expect(screen.getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/chat?settings=model-provider")
     expect(container.querySelector('[contenteditable="false"]')).not.toBeNull()
   })
 })

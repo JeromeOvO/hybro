@@ -23,7 +23,7 @@ import { DEFAULT_CHAT_MODE, chatModeToExecutionMode } from "@/lib/types/chat-mod
 import { cn } from "@/lib/utils"
 import { useRoomUiStore } from "@/stores/room-ui-store"
 import { UseCaseCard } from "@/components/use-case-card"
-import { SetupBanner } from "@/components/setup/setup-banner"
+import { BLOCKED_COMPOSER_PLACEHOLDER, SetupBanner } from "@/components/setup/setup-banner"
 import { useSetupStatus } from "@/hooks/useSetupStatus"
 import { setupNotice } from "@/lib/setup-notice"
 import { templateUnavailableReason, useCaseTemplates } from "@/lib/use-case-templates"
@@ -305,6 +305,7 @@ function ChatPageContent() {
                         <RoomChatInput
                             onSubmit={handleSubmit}
                             disabled={notice?.blocking ?? false}
+                            placeholder={notice?.blocking ? BLOCKED_COMPOSER_PLACEHOLDER : undefined}
                             disableSend={creating || settingUpTemplate !== null}
                             agents={agentListForMentions}
                             showGroupSelector={true}
@@ -355,7 +356,7 @@ function ChatPageContent() {
                                         template={template}
                                         catalog={useCaseCatalog}
                                         onClick={() => handleTemplateClick(template)}
-                                        disabled={creating || settingUpTemplate !== null || catalogLoading || gm.loadingGroups}
+                                        disabled={(notice?.blocking ?? false) || creating || settingUpTemplate !== null || catalogLoading || gm.loadingGroups}
                                         unavailableReason={templateUnavailableReason(template, allAgentsData ?? [])}
                                     />
                                 ))}

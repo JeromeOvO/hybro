@@ -6748,12 +6748,19 @@
             "title": "Provider"
           },
           "api_key": {
-            "type": "string",
-            "maxLength": 4096,
-            "minLength": 1,
-            "format": "password",
-            "title": "Api Key",
-            "writeOnly": true
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
           },
           "text_model": {
             "type": "string",
@@ -6779,7 +6786,6 @@
         "type": "object",
         "required": [
           "provider",
-          "api_key",
           "text_model"
         ],
         "title": "ApiKeySetup"

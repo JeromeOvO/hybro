@@ -510,3 +510,26 @@ def test_application_registers_setup_routes_and_error_mapping():
     assert "/api/v1/setup/status" in paths
     assert "/api/v1/setup/oauth/{login_id}" in paths
     assert SetupRequestError in app.exception_handlers
+
+
+async def test_model_save_without_a_key_reuses_the_saved_key(harness):
+    missing = await harness.http.post("/api-key", json=api_key_body(api_key=None))
+    assert missing.status_code == 409 and missing.json()["code"] == "key_required"
+    await harness.http.post("/api-key", json=api_key_body())
+    other = await harness.http.post(
+        "/api-key",
+        json=api_key_body(provider="openai", api_key=None, text_model="gpt-5-mini"),
+    )
+    assert other.status_code == 409 and other.json()["code"] == "key_required"
+    choices = (
+        await harness.http.get(
+            "/models", params={"provider": "deepseek", "auth": "api_key"}
+        )
+    ).json()["text"]
+    response = await harness.http.post(
+        "/api-key", json=api_key_body(api_key=None, text_model=choices[-1])
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"]["text_model"] == choices[-1]
+    assert harness.verifier.calls[-1] == ("deepseek", choices[-1])
+    assert KEY in (harness.store.home / "auth.json").read_text()

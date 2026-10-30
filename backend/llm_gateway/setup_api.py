@@ -86,7 +86,8 @@ class SetupModels(_SetupDTO):
 
 class ApiKeySetup(_SetupDTO):
     provider: ProviderId
-    api_key: SecretStr = Field(min_length=1, max_length=4096)
+    # None reuses the saved key for this Provider, to change models without it.
+    api_key: SecretStr | None = Field(default=None, min_length=1, max_length=4096)
     text_model: str = Field(min_length=1, max_length=200)
     image_model: str | None = Field(default=None, min_length=1, max_length=200)
 
@@ -466,6 +467,8 @@ class BrowserSetup:
         config = self._selection(
             request.provider, "api_key", request.text_model, request.image_model
         )
+        if request.api_key is None:
+            return await self._save(config, await self._saved_key(request.provider))
         try:
             credential = ApiKeyCredential(
                 provider=request.provider, api_key=request.api_key
@@ -532,11 +535,22 @@ class BrowserSetup:
             ) from None
         return config
 
-    async def _saved_oauth(self) -> OAuthCredential:
+    async def _stored(self) -> StoredCredential | None:
         try:
-            stored = await asyncio.to_thread(self._runtime.store.read_stored_credential)
+            return await asyncio.to_thread(self._runtime.store.read_stored_credential)
         except RuntimeConfigurationError:
             raise _unreadable(StoredCredentialUnreadable()) from None
+
+    async def _saved_key(self, provider: ProviderId) -> ApiKeyCredential:
+        stored = await self._stored()
+        if not isinstance(stored, ApiKeyCredential) or stored.provider != provider:
+            raise SetupRequestError(
+                "key_required", 409, "Enter an API key to save these models."
+            )
+        return stored
+
+    async def _saved_oauth(self) -> OAuthCredential:
+        stored = await self._stored()
         if (
             not isinstance(stored, OAuthCredential)
             or stored.expires_at <= time.time() + REFRESH_MARGIN

@@ -21,8 +21,11 @@ afterEach(cleanup)
 describe('Overview setup banner', () => {
   it('links to the model provider settings and can be dismissed', async () => {
     render(<OverviewSetupBanner />)
-    expect(await screen.findByTestId('setup-banner')).toHaveTextContent('No model provider is set up.')
-    expect(screen.getByRole('link', { name: 'Open model provider settings' })).toHaveAttribute('href', '/?settings=model-provider')
+    const banner = await screen.findByTestId('setup-banner')
+    expect(banner).toHaveTextContent('Connect a model provider')
+    expect(banner).toHaveTextContent('Room Chat and 4 sample agents need one. MCP and the Echo agent already work.')
+    expect(banner).toHaveAttribute('data-tone', 'warning')
+    expect(screen.getByRole('link', { name: 'Set up provider' })).toHaveAttribute('href', '/?settings=model-provider')
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByTestId('setup-banner')).toBeNull()
     expect(localStorage.getItem(DISMISSED_KEY)).toBe('unconfigured')
@@ -38,7 +41,18 @@ describe('Overview setup banner', () => {
     localStorage.setItem(DISMISSED_KEY, 'unconfigured')
     status = { state: 'credential_invalid', image_size: 'auto', last_error: null }
     render(<OverviewSetupBanner />)
-    expect(await screen.findByTestId('setup-banner')).toHaveTextContent('credential is missing')
+    expect(await screen.findByTestId('setup-banner')).toHaveTextContent('API key is missing')
+  })
+
+  it('shows the red sign-in banner when the ChatGPT sign-in expired', async () => {
+    status = { state: 'configured', provider: 'openai', auth: 'oauth', text_model: 'gpt-6.1-sol', image_size: 'auto', last_error: 'oauth_refresh_failed' }
+    render(<OverviewSetupBanner />)
+    const banner = await screen.findByTestId('setup-banner')
+    expect(banner).toHaveTextContent('ChatGPT sign-in expired')
+    expect(banner).toHaveTextContent('Room Chat and 4 sample agents are paused until you sign in again.')
+    expect(banner).toHaveAttribute('data-tone', 'error')
+    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/?settings=model-provider')
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
   })
 
   it('clears the dismissal once the provider is healthy', async () => {

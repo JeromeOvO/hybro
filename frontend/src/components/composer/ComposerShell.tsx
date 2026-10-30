@@ -15,7 +15,7 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { useCanonicalComposerAuthority } from '@/stores/turn-store'
 import { Badge } from '@/components/ui/badge'
-import { SetupBanner } from '@/components/setup/setup-banner'
+import { BLOCKED_COMPOSER_PLACEHOLDER, SetupBanner } from '@/components/setup/setup-banner'
 import { useSetupNotice } from '@/hooks/useSetupStatus'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
@@ -186,6 +186,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
       <RoomChatInput
         onSubmit={adapter.onSendMessage}
         disabled={setupNotice?.blocking ?? false}
+        placeholder={setupNotice?.blocking ? BLOCKED_COMPOSER_PLACEHOLDER : undefined}
         disableSend={adapter.isSending || normalComposerBlocked || isHitlMode}
         sending={adapter.isSending}
         processing={isProcessing}

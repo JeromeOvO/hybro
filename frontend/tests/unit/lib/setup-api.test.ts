@@ -64,8 +64,15 @@ describe('setup notice', () => {
     expect(setupNotice({ state: 'credential_invalid', image_size: 'auto' })).toMatchObject({ code: 'credential_invalid', blocking: true })
   })
 
+  it('treats an expired ChatGPT sign-in as a blocking red notice', () => {
+    const expired = { tone: 'error', title: 'ChatGPT sign-in expired', action: 'Sign in again', blocking: true }
+    expect(setupNotice({ state: 'configured', auth: 'oauth', image_size: 'auto', last_error: 'oauth_refresh_failed' })).toMatchObject({ code: 'oauth_refresh_failed', ...expired })
+    expect(setupNotice({ state: 'credential_invalid', auth: 'oauth', image_size: 'auto' })).toMatchObject({ code: 'credential_invalid', ...expired })
+    expect(setupNotice({ state: 'unconfigured', image_size: 'auto' })).toMatchObject({ tone: 'warning', title: 'Connect a model provider', action: 'Set up provider' })
+  })
+
   it('reports the last error of a working provider without blocking', () => {
-    expect(setupNotice({ state: 'configured', image_size: 'auto', last_error: 'oauth_refresh_failed' })).toMatchObject({ code: 'oauth_refresh_failed', blocking: false, message: expect.stringMatching(/Sign in again/) })
+    expect(setupNotice({ state: 'configured', image_size: 'auto', last_error: 'config_invalid' })).toMatchObject({ code: 'config_invalid', tone: 'warning', blocking: false })
     expect(setupNotice({ state: 'configured', image_size: 'auto', last_error: 'something_new' })).toMatchObject({ code: 'something_new', blocking: false })
   })
 

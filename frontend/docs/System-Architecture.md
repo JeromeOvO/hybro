@@ -1201,18 +1201,30 @@ the only place that probes `/hybro-mcp`, through `useMcpStatus`.
 through TanStack Query (key `['setup', 'status']`), polling every 30 s and on
 window focus, because the backend also picks up saves from another instance
 and manual file edits. `setupNotice` (`src/lib/setup-notice.ts`) turns the
-status into one notice keyed by an error code: the state for `unconfigured` and
-`credential_invalid` (blocking), or `last_error` such as `oauth_refresh_failed`,
-`config_invalid`, or `config_unreadable` for a working provider (not blocking).
+status into one notice keyed by an error code, with a tone, title, Overview
+body, Room Chat body, and action label:
+
+- `unconfigured`: amber "Connect a model provider", action **Set up provider**,
+  blocking.
+- An expired ChatGPT sign-in (`last_error: oauth_refresh_failed`, or
+  `credential_invalid` with OAuth; `isSignInExpired`): red "ChatGPT sign-in
+  expired", action **Sign in again**, blocking, because model calls fail.
+- `credential_invalid` with an API key (blocking), and `config_invalid`,
+  `config_unreadable`, or another `last_error` of a working provider (not
+  blocking): amber "Model provider needs attention".
+
 A status that cannot be read, such as a 403 for a non-admin in clerk mode,
 shows no notice.
 
-- Overview shows `OverviewSetupBanner` under the title. Dismissal is stored per
+- Overview shows `OverviewSetupBanner` under the title: a gear icon, title,
+  body, the action link, and a dismiss button. Dismissal is stored per
   browser in `localStorage` (`hybro.setup-notice.dismissed`) as the dismissed
   code, so a new code shows the banner again; a healthy status clears it.
 - Room Chat (`/chat` and the room composer in `ComposerShell`) shows the same
-  banner without a dismiss button. A blocking notice disables the composer
-  (`RoomChatInput` `disabled`); HITL answers are not gated.
+  banner with the Room Chat body and no dismiss button. A blocking notice
+  disables the composer (`RoomChatInput` `disabled`, placeholder "Connect a
+  model provider to start a chat") and, on `/chat`, the use-case cards; HITL
+  answers are not gated.
 - A use-case card on `/chat` is disabled with the reason while one of its
   Agents is inactive with an `inactive_reason` (`templateUnavailableReason`),
   such as the Image Generator without an image model. The page reads the full
@@ -1221,27 +1233,46 @@ shows no notice.
 
 Every banner links to `?settings=model-provider` on the current path
 (`src/lib/settings-url.ts`). `SettingsDialogProvider` watches that parameter
-inside a `Suspense` boundary, opens the dialog, and scrolls to the section;
-closing the dialog removes the parameter. `ModelProviderSection`
-(`src/components/settings/model-provider-section.tsx`), first in the dialog,
-shows the status, a Provider choice (OpenAI, DeepSeek, Anthropic) and for
-OpenAI the sign-in method, models from `GET /setup/models` (the first is the
-recommendation; image models only when the choice has any), and:
+inside a `Suspense` boundary and opens the dialog on that section; closing the
+dialog removes the parameter. The dialog has a section menu with icons (Model
+provider, Profile, Password, Sessions, About; Profile also holds the danger
+zone) and shows one section at a time, keeping all mounted so a sign-in in
+progress survives switching. Model provider is the default, and its menu item
+carries a dot in the status color. About shows the version from
+`package.json`.
 
-- API key: a password field, then **Verify and save** (`POST /setup/api-key`).
-  The key is sent only in the request body and cleared after a save.
-- ChatGPT sign-in: `POST /setup/oauth/start` (a 409 `login_pending` resumes the
-  pending login), a link to the authorization page, polling of
-  `GET /setup/oauth/{id}` every 2 s, and always the paste fallback for the
-  `localhost:1455` address (`POST /setup/oauth/complete`), because the browser
-  may not reach the listener even when it is bound. After authentication,
-  **Verify and save** posts the models with the login ID; with a saved sign-in,
-  **Save models** posts them without one. Cancel calls `DELETE`.
-- Image size (`PUT /setup/image-size`), with the note that it applies after a
-  restart.
+`ModelProviderSection` (`src/components/settings/model-provider-section.tsx`)
+shows a status card and three numbered cards. `providerPhase` maps the status
+and the local login to the card: **Not set up** (amber), **Waiting for
+sign-in** (cyan, a login is pending here), **Connected** (green), or **ChatGPT
+sign-in expired** (red, with **Sign in again**).
+
+1. Provider: radio cards for OpenAI, Anthropic, and DeepSeek.
+2. Connect: for OpenAI, a ChatGPT account / API key switch (ChatGPT account by
+   default).
+   - ChatGPT account: **Sign in with ChatGPT** opens a tab inside the click,
+     then `POST /setup/oauth/start` (a 409 `login_pending` resumes the pending
+     login) points it at the authorization URL; a blocked tab leaves a link.
+     The waiting panel polls `GET /setup/oauth/{id}` every 2 s, has **Cancel**
+     (`DELETE`), and a disclosure with the paste fallback for the
+     `localhost:1455` address (`POST /setup/oauth/complete`), open by default
+     when the listener is not bound. Once authenticated, the section posts the
+     recommended models with the login ID at once, so the login ends
+     connected. Connected shows **Sign in again**.
+   - API key: a password field and **Check and save** (`POST /setup/api-key`
+     with the Models card's values). The key is sent only in the request body
+     and cleared after a save. Connected shows "API key saved" and **Replace
+     key**; the backend exposes no part of the key.
+3. Models: disabled until the shown choice is connected. Text model on the
+   left (the first is marked recommended); image model and image size on the
+   right, disabled when the choice offers no image model. **Save models**
+   posts the models without a credential (`oauth/models` without a login ID,
+   or `api-key` with `api_key: null`), then `PUT /setup/image-size` when the
+   size changed, which applies after a restart.
 
 A save writes the returned status into the query cache, so banners and composer
-gating update at once. Failures show the backend's safe `detail`.
+gating update at once. Failures show the backend's safe `detail` under the card
+that failed.
 
 ### Visual system
 

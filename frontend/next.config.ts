@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { parsePublicConfig } from './src/lib/config-schema'
+import { version } from './package.json'
 
 // Server-side rewrites are compiled at build time, so routing needs a
 // projection for `npm run dev`. The image builds without one: Caddy routes the
@@ -15,6 +16,11 @@ const publicConfig = serializedConfig ? parsePublicConfig(serializedConfig) : nu
 const nextConfig: NextConfig = {
   // The image carries only the traced server and static files.
   output: 'standalone',
+  // Build metadata, inlined as a constant; importing package.json in client code
+  // would ship the whole file.
+  env: {
+    HYBRO_APP_VERSION: version,
+  },
   experimental: {
     prefetchInlining: true,
   },
