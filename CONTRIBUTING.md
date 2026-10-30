@@ -43,12 +43,31 @@ Enhancement suggestions are tracked as GitHub issues. When suggesting a feature:
 ## Local Development Setup
 
 ### Prerequisites
-- **Node.js**: 20.19+
+- **Node.js**: 20.19+ (the version pinned in `frontend/.nvmrc`)
 - **Python**: 3.12+
 - **`uv`**: Installed (`pip install uv` or via `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- **Docker & Docker Compose**: For local Redis & MongoDB
+- **Docker with Compose v2.24+**: For the full stack, or for local MongoDB and Redis
+- **MongoDB 4.2+**: Only when running the backend outside Docker
+- **Redis 7**: Optional when running a single backend process outside Docker
+
+### Full stack
+Configure once, then start the stack through the lifecycle CLI:
+
+```bash
+./scripts/hybro setup          # writes ~/.hybro/config.json and ~/.hybro/auth.json
+./scripts/hybro start --build  # rebuild images from your checkout
+```
+
+Do not run `docker compose up` directly. The CLI passes the validated
+configuration to the containers and disables Compose dotenv discovery. See
+[Running](README.md#running) for the other lifecycle commands.
 
 ### Backend (`backend/`)
+A backend started on the host reads the same `~/.hybro` configuration (or
+`HYBRO_HOME`), so run `./scripts/hybro setup` first. It connects to MongoDB at
+`localhost:27017` by default. Redis is disabled unless `backend.redis_url` is
+set in `config.json`; without it, SSE broadcast is process-local.
+
 ```bash
 cd backend
 # Install dependencies
@@ -64,8 +83,8 @@ uv run pytest
 ### Frontend (`frontend/`)
 ```bash
 cd frontend
-# Install dependencies
-npm install
+# Install dependencies (use `npm install` only when changing dependencies)
+npm ci
 
 # Run dev server (Turbopack)
 npm run dev
@@ -73,11 +92,6 @@ npm run dev
 # Run tests & linters
 npm run lint
 npm run test
-```
-
-### Running with Docker Compose
-```bash
-docker compose up -d --build
 ```
 
 ---
