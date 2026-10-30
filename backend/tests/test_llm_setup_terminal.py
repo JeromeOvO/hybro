@@ -90,7 +90,13 @@ def test_terminal_restored_on_syscall_or_output_failure(
     ("keys", "provider", "auth", "text", "image"),
     [
         (b"\r\r\r\r", "openai", "api_key", "gpt-5-mini", None),
-        (b"\r\r\x1b[B\r\x1b[B\r", "openai", "api_key", "gpt-4o-mini", "gpt-image-1"),
+        (
+            b"\r\r\x1b[B\r\x1b[B\r",
+            "openai",
+            "api_key",
+            "gpt-4o-mini",
+            "gpt-image-2.5-flare",
+        ),
         (b"\r\x1b[B\r\r\r", "openai", "oauth", "gpt-6.1-sol", None),
         (b"\x1b[B\r\x1b[B\r\r\r", "deepseek", "api_key", "deepseek-v4-flash", None),
         (
@@ -201,7 +207,7 @@ def test_current_config_summary_is_read_only_and_never_reads_credentials(
         config = oauth_config() if state == "oauth" else runtime_state().config
         data = config.model_dump()
         if state == "api_key":
-            data["models"]["image"] = "gpt-image-1"
+            data["models"]["image"] = "gpt-image-2.5-flare"
         if state == "invalid":
             data["models"]["text"] = "private-marker\u001b[31m"
         (store.home / "config.json").write_text(json.dumps(data))
@@ -232,7 +238,9 @@ def test_current_config_summary_is_read_only_and_never_reads_credentials(
         assert ("ChatGPT/Codex OAuth" if state == "oauth" else "API key") in output
         assert f"Text model: {config.models.text}" in output
         assert (
-            "Image model: None" if state == "oauth" else "Image model: gpt-image-1"
+            "Image model: None"
+            if state == "oauth"
+            else "Image model: gpt-image-2.5-flare"
         ) in output
         assert "backend activation are not checked" in output
     after = (

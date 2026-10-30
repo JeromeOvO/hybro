@@ -47,7 +47,7 @@ class Body(httpx.AsyncByteStream):
         self.closed = True
 
 
-def image_state(model="gpt-image-1"):
+def image_state(model="gpt-image-2.5-flare"):
     state = runtime_state()
     config = state.config.model_copy(
         update={"models": state.config.models.model_copy(update={"image": model})}
@@ -59,8 +59,8 @@ def test_image_selection_is_optional_and_provider_specific():
     state = image_state()
     assert validate_models(state.config).model_id == "gpt-4o-mini"
     assert model_choices(state.config.provider).image == (
-        "gpt-image-1",
-        "gpt-image-1-mini",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
     )
     assert runtime_state().config.models.image is None
     for provider in ("deepseek", "anthropic"):
@@ -166,7 +166,7 @@ async def test_image_rejects_compressed_response_without_retry(status):
     try:
         with pytest.raises(ImageContractError):
             await provider.generate_image_once(
-                GatewayImageRequest(prompt="A cat"), model="gpt-image-1"
+                GatewayImageRequest(prompt="A cat"), model="gpt-image-2.5-flare"
             )
     finally:
         await provider.aclose()

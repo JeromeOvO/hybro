@@ -22,8 +22,9 @@ from llm_gateway.image_types import (
 )
 
 MAX_IMAGE_ERROR_BYTES = 64 * 1024
-# Both models accept the same generate/edit fields, sizes, and quality values.
-IMAGE_MODELS = ("gpt-image-1", "gpt-image-1-mini")
+# OpenAI's replacements for the retired gpt-image-1 family (deprecations page,
+# 2026-10). Setup offers them in this order after "None".
+IMAGE_MODELS = ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
 
 
 class OpenAIImageProvider:
