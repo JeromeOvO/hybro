@@ -1234,7 +1234,9 @@ shows no notice.
 Every banner links to `?settings=model-provider` on the current path
 (`src/lib/settings-url.ts`). `SettingsDialogProvider` watches that parameter
 inside a `Suspense` boundary and opens the dialog on that section; closing the
-dialog removes the parameter. The dialog has a section menu with icons (Model
+dialog removes the parameter. The dialog keeps one size on every section
+(880px wide, `min(760px, 85vh)` tall) and scrolls the section body inside it.
+It has a section menu with icons (Model
 provider, Profile, Password, Sessions, About; Profile also holds the danger
 zone) and shows one section at a time, keeping all mounted so a sign-in in
 progress survives switching. Model provider is the default, and its menu item
@@ -1321,8 +1323,15 @@ tests/
 |   |-- room-timeline.spec.ts
 |   `-- fixtures/
 |-- fixtures/index.ts
-`-- utils/test-utils.tsx
+`-- utils/
+    |-- test-utils.tsx
+    `-- fetch-without-signal.ts
 ```
+
+Component tests run in jsdom, whose `AbortSignal` Node's `fetch` rejects. A
+component test that lets MSW answer real API-client requests calls
+`stubFetchWithoutSignal()` in `beforeEach` and `vi.unstubAllGlobals()` in
+`afterEach`.
 
 Unit coverage is broad across components, hooks, API clients, room timeline logic, selectors, and stores, including the Network URL state, search, graph label rules, structure grouping, status mapping, Overview derivation, and access materials. Playwright coverage is organized around auth, chat, room, room timeline, authenticated flows, error handling, portal routing and redirects, the Network workspace, and the Connect pages.
 

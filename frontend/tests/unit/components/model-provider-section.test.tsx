@@ -3,6 +3,7 @@ import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { server } from '../../setup/msw-server'
+import { stubFetchWithoutSignal } from '../../utils/fetch-without-signal'
 import { getApiUrl } from '@/lib/utils'
 import { AGENT_CATALOG_KEY } from '@/hooks/room/useAgentCatalog'
 import { ModelProviderSection } from '@/components/settings/model-provider-section'
@@ -34,6 +35,7 @@ const statusCard = () => screen.getByTestId('model-provider-status')
 
 beforeEach(() => {
   status = unconfigured
+  stubFetchWithoutSignal()
   bodies = []
   vi.spyOn(window, 'open').mockReturnValue(null)
   server.use(
@@ -52,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('ModelProviderSection', () => {

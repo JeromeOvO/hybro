@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { cleanup, fireEvent, render, screen, waitFor } from '../../utils/test-utils'
 import { server } from '../../setup/msw-server'
+import { stubFetchWithoutSignal } from '../../utils/fetch-without-signal'
 import { getApiUrl } from '@/lib/utils'
 import { OverviewSetupBanner } from '@/components/setup/setup-banner'
 
@@ -12,11 +13,15 @@ let status: Record<string, unknown>
 
 beforeEach(() => {
   localStorage.clear()
+  stubFetchWithoutSignal()
   status = { state: 'unconfigured', image_size: 'auto', last_error: null }
   server.use(http.get(getApiUrl('setup/status'), () => HttpResponse.json(status)))
 })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('Overview setup banner', () => {
   it('links to the model provider settings and can be dismissed', async () => {
