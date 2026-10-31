@@ -307,7 +307,7 @@ jobs:
           {
             "version": 1,
             "provider": { "id": "openai", "auth": "api_key" },
-            "models": { "text": "gpt-4o-mini", "image": "gpt-image-1" },
+            "models": { "text": "gpt-4o-mini", "image": "gpt-image-2.5-flare" },
             "backend": { "openai_base_url": "http://host.docker.internal:18080/v1" }
           }
           JSON
