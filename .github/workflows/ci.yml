@@ -171,6 +171,11 @@ jobs:
           enable-cache: true
           cache-suffix: "image-uv"
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Build the image
         run: docker build -t hybro:ci .
 
@@ -254,7 +259,8 @@ jobs:
 
   functional-ci:
     name: Functional Regression CI (Single Image + Mock LLM)
-    runs-on: ubuntu-latest
+    # Playwright 1.58 cannot install Chromium on Ubuntu 26.04 (ubuntu-latest).
+    runs-on: ubuntu-24.04
     needs: [backend-ci, frontend-ci, default-agents-ci, mcp-ci]
 
     steps:
