@@ -107,14 +107,14 @@ def test_setup_verifies_selected_adapter_once_then_saves(
 
 def test_image_setup_performs_only_text_verification(tmp_path, monkeypatch):
     test_setup_verifies_selected_adapter_once_then_saves(
-        tmp_path, monkeypatch, "openai", "gpt-4o-mini", 200, "gpt-image-1"
+        tmp_path, monkeypatch, "openai", "gpt-4o-mini", 200, "gpt-image-2.5-flare"
     )
     from common.config.runtime_store import RuntimeConfigStore
 
     state = RuntimeConfigStore(tmp_path / ".hybro").load(
         {"OPENAI_API_KEY": "fixture-only"}
     )
-    assert state.config.models.image == "gpt-image-1"
+    assert state.config.models.image == "gpt-image-2.5-flare"
 
 
 def test_production_catalog_offers_optional_images_only_for_eligible_provider():
@@ -122,7 +122,11 @@ def test_production_catalog_offers_optional_images_only_for_eligible_provider():
     from llm_gateway.catalog import model_choices
 
     for provider in ("openai", "deepseek", "anthropic"):
-        expected = ("gpt-image-1",) if provider == "openai" else ()
+        expected = (
+            ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
+            if provider == "openai"
+            else ()
+        )
         assert (
             model_choices(RuntimeProvider(id=provider, auth="api_key")).image
             == expected
