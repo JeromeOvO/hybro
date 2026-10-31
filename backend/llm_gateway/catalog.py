@@ -14,6 +14,7 @@ from common.config.runtime_config import (
     RuntimeConfigurationError,
     RuntimeProvider,
 )
+from llm_gateway.providers.openai_images import IMAGE_MODELS
 from llm_gateway.setup_service import ModelChoices
 
 
@@ -74,7 +75,7 @@ def model_choices(provider: RuntimeProvider) -> ModelChoices:
             for entry in TEXT_MODELS
             if entry.provider == provider.id and provider.auth == entry.auth
         ),
-        image=("gpt-image-1",)
+        image=IMAGE_MODELS
         if provider.id == "openai" and provider.auth == "api_key"
         else (),
     )

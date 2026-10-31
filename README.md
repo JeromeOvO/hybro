@@ -26,7 +26,7 @@
 Hybro AI is an open-source, hybrid multi-agent platform built for seamless agent interoperability. It serves as the core orchestration engine powering the Hybro Agent Network—enabling local and remote AI agents to communicate, collaborate, and execute complex workflows.
 
 <p align="center">
-  <img src="assets/screenshots/chat-demo.gif" alt="Asking the Weather Agent a question in a Hybro chat" width="800">
+  <img src="assets/screenshots/chat-demo.gif" alt="One Hybro chat request planning a Tokyo trip: the Travel Planner, Weather, and Image Generator Agents run in parallel and return an itinerary, forecast, and poster" width="800">
 </p>
 
 ## Contents

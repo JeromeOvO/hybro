@@ -6,7 +6,11 @@ def test_production_catalog_offers_optional_images_only_for_eligible_provider():
     from llm_gateway.catalog import model_choices
 
     for provider in ("openai", "deepseek", "anthropic"):
-        expected = ("gpt-image-1",) if provider == "openai" else ()
+        expected = (
+            ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
+            if provider == "openai"
+            else ()
+        )
         assert (
             model_choices(RuntimeProvider(id=provider, auth="api_key")).image
             == expected

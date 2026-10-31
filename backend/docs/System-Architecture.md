@@ -1165,7 +1165,8 @@ requests accept 1..32768 and cap emitted UTF-8 bytes at four times that bound,
 reporting `length` with actual usage. Request/SSE byte limits and a 600-second
 attempt deadline bound local resources. The adapter performs one attempt.
 
-Only OpenAI API-key setup offers `gpt-image-1`. `generate_image` supports
+Only OpenAI API-key setup offers image models: `gpt-image-2.5-flare` and
+`gpt-image-2.5-sunburst`. `generate_image` supports
 generation and reference-image editing with bounded validated image bytes and
 one Provider attempt. Setup validates the image selection locally without a
 billable call.

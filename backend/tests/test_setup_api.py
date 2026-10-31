@@ -151,7 +151,7 @@ async def test_unconfigured_status_and_model_choices(harness):
     )
     assert models.json() == {
         "text": ["gpt-5-mini", "gpt-4o-mini"],
-        "image": ["gpt-image-1"],
+        "image": ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"],
     }
     oauth = await harness.http.get(
         "/models", params={"provider": "openai", "auth": "oauth"}
@@ -194,7 +194,7 @@ async def test_failed_verification_saves_nothing_and_hides_the_key(harness):
     "body",
     [
         api_key_body(text_model="gpt-4o-mini"),
-        api_key_body(image_model="gpt-image-1"),
+        api_key_body(image_model="gpt-image-2.5-flare"),
         api_key_body(api_key=""),
         api_key_body(extra="field"),
     ],

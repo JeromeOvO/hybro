@@ -22,6 +22,9 @@ from llm_gateway.image_types import (
 )
 
 MAX_IMAGE_ERROR_BYTES = 64 * 1024
+# OpenAI's replacements for the retired gpt-image-1 family (deprecations page,
+# 2026-10). Setup offers them in this order after "None".
+IMAGE_MODELS = ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
 
 
 class OpenAIImageProvider:
@@ -52,7 +55,7 @@ class OpenAIImageProvider:
     async def generate_image_once(
         self, request: GatewayImageRequest, *, model: str
     ) -> GatewayImageResult:
-        if model != "gpt-image-1":
+        if model not in IMAGE_MODELS:
             raise ImageContractError("Unsupported image model")
         options = dict(
             model=model,
