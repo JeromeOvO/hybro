@@ -66,7 +66,7 @@ export function SettingsDialog({ open, onOpenChange, section = null }: SettingsD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[880px] max-h-[85vh] flex flex-col p-0 gap-0">
+      <DialogContent className="sm:max-w-[880px] h-[min(760px,85vh)] flex flex-col p-0 gap-0">
         <DialogHeader className="border-b px-6 py-3.5">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="sr-only">Manage your model provider and account</DialogDescription>
@@ -81,7 +81,7 @@ export function SettingsDialog({ open, onOpenChange, section = null }: SettingsD
           </div>
         ) : (
           <div className="flex flex-1 flex-wrap items-start gap-6 overflow-y-auto p-6">
-            <nav aria-label="Settings sections" className="flex max-w-[220px] flex-[1_1_180px] flex-col gap-0.5">
+            <nav aria-label="Settings sections" className="flex max-w-[220px] flex-[1_1_180px] flex-col gap-0.5 sm:sticky sm:top-0">
               {PANES.map(({ id, label, icon: Icon }) => {
                 const current = pane === id
                 return (
