@@ -60,5 +60,8 @@ logs/
 
 # Local AI agent tool directories
 /.agents/
-/.claude/
+/.claude/worktrees/
+/.claude/settings.local.json
+/.claude/skills/shadcn
+/.claude/skills/migrate-radix-to-base
 /skills-lock.json
