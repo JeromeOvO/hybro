@@ -111,10 +111,34 @@ pass `--build`. In a checkout, use `./scripts/hybro` wherever this README shows
 
 **Set up a model provider**
 
-Open the app and follow the setup banner to **Settings**. It supports an OpenAI
-API key or ChatGPT OAuth, a DeepSeek API key, or an Anthropic API key, and
-applies the provider without a restart. Image generation requires an eligible
-image model, offered only with an OpenAI API key.
+Hybro starts without a model provider. Until one is set up, a banner on the
+Overview and in Chats links to **Settings**, Room Chat is disabled, and the four
+LLM-backed agents stay inactive; Echo Agent and MCP work at once. The
+**Settings** dialog (also under your name at the bottom of the sidebar) opens on
+**Model provider**, which has three steps:
+
+1. **Provider**: OpenAI, Anthropic, or DeepSeek.
+2. **Connect**: for OpenAI, sign in with your ChatGPT account or use an API key;
+   Anthropic and DeepSeek take an API key.
+   - **Sign in with ChatGPT** opens chatgpt.com in a new tab. After you approve,
+     that tab says you can close it, and Settings shows **Connected** with the
+     recommended models saved. If the browser is not on the machine running
+     Hybro, the sign-in ends on a `localhost:1455` address that does not load;
+     paste that address into the waiting panel instead.
+   - **Check and save** verifies an API key with one small request before
+     saving it to `auth.json`. The key is never shown again; **Replace key**
+     sets a new one.
+3. **Models**: the text model (the first is recommended) and, with an OpenAI API
+   key, an optional image model and image size. **Save models** applies them.
+
+The provider and models apply without a restart; a new image size applies after
+`hybro stop` and `hybro`. The status at the top of the section shows **Not set
+up**, **Waiting for sign-in**, **Connected**, or **ChatGPT sign-in expired**,
+with **Sign in again** for the last.
+
+<p align="center">
+  <img src="assets/screenshots/settings.png" alt="The Settings dialog on Model provider, before a provider is set up" width="800">
+</p>
 
 **Run on a server**
 
@@ -127,7 +151,8 @@ loopback listener.
 ### 3. Open the app
 
 Open the address that `hybro` prints. The **Overview** page shows your chats,
-the five bundled agents, and whether the MCP gateway is ready.
+the five bundled agents, and whether the MCP gateway is ready. Until a model
+provider is set up, its banner links to **Settings**.
 
 <p align="center">
   <img src="assets/screenshots/overview.png" alt="Hybro Overview page" width="800">
@@ -182,8 +207,6 @@ Hybro does not automatically discover or register MCP clients.
 
 <p align="center">
   <img src="assets/screenshots/connect.png" alt="The Connect page with the MCP address and client setup commands" width="800">
-  <br />
-  <em>Captured before 0.4, when MCP had its own port; it now uses the app's address.</em>
 </p>
 
 ```json
