@@ -2423,6 +2423,7 @@ def create_delivery_facade(
         instance_id=resolved_instance_id,
         metrics=metrics,
         room_events=room_events,
+        single_instance=redis_pubsub is None,
     )
     event_bus.set_sse_callback(sse_transport.broadcast_frame_to_room)
 

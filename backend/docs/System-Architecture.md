@@ -2393,6 +2393,11 @@ and marker commands use `terminal_redis_io_timeout_seconds` and owned background
 tasks, so a hung Redis command cannot delay an accepted result. Per-key local
 locks make fallback reservation atomic. Local broadcast reports an actual
 delivery count; zero local subscribers plus failed Redis fan-out stays pending.
+Without Redis (`redis_url` empty, so one process), the local broadcast is the
+whole transport: an accepted broadcast counts as delivered even with no
+subscriber, the way a Redis publish with no subscriber does, and clients
+replay the persisted frame on connect. This lets a Run started through MCP or
+the Sessions API, with no browser on the room, park on a HITL request.
 Terminal status claims store unique owner IDs in Redis, and failed-delivery
 release uses Lua compare-and-delete.
 
